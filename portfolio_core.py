@@ -34,6 +34,59 @@ DEFAULT_HOLDINGS = [
     {"Ticker": "VNQ", "Weight (%)": 10.0, "Asset Type": "REIT"},
 ]
 
+# Full portfolio allocation presets (sidebar)
+PORTFOLIO_PRESETS: dict[str, list[dict]] = {
+    "Conservative": [
+        {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        {"Ticker": "VTI", "Weight (%)": 25.0, "Asset Type": "Equity"},
+        {"Ticker": "VXUS", "Weight (%)": 10.0, "Asset Type": "Equity"},
+        {"Ticker": "BIL", "Weight (%)": 15.0, "Asset Type": "T-Bills"},
+    ],
+    "Balanced": [
+        {"Ticker": "VTI", "Weight (%)": 40.0, "Asset Type": "Equity"},
+        {"Ticker": "VXUS", "Weight (%)": 20.0, "Asset Type": "Equity"},
+        {"Ticker": "BND", "Weight (%)": 30.0, "Asset Type": "Bonds"},
+        {"Ticker": "VNQ", "Weight (%)": 10.0, "Asset Type": "REIT"},
+    ],
+    "Aggressive": [
+        {"Ticker": "VTI", "Weight (%)": 50.0, "Asset Type": "Equity"},
+        {"Ticker": "VXUS", "Weight (%)": 25.0, "Asset Type": "Equity"},
+        {"Ticker": "QQQ", "Weight (%)": 20.0, "Asset Type": "Equity"},
+        {"Ticker": "BND", "Weight (%)": 5.0, "Asset Type": "Bonds"},
+    ],
+    "Dividend Income": [
+        {"Ticker": "SCHD", "Weight (%)": 35.0, "Asset Type": "Dividend ETF"},
+        {"Ticker": "VYM", "Weight (%)": 25.0, "Asset Type": "Dividend ETF"},
+        {"Ticker": "VNQ", "Weight (%)": 15.0, "Asset Type": "REIT"},
+        {"Ticker": "BND", "Weight (%)": 25.0, "Asset Type": "Bonds"},
+    ],
+    "Tech Growth": [
+        {"Ticker": "QQQ", "Weight (%)": 40.0, "Asset Type": "Equity"},
+        {"Ticker": "VGT", "Weight (%)": 30.0, "Asset Type": "Equity"},
+        {"Ticker": "VTI", "Weight (%)": 20.0, "Asset Type": "Equity"},
+        {"Ticker": "BND", "Weight (%)": 10.0, "Asset Type": "Bonds"},
+    ],
+    "Retirement": [
+        {"Ticker": "BND", "Weight (%)": 40.0, "Asset Type": "Bonds"},
+        {"Ticker": "VTI", "Weight (%)": 30.0, "Asset Type": "Equity"},
+        {"Ticker": "VXUS", "Weight (%)": 15.0, "Asset Type": "Equity"},
+        {"Ticker": "SCHD", "Weight (%)": 10.0, "Asset Type": "Dividend ETF"},
+        {"Ticker": "BIL", "Weight (%)": 5.0, "Asset Type": "T-Bills"},
+    ],
+    "All Weather": [
+        {"Ticker": "SPY", "Weight (%)": 30.0, "Asset Type": "Equity"},
+        {"Ticker": "TLT", "Weight (%)": 40.0, "Asset Type": "Bonds"},
+        {"Ticker": "GLD", "Weight (%)": 15.0, "Asset Type": "Other"},
+        {"Ticker": "DBC", "Weight (%)": 15.0, "Asset Type": "Other"},
+    ],
+}
+
+BENCHMARK_TICKER = "SPY"
+TECH_TICKERS = frozenset(
+    {"QQQ", "VGT", "XLK", "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "ARKK"}
+)
+ROLLING_WINDOW = 63
+
 
 @dataclass(frozen=True)
 class PortfolioMetrics:
@@ -41,6 +94,25 @@ class PortfolioMetrics:
     volatility: float
     sharpe_ratio: float
     projected_value: float
+
+
+@dataclass(frozen=True)
+class ExtendedPortfolioMetrics:
+    annual_return: float
+    volatility: float
+    sharpe_ratio: float
+    projected_value: float
+    max_drawdown: float
+    sortino_ratio: float
+    cagr: float
+    beta_spy: float
+
+
+@dataclass(frozen=True)
+class MonteCarloResult:
+    chart_df: pd.DataFrame
+    ending_values: np.ndarray
+    summary: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -135,16 +207,134 @@ def compute_portfolio_metrics(
     initial_value: float,
     years_forward: float = 1.0,
 ) -> PortfolioMetrics:
+    ext = compute_extended_metrics(
+        asset_returns, weights, risk_free_rate, initial_value, years_forward
+    )
+    return PortfolioMetrics(
+        annual_return=ext.annual_return,
+        volatility=ext.volatility,
+        sharpe_ratio=ext.sharpe_ratio,
+        projected_value=ext.projected_value,
+    )
+
+
+def maximum_drawdown(port_rets: pd.Series) -> float:
+    cumulative = (1 + port_rets).cumprod()
+    peak = cumulative.cummax()
+    drawdown = (cumulative - peak) / peak
+    return float(drawdown.min())
+
+
+def sortino_ratio(
+    port_rets: pd.Series,
+    risk_free_rate: float,
+) -> float:
+    ann_ret = annualized_return(port_rets)
+    daily_rf = risk_free_rate / TRADING_DAYS
+    excess = port_rets - daily_rf
+    downside = excess[excess < 0]
+    if len(downside) == 0 or downside.std() == 0:
+        return 0.0
+    downside_vol = float(downside.std() * np.sqrt(TRADING_DAYS))
+    return (ann_ret - risk_free_rate) / downside_vol
+
+
+def cagr_from_growth(growth: pd.Series) -> float:
+    if len(growth) < 2:
+        return 0.0
+    start_val = float(growth.iloc[0])
+    end_val = float(growth.iloc[-1])
+    if start_val <= 0:
+        return 0.0
+    idx = growth.index
+    if hasattr(idx[0], "days"):
+        years = max((idx[-1] - idx[0]).days / 365.25, 1 / 365.25)
+    else:
+        years = len(growth) / TRADING_DAYS
+    return float((end_val / start_val) ** (1 / years) - 1)
+
+
+def beta_vs_benchmark(
+    port_rets: pd.Series,
+    benchmark_rets: pd.Series,
+) -> float:
+    aligned = pd.concat([port_rets, benchmark_rets], axis=1, join="inner").dropna()
+    if len(aligned) < 10:
+        return 0.0
+    cov = aligned.cov().iloc[0, 1]
+    var_bench = aligned.iloc[:, 1].var()
+    if var_bench <= 0:
+        return 0.0
+    return float(cov / var_bench)
+
+
+def rolling_volatility(port_rets: pd.Series, window: int = ROLLING_WINDOW) -> pd.Series:
+    return port_rets.rolling(window).std() * np.sqrt(TRADING_DAYS)
+
+
+def rolling_returns(port_rets: pd.Series, window: int = ROLLING_WINDOW) -> pd.Series:
+    return port_rets.rolling(window).mean() * TRADING_DAYS
+
+
+def volatility_ranking(asset_returns: pd.DataFrame) -> pd.DataFrame:
+    vols = asset_returns.std() * np.sqrt(TRADING_DAYS)
+    df = pd.DataFrame(
+        {
+            "Ticker": vols.index,
+            "Annual Volatility": vols.values,
+        }
+    )
+    return df.sort_values("Annual Volatility", ascending=False).reset_index(drop=True)
+
+
+def risk_contribution(
+    asset_returns: pd.DataFrame,
+    weights: np.ndarray,
+) -> pd.DataFrame:
+    w = normalize_weights(weights)
+    cov = asset_returns.cov() * TRADING_DAYS
+    port_vol = float(np.sqrt(np.dot(w.T, np.dot(cov.values, w))))
+    if port_vol <= 0:
+        marginal = np.zeros(len(w))
+    else:
+        marginal = w * (cov.values @ w) / port_vol
+    contrib_pct = marginal / marginal.sum() if marginal.sum() > 0 else w
+    return pd.DataFrame(
+        {
+            "Ticker": asset_returns.columns[: len(w)],
+            "Weight": w,
+            "Risk Contribution": contrib_pct,
+            "Risk Contribution (%)": contrib_pct * 100,
+        }
+    ).sort_values("Risk Contribution (%)", ascending=False)
+
+
+def compute_extended_metrics(
+    asset_returns: pd.DataFrame,
+    weights: np.ndarray,
+    risk_free_rate: float,
+    initial_value: float,
+    years_forward: float = 1.0,
+    benchmark_rets: pd.Series | None = None,
+) -> ExtendedPortfolioMetrics:
     port_rets = portfolio_daily_returns(asset_returns, weights)
+    growth = portfolio_growth_series(asset_returns, weights, initial_value)
     ann_ret = annualized_return(port_rets)
     ann_vol = annualized_volatility(port_rets)
     sharpe = sharpe_ratio(ann_ret, ann_vol, risk_free_rate)
     projected = initial_value * (1 + ann_ret) ** years_forward
-    return PortfolioMetrics(
+    beta = 0.0
+    if benchmark_rets is not None:
+        beta = beta_vs_benchmark(port_rets, benchmark_rets)
+    return ExtendedPortfolioMetrics(
         annual_return=ann_ret,
         volatility=ann_vol,
         sharpe_ratio=sharpe,
         projected_value=projected,
+        max_drawdown=maximum_drawdown(port_rets),
+        sortino_ratio=sortino_ratio(port_rets, risk_free_rate),
+        cagr=cagr_from_growth(growth),
+        beta_spy=beta,
     )
 
 
@@ -290,7 +480,7 @@ def monte_carlo_simulation(
     years: int,
     simulations: int,
     seed: int | None = 42,
-) -> tuple[pd.DataFrame, dict[str, float]]:
+) -> MonteCarloResult:
     """Geometric Brownian motion on portfolio daily returns."""
     rng = np.random.default_rng(seed)
     port_rets = portfolio_daily_returns(asset_returns, weights)
@@ -304,26 +494,172 @@ def monte_carlo_simulation(
     for t in range(1, days + 1):
         paths[:, t] = paths[:, t - 1] * (1 + shocks[:, t - 1])
 
+    ending = paths[:, -1]
     percentiles = [5, 25, 50, 75, 95]
-    summary = {f"p{p}": float(np.percentile(paths[:, -1], p)) for p in percentiles}
-    summary["mean"] = float(paths[:, -1].mean())
+    summary: dict[str, float] = {f"p{p}": float(np.percentile(ending, p)) for p in percentiles}
+    summary["mean"] = float(ending.mean())
+    summary["prob_loss"] = float((ending < initial_value).mean())
+    summary["prob_double"] = float((ending >= initial_value * 2).mean())
+    summary["ci_low"] = summary["p5"]
+    summary["ci_high"] = summary["p95"]
 
-    # Downsample for chart performance
     step = max(1, days // 250)
     idx = list(range(0, days + 1, step))
-    median_path = np.median(paths[:, idx], axis=0)
-    p5_path = np.percentile(paths[:, idx], 5, axis=0)
-    p95_path = np.percentile(paths[:, idx], 95, axis=0)
+    chart_df = pd.DataFrame({"Day": idx})
+    for p in percentiles:
+        chart_df[f"{p}th Percentile"] = np.percentile(paths[:, idx], p, axis=0)
+    chart_df["Median"] = np.median(paths[:, idx], axis=0)
 
-    chart_df = pd.DataFrame(
-        {
-            "Day": idx,
-            "Median": median_path,
-            "5th Percentile": p5_path,
-            "95th Percentile": p95_path,
-        }
+    return MonteCarloResult(chart_df=chart_df, ending_values=ending, summary=summary)
+
+
+def generate_portfolio_insights(
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    metrics: ExtendedPortfolioMetrics,
+    corr: pd.DataFrame,
+    risk_contrib: pd.DataFrame,
+) -> list[str]:
+    """Rule-based portfolio commentary (no external AI API)."""
+    insights: list[str] = []
+    w = normalize_weights(weights)
+
+    top_idx = int(np.argmax(w))
+    top_ticker = tickers[top_idx]
+    if w[top_idx] >= 0.35:
+        insights.append(
+            f"Portfolio is heavily concentrated in **{top_ticker}** "
+            f"({w[top_idx]*100:.1f}% weight). Consider spreading risk across more holdings."
+        )
+
+    tech_weight = sum(
+        wi for ti, wi in zip(tickers, w) if ti.upper() in TECH_TICKERS
     )
-    return chart_df, summary
+    if tech_weight >= 0.40:
+        insights.append(
+            f"Portfolio is heavily weighted toward **tech** (~{tech_weight*100:.0f}%). "
+            "Tech rallies help returns but can amplify drawdowns."
+        )
+
+    bond_weight = sum(
+        wi
+        for ti, wi, at in zip(tickers, w, asset_types)
+        if at in ("Bonds", "T-Bills") or ti.upper() in ("BND", "AGG", "TLT", "BIL", "SHV")
+    )
+    if bond_weight >= 0.20:
+        insights.append(
+            f"Bond/cash allocation (~{bond_weight*100:.0f}%) **reduces volatility** "
+            f"versus an all-equity mix (current vol: {metrics.volatility*100:.1f}%)."
+        )
+    elif bond_weight < 0.05 and metrics.volatility > 0.18:
+        insights.append(
+            "Low fixed-income allocation — portfolio volatility is relatively high. "
+            "Adding bonds may smooth the ride."
+        )
+
+    if metrics.sharpe_ratio >= 1.0:
+        insights.append(
+            f"Sharpe ratio of **{metrics.sharpe_ratio:.2f}** suggests solid risk-adjusted returns "
+            "relative to the risk-free rate."
+        )
+    elif metrics.sharpe_ratio < 0.5:
+        insights.append(
+            f"Sharpe ratio of **{metrics.sharpe_ratio:.2f}** is modest — returns may not fully "
+            "compensate for volatility."
+        )
+
+    if len(corr) >= 2:
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        max_corr = upper.max().max()
+        if max_corr > 0.85:
+            insights.append(
+                "Some holdings are **highly correlated** (>0.85). Diversification benefits may be limited."
+            )
+        elif max_corr < 0.50:
+            insights.append(
+                "Holdings show **moderate correlation** — diversification may be helping stabilize returns."
+            )
+
+    if metrics.max_drawdown < -0.25:
+        insights.append(
+            f"Maximum drawdown of **{metrics.max_drawdown*100:.1f}%** indicates significant "
+            "historical peak-to-trough declines."
+        )
+
+    if metrics.beta_spy > 1.15:
+        insights.append(
+            f"Beta vs SPY of **{metrics.beta_spy:.2f}** — portfolio tends to move more than the broad market."
+        )
+    elif 0 < metrics.beta_spy < 0.85:
+        insights.append(
+            f"Beta vs SPY of **{metrics.beta_spy:.2f}** — portfolio is somewhat **defensive** vs the S&P 500."
+        )
+
+    top_risk = risk_contrib.iloc[0]
+    insights.append(
+        f"**{top_risk['Ticker']}** contributes the most to total risk "
+        f"({top_risk['Risk Contribution (%)']:.1f}% of portfolio risk)."
+    )
+
+    if not insights:
+        insights.append("Portfolio metrics are within typical ranges for a diversified allocation.")
+    return insights
+
+
+def build_summary_report(
+    tickers: list[str],
+    weights: np.ndarray,
+    metrics: ExtendedPortfolioMetrics,
+    mc_summary: dict[str, float] | None,
+    insights: list[str],
+    settings: dict,
+) -> str:
+    lines = [
+        "INVESTMENT PORTFOLIO ANALYZER — SUMMARY REPORT",
+        "=" * 52,
+        f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "SETTINGS",
+        f"  Period: {settings.get('start')} → {settings.get('end')}",
+        f"  Portfolio value: ${settings.get('initial_value', 0):,.0f}",
+        f"  Risk-free rate: {settings.get('risk_free', 0)*100:.2f}%",
+        "",
+        "HOLDINGS",
+    ]
+    for t, w in zip(tickers, normalize_weights(weights)):
+        lines.append(f"  {t}: {w*100:.1f}%")
+    lines.extend(
+        [
+            "",
+            "KEY METRICS",
+            f"  Annual return:     {metrics.annual_return*100:.2f}%",
+            f"  Volatility:        {metrics.volatility*100:.2f}%",
+            f"  Sharpe ratio:      {metrics.sharpe_ratio:.2f}",
+            f"  Sortino ratio:     {metrics.sortino_ratio:.2f}",
+            f"  CAGR:              {metrics.cagr*100:.2f}%",
+            f"  Max drawdown:      {metrics.max_drawdown*100:.2f}%",
+            f"  Beta vs SPY:       {metrics.beta_spy:.2f}",
+            f"  Projected (1Y):    ${metrics.projected_value:,.0f}",
+        ]
+    )
+    if mc_summary:
+        lines.extend(
+            [
+                "",
+                "MONTE CARLO (ending values)",
+                f"  Median:            ${mc_summary.get('p50', 0):,.0f}",
+                f"  90% CI:            ${mc_summary.get('p5', 0):,.0f} – ${mc_summary.get('p95', 0):,.0f}",
+                f"  P(loss):           {mc_summary.get('prob_loss', 0)*100:.1f}%",
+                f"  P(2× money):       {mc_summary.get('prob_double', 0)*100:.1f}%",
+            ]
+        )
+    lines.extend(["", "INSIGHTS"])
+    for item in insights:
+        lines.append(f"  • {item.replace('**', '')}")
+    lines.append("")
+    lines.append("Disclaimer: Educational tool only. Not financial advice.")
+    return "\n".join(lines)
 
 
 def scenario_analysis(

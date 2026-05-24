@@ -5,12 +5,13 @@ A Streamlit dashboard for analyzing investment portfolios with real market data 
 ## Features
 
 - Real ticker data via **yfinance**
-- Annual return, volatility, and **Sharpe ratio**
-- Correlation matrix and scenario analysis
-- **Monte Carlo** simulation
-- Portfolio **optimizer** (max Sharpe, min volatility)
-- **Efficient frontier** chart
-- Support for bonds, T-bills, REITs, and dividend ETFs (presets + custom tickers)
+- **Portfolio presets**: Conservative, Balanced, Aggressive, Dividend Income, Tech Growth, Retirement, All Weather
+- Core metrics: return, volatility, Sharpe, Sortino, CAGR, max drawdown, beta vs SPY
+- Rolling returns & volatility, correlation heatmap, risk contribution, scenario analysis
+- **Monte Carlo**: paths, histogram, confidence intervals, P(loss), P(2×)
+- Portfolio **optimizer** and **efficient frontier** with highlighted portfolios
+- Rule-based **portfolio insights** and CSV / text **export**
+- Bonds, T-bills, REITs, and dividend ETF support
 
 ## Quick start
 
@@ -23,8 +24,9 @@ streamlit run streamlit_app.py
 
 | File | Purpose |
 |------|---------|
-| `streamlit_app.py` | Dashboard UI (tabs, sidebar, charts) |
+| `streamlit_app.py` | Dashboard UI (tabs, sidebar, exports) |
 | `portfolio_core.py` | Core calculations (keep stable when changing UI) |
+| `dashboard_charts.py` | Plotly chart styling and builders |
 
 ## Disclaimer
 
