@@ -101,6 +101,11 @@ def load_benchmark_returns(start: str, end: str | None):
     return core.daily_returns(prices).iloc[:, 0]
 
 
+@st.cache_data(show_spinner=False)
+def load_comparison_prices(start: str, end: str | None):
+    return core.fetch_price_history(list(core.BENCHMARK_TICKERS), start, end)
+
+
 def render_insights(insights: list[str]):
     for text in insights:
         plain = text.replace("**", "")
@@ -255,7 +260,14 @@ init_holdings()
 apply_asset_preset(settings["asset_preset"])
 
 tabs = st.tabs(
-    ["Overview", "Portfolio Inputs", "Risk Analysis", "Monte Carlo", "Optimization", "Efficient Frontier"]
+    [
+        "Overview",
+        "Portfolio Inputs",
+        "Risk Analysis",
+        "Monte Carlo",
+        "Optimization",
+        "Efficient Frontier",
+    ]
 )
 tab_overview, tab_inputs, tab_risk, tab_mc, tab_opt, tab_frontier = tabs
 
@@ -289,6 +301,8 @@ with st.spinner("Loading market data and running analytics…"):
     try:
         prices = load_market_data(tuple(tickers), settings["start"], settings["end"])
         bench_rets = load_benchmark_returns(settings["start"], settings["end"])
+        comp_prices = load_comparison_prices(settings["start"], settings["end"])
+        comp_returns_raw = core.daily_returns(comp_prices)
         returns = core.daily_returns(prices)
         mean_rets = returns.mean().values * core.TRADING_DAYS
         cov = returns.cov().values * core.TRADING_DAYS
@@ -310,7 +324,30 @@ with st.spinner("Loading market data and running analytics…"):
             tickers, weights, asset_types, metrics, corr, risk_contrib
         )
         mc_default = core.monte_carlo_simulation(
-            returns, weights, settings["initial_value"], years=5, simulations=500
+            returns,
+            weights,
+            settings["initial_value"],
+            years=5,
+            simulations=500,
+            target_value=settings["initial_value"] * 1.5,
+        )
+        synth_6040 = comp_returns_raw["SPY"] * 0.60 + comp_returns_raw["AGG"] * 0.40
+        benchmark_returns = pd.DataFrame(
+            {
+                "Current Portfolio": port_rets,
+                "SPY": comp_returns_raw["SPY"],
+                "QQQ": comp_returns_raw["QQQ"],
+                "60/40": synth_6040,
+                "T-Bills": comp_returns_raw["BIL"],
+            }
+        ).dropna()
+        benchmark_table, benchmark_growth = core.benchmark_comparison(
+            benchmark_returns,
+            settings["initial_value"],
+            settings["risk_free"],
+        )
+        macro_df = core.macro_regime_analysis(
+            metrics, settings["initial_value"], years=1, weights=weights, asset_types=asset_types
         )
     except Exception as ex:
         st.error(f"Analysis failed: {ex}")
@@ -333,6 +370,62 @@ with tab_overview:
     st.markdown("---")
     section_header("Portfolio Insights", "Automated commentary from your allocation and risk metrics.")
     render_insights(insights)
+
+    st.markdown("---")
+    section_header(
+        "Benchmark Comparison",
+        "Compare your portfolio against SPY, QQQ, a 60/40 blend, and a T-bill portfolio.",
+    )
+    btab = benchmark_table.copy()
+    for col in ["Annual Return", "Volatility", "Sharpe Ratio", "Max Drawdown", "CAGR"]:
+        if col != "Sharpe Ratio":
+            btab[col] = btab[col].map(_pct)
+        else:
+            btab[col] = btab[col].map(lambda x: f"{x:.2f}")
+    btab["Growth of $100,000"] = btab["Growth of $100,000"].map(_money)
+    st.dataframe(btab, use_container_width=True, hide_index=True)
+
+    gcmp = benchmark_growth.reset_index().rename(columns={"index": "Date"})
+    if "Date" not in gcmp.columns:
+        gcmp["Date"] = benchmark_growth.index
+    st.plotly_chart(charts.benchmark_growth_chart(gcmp), use_container_width=True)
+
+    st.markdown("---")
+    section_header(
+        "Portfolio Recommendation Engine",
+        "Generate a suggested allocation from age, horizon, risk, liquidity, and objective.",
+    )
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        rec_age = st.number_input("Age", min_value=18, max_value=100, value=35)
+        rec_horizon = st.slider("Investment horizon (years)", 1, 40, 15)
+    with r2:
+        rec_risk = st.selectbox("Risk tolerance", ["Low", "Medium", "High"], index=1)
+        rec_liq = st.selectbox("Need for liquidity", ["Low", "Medium", "High"], index=1)
+    with r3:
+        rec_obj = st.selectbox(
+            "Objective",
+            [
+                "capital preservation",
+                "balanced growth",
+                "aggressive growth",
+                "income",
+                "retirement",
+                "short-term cash management",
+            ],
+            index=1,
+        )
+    rec = core.recommend_portfolio(rec_age, rec_horizon, rec_risk, rec_liq, rec_obj)
+    alloc_text = " · ".join([f"{k}: {v*100:.1f}%" for k, v in rec.allocation.items()])
+    st.caption(f"Suggested mix: {alloc_text}")
+    for reason in rec.rationale:
+        st.markdown(f"- {reason}")
+    rec_df = pd.DataFrame(rec.suggested_holdings)
+    st.dataframe(rec_df, use_container_width=True, hide_index=True)
+    if st.button("Apply Recommendation", use_container_width=False):
+        st.session_state.holdings_df = rec_df
+        st.success("Recommended allocation applied to Portfolio Inputs.")
+        st.rerun()
 
     st.markdown("---")
     section_header("Holdings")
@@ -390,6 +483,25 @@ with tab_risk:
     )
     st.dataframe(sd, use_container_width=True, hide_index=True)
 
+    section_header(
+        "Macro Regime Engine",
+        "Adjusted return, volatility, Sharpe, and projection under major macro scenarios.",
+    )
+    regime_choice = st.selectbox("Select macro regime", macro_df["Regime"].tolist(), index=0)
+    regime_row = macro_df[macro_df["Regime"] == regime_choice].iloc[0]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Adjusted Return", _pct(float(regime_row["Adjusted Return"])))
+    c2.metric("Adjusted Volatility", _pct(float(regime_row["Adjusted Volatility"])))
+    c3.metric("Adjusted Sharpe", f"{float(regime_row['Adjusted Sharpe']):.2f}")
+    c4.metric("Adjusted Projected Value", _money(float(regime_row["Adjusted Projected Value"])))
+
+    md = macro_df.copy()
+    md["Adjusted Return"] = md["Adjusted Return"].map(_pct)
+    md["Adjusted Volatility"] = md["Adjusted Volatility"].map(_pct)
+    md["Adjusted Sharpe"] = md["Adjusted Sharpe"].map(lambda x: f"{x:.2f}")
+    md["Adjusted Projected Value"] = md["Adjusted Projected Value"].map(_money)
+    st.dataframe(md, use_container_width=True, hide_index=True)
+
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
 with tab_mc:
@@ -399,10 +511,17 @@ with tab_mc:
         mc_years = st.slider("Projection years", 1, 15, 5)
     with mc2:
         mc_sims = st.selectbox("Simulations", [200, 500, 1000], index=1)
+        mc_target = st.number_input(
+            "Target ending value ($)",
+            min_value=1_000,
+            max_value=10_000_000,
+            value=int(settings["initial_value"] * 1.75),
+            step=5_000,
+        )
 
     with st.spinner("Running simulations…"):
         mc = core.monte_carlo_simulation(
-            returns, weights, settings["initial_value"], mc_years, mc_sims
+            returns, weights, settings["initial_value"], mc_years, mc_sims, target_value=float(mc_target)
         )
 
     st.plotly_chart(
@@ -421,9 +540,14 @@ with tab_mc:
         s = mc.summary
         m1, m2, m3 = st.columns(3)
         m1.metric("P(Loss)", _pct(s["prob_loss"]), help="Ending below starting value")
-        m2.metric("P(2× Money)", _pct(s["prob_double"]))
-        m3.metric("Mean Outcome", _money(s["mean"]))
+        m2.metric("P(Below Start)", _pct(s["prob_below_start"]))
+        m3.metric("P(Reach Target)", _pct(s["prob_reach_target"]))
+        m4, m5, m6 = st.columns(3)
+        m4.metric("P(2× Money)", _pct(s["prob_double"]))
+        m5.metric("Mean Outcome", _money(s["mean"]))
+        m6.metric("Expected Shortfall", _money(s["expected_shortfall"]))
         st.caption(f"**90% confidence interval:** {_money(s['ci_low'])} – {_money(s['ci_high'])}")
+        st.caption(f"Target value: {_money(s['target_value'])} · Downside risk estimate: {_pct(s['downside_std'])}")
         pcols = st.columns(5)
         for col, (lbl, key) in zip(
             pcols,

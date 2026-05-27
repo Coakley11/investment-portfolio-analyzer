@@ -149,6 +149,24 @@ def monte_carlo_histogram(ending_values, initial_value: float) -> go.Figure:
     return apply_axes(fig, "Frequency", "Ending Value ($)")
 
 
+def benchmark_growth_chart(growth_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    for i, col in enumerate(growth_df.columns):
+        if col == "Date":
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=growth_df["Date"],
+                y=growth_df[col],
+                mode="lines",
+                name=col,
+                line=dict(color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)], width=2.3),
+            )
+        )
+    fig.update_layout(**base_layout(title="Cumulative Growth Comparison", height=430))
+    return apply_axes(fig, "Value ($)", "Date")
+
+
 def efficient_frontier_chart(
     frontier: pd.DataFrame,
     current: tuple[float, float, float],

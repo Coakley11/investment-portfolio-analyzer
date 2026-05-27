@@ -86,6 +86,7 @@ TECH_TICKERS = frozenset(
     {"QQQ", "VGT", "XLK", "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "ARKK"}
 )
 ROLLING_WINDOW = 63
+BENCHMARK_TICKERS = ("SPY", "QQQ", "AGG", "BIL")
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,13 @@ class MonteCarloResult:
     chart_df: pd.DataFrame
     ending_values: np.ndarray
     summary: dict[str, float]
+
+
+@dataclass(frozen=True)
+class RecommendationResult:
+    allocation: dict[str, float]
+    rationale: list[str]
+    suggested_holdings: list[dict[str, float | str]]
 
 
 @dataclass(frozen=True)
@@ -479,6 +487,7 @@ def monte_carlo_simulation(
     initial_value: float,
     years: int,
     simulations: int,
+    target_value: float | None = None,
     seed: int | None = 42,
 ) -> MonteCarloResult:
     """Geometric Brownian motion on portfolio daily returns."""
@@ -499,7 +508,14 @@ def monte_carlo_simulation(
     summary: dict[str, float] = {f"p{p}": float(np.percentile(ending, p)) for p in percentiles}
     summary["mean"] = float(ending.mean())
     summary["prob_loss"] = float((ending < initial_value).mean())
+    summary["prob_below_start"] = summary["prob_loss"]
     summary["prob_double"] = float((ending >= initial_value * 2).mean())
+    goal = target_value if target_value is not None and target_value > 0 else initial_value
+    summary["target_value"] = float(goal)
+    summary["prob_reach_target"] = float((ending >= goal).mean())
+    summary["downside_std"] = float(np.std(np.minimum(0, ending / initial_value - 1)))
+    bad_tail = ending[ending <= summary["p5"]]
+    summary["expected_shortfall"] = float(bad_tail.mean()) if len(bad_tail) else float(summary["p5"])
     summary["ci_low"] = summary["p5"]
     summary["ci_high"] = summary["p95"]
 
@@ -524,6 +540,23 @@ def generate_portfolio_insights(
     """Rule-based portfolio commentary (no external AI API)."""
     insights: list[str] = []
     w = normalize_weights(weights)
+    equity_weight = float(
+        sum(
+            wi
+            for wi, at in zip(w, asset_types)
+            if at in ("Equity", "REIT", "Dividend ETF")
+        )
+    )
+    bond_cash_weight = float(
+        sum(wi for wi, at in zip(w, asset_types) if at in ("Bonds", "T-Bills"))
+    )
+
+    if metrics.volatility < 0.12:
+        insights.append("This portfolio has relatively low volatility compared with broad equity portfolios.")
+    elif metrics.volatility < 0.18:
+        insights.append("This portfolio has moderate volatility compared with a broad equity portfolio.")
+    else:
+        insights.append("This portfolio has higher volatility than many balanced portfolios.")
 
     top_idx = int(np.argmax(w))
     top_ticker = tickers[top_idx]
@@ -565,8 +598,7 @@ def generate_portfolio_insights(
         )
     elif metrics.sharpe_ratio < 0.5:
         insights.append(
-            f"Sharpe ratio of **{metrics.sharpe_ratio:.2f}** is modest — returns may not fully "
-            "compensate for volatility."
+            f"A low Sharpe ratio (**{metrics.sharpe_ratio:.2f}**) means the portfolio may not be earning enough return for the risk taken."
         )
 
     if len(corr) >= 2:
@@ -593,7 +625,28 @@ def generate_portfolio_insights(
         )
     elif 0 < metrics.beta_spy < 0.85:
         insights.append(
-            f"Beta vs SPY of **{metrics.beta_spy:.2f}** — portfolio is somewhat **defensive** vs the S&P 500."
+            f"Beta below 1.0 (**{metrics.beta_spy:.2f}**) means the portfolio is less sensitive to the S&P 500."
+        )
+
+    if equity_weight >= 0.75:
+        insights.append(f"High equity allocation (~{equity_weight*100:.0f}%) supports growth potential but can increase drawdowns.")
+    elif equity_weight <= 0.45:
+        insights.append(f"Lower equity allocation (~{equity_weight*100:.0f}%) may reduce upside but can improve stability.")
+
+    if bond_cash_weight >= 0.30:
+        insights.append(
+            f"A large bond/T-bill allocation (~{bond_cash_weight*100:.0f}%) may be reducing drawdowns."
+        )
+
+    qqq_spy_weight = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in {"QQQ", "SPY"})
+    if qqq_spy_weight >= 0.35:
+        insights.append(
+            f"High QQQ/SPY exposure (~{qqq_spy_weight*100:.0f}%) increases growth potential but may increase drawdowns."
+        )
+
+    if metrics.sortino_ratio < metrics.sharpe_ratio and metrics.sortino_ratio < 0.7:
+        insights.append(
+            f"Sortino ratio (**{metrics.sortino_ratio:.2f}**) indicates downside volatility is a meaningful driver of risk."
         )
 
     top_risk = risk_contrib.iloc[0]
@@ -695,3 +748,159 @@ def scenario_analysis(
             }
         )
     return pd.DataFrame(rows)
+
+
+def benchmark_comparison(
+    benchmark_returns: pd.DataFrame,
+    initial_value: float,
+    risk_free_rate: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    aligned = benchmark_returns.dropna().copy()
+    if aligned.empty:
+        raise ValueError("Benchmark returns are empty.")
+
+    growth = (1 + aligned).cumprod() * initial_value
+    growth.columns = [c.upper() for c in growth.columns]
+    rows: list[dict[str, float | str]] = []
+
+    for name in growth.columns:
+        series = aligned[name]
+        ann_ret = annualized_return(series)
+        ann_vol = annualized_volatility(series)
+        sharpe = sharpe_ratio(ann_ret, ann_vol, risk_free_rate)
+        one_growth = pd.Series([initial_value, *growth[name].values])
+        rows.append(
+            {
+                "Portfolio": name,
+                "Annual Return": ann_ret,
+                "Volatility": ann_vol,
+                "Sharpe Ratio": sharpe,
+                "Max Drawdown": maximum_drawdown(series),
+                "CAGR": cagr_from_growth(one_growth),
+                "Growth of $100,000": float(initial_value * (growth[name].iloc[-1] / initial_value)),
+            }
+        )
+
+    return pd.DataFrame(rows), growth
+
+
+def macro_regime_analysis(
+    metrics: ExtendedPortfolioMetrics,
+    initial_value: float,
+    years: int,
+    weights: np.ndarray,
+    asset_types: list[str],
+) -> pd.DataFrame:
+    type_weights = {
+        "equity": 0.0,
+        "bonds": 0.0,
+        "tbills": 0.0,
+        "real_assets": 0.0,
+    }
+    for wi, at in zip(normalize_weights(weights), asset_types):
+        key = "equity"
+        if at == "Bonds":
+            key = "bonds"
+        elif at == "T-Bills":
+            key = "tbills"
+        elif at in ("REIT", "Other"):
+            key = "real_assets"
+        type_weights[key] += float(wi)
+
+    regimes = {
+        "Base Case": {"ret_shift": 0.0, "vol_mult": 1.0},
+        "Recession": {"ret_shift": -0.08 * type_weights["equity"] + 0.01 * type_weights["tbills"], "vol_mult": 1.35},
+        "High Inflation": {"ret_shift": -0.04 * type_weights["bonds"] + 0.02 * type_weights["real_assets"], "vol_mult": 1.20},
+        "Falling Interest Rates": {"ret_shift": 0.03 * type_weights["bonds"] + 0.02 * type_weights["equity"], "vol_mult": 0.90},
+        "Rising Interest Rates": {"ret_shift": -0.05 * type_weights["bonds"] - 0.02 * type_weights["equity"] + 0.02 * type_weights["tbills"], "vol_mult": 1.15},
+        "AI / Tech Boom": {"ret_shift": 0.07 * type_weights["equity"], "vol_mult": 1.18},
+        "Credit Crisis": {"ret_shift": -0.10 * type_weights["equity"] - 0.03 * type_weights["real_assets"], "vol_mult": 1.50},
+        "Stagflation": {"ret_shift": -0.06 * type_weights["equity"] - 0.04 * type_weights["bonds"] + 0.01 * type_weights["tbills"], "vol_mult": 1.30},
+    }
+
+    rows: list[dict[str, float | str]] = []
+    for regime, adj in regimes.items():
+        adj_ret = metrics.annual_return + float(adj["ret_shift"])
+        adj_vol = max(0.001, metrics.volatility * float(adj["vol_mult"]))
+        adj_sharpe = sharpe_ratio(adj_ret, adj_vol, 0.0)
+        proj = initial_value * (1 + adj_ret) ** years
+        rows.append(
+            {
+                "Regime": regime,
+                "Adjusted Return": adj_ret,
+                "Adjusted Volatility": adj_vol,
+                "Adjusted Sharpe": adj_sharpe,
+                "Adjusted Projected Value": proj,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def recommend_portfolio(
+    age: int,
+    horizon_years: int,
+    risk_tolerance: str,
+    liquidity_need: str,
+    objective: str,
+) -> RecommendationResult:
+    risk_map = {"Low": 0.35, "Medium": 0.60, "High": 0.80}
+    liq_penalty = {"Low": 0.00, "Medium": 0.08, "High": 0.18}
+    objective_overrides = {
+        "capital preservation": {"equity": 0.20, "bonds": 0.45, "tbills": 0.35},
+        "balanced growth": {"equity": 0.60, "bonds": 0.30, "tbills": 0.10},
+        "aggressive growth": {"equity": 0.85, "bonds": 0.10, "tbills": 0.05},
+        "income": {"equity": 0.40, "bonds": 0.40, "tbills": 0.20},
+        "retirement": {"equity": 0.45, "bonds": 0.40, "tbills": 0.15},
+        "short-term cash management": {"equity": 0.10, "bonds": 0.20, "tbills": 0.70},
+    }
+
+    base_equity = risk_map.get(risk_tolerance, 0.60)
+    age_adjust = max(0, age - 40) * 0.004
+    horizon_boost = min(0.15, max(0, horizon_years - 8) * 0.01)
+    equity = np.clip(base_equity - age_adjust + horizon_boost - liq_penalty.get(liquidity_need, 0.0), 0.10, 0.90)
+    bonds = np.clip(0.70 - equity, 0.05, 0.65)
+    tbills = float(max(0.05, 1 - equity - bonds))
+    mix = {"equity": float(equity), "bonds": float(bonds), "tbills": float(tbills)}
+
+    obj = objective.strip().lower()
+    if obj in objective_overrides:
+        mix = objective_overrides[obj]
+
+    total = sum(mix.values())
+    mix = {k: float(v / total) for k, v in mix.items()}
+
+    rationale = [
+        f"Age {age} and a {horizon_years}-year horizon suggest {'higher' if mix['equity'] >= 0.6 else 'moderate/lower'} equity exposure.",
+        f"Risk tolerance '{risk_tolerance}' and liquidity need '{liquidity_need}' shape the bond and T-bill buffer.",
+        f"Objective '{objective}' influences emphasis on growth, income, or capital stability.",
+    ]
+
+    suggested_holdings = [
+        {"Ticker": "VTI", "Weight (%)": round(mix["equity"] * 0.55 * 100, 1), "Asset Type": "Equity"},
+        {"Ticker": "QQQ", "Weight (%)": round(mix["equity"] * 0.25 * 100, 1), "Asset Type": "Equity"},
+        {"Ticker": "VXUS", "Weight (%)": round(mix["equity"] * 0.20 * 100, 1), "Asset Type": "Equity"},
+        {"Ticker": "BND", "Weight (%)": round(mix["bonds"] * 0.70 * 100, 1), "Asset Type": "Bonds"},
+        {"Ticker": "TLT", "Weight (%)": round(mix["bonds"] * 0.30 * 100, 1), "Asset Type": "Bonds"},
+        {"Ticker": "BIL", "Weight (%)": round(mix["tbills"] * 0.60 * 100, 1), "Asset Type": "T-Bills"},
+        {"Ticker": "SGOV", "Weight (%)": round(mix["tbills"] * 0.25 * 100, 1), "Asset Type": "T-Bills"},
+        {"Ticker": "SHY", "Weight (%)": round(mix["tbills"] * 0.15 * 100, 1), "Asset Type": "T-Bills"},
+    ]
+    if obj in ("income", "retirement"):
+        suggested_holdings.append({"Ticker": "SCHD", "Weight (%)": 8.0, "Asset Type": "Dividend ETF"})
+        suggested_holdings.append({"Ticker": "VNQ", "Weight (%)": 5.0, "Asset Type": "REIT"})
+
+    df = pd.DataFrame(suggested_holdings)
+    df["Weight (%)"] = df["Weight (%)"].astype(float)
+    df = df[df["Weight (%)"] > 0].copy()
+    df["Weight (%)"] = (df["Weight (%)"] / df["Weight (%)"].sum() * 100).round(1)
+
+    alloc = {
+        "Equity": float(df[df["Asset Type"] == "Equity"]["Weight (%)"].sum() / 100),
+        "Bonds": float(df[df["Asset Type"] == "Bonds"]["Weight (%)"].sum() / 100),
+        "T-Bills": float(df[df["Asset Type"] == "T-Bills"]["Weight (%)"].sum() / 100),
+    }
+    return RecommendationResult(
+        allocation=alloc,
+        rationale=rationale,
+        suggested_holdings=df.to_dict(orient="records"),
+    )
