@@ -970,6 +970,12 @@ def allocation_profile(
     reit = sum(wi for wi, at in zip(w, asset_types) if at == "REIT")
     dividend = sum(wi for wi, at in zip(w, asset_types) if at == "Dividend ETF")
     real_assets = sum(wi for wi, at in zip(w, asset_types) if at in ("REIT", "Other"))
+    long_duration_bonds = sum(
+        wi for ti, wi in zip(tickers, w) if ti.upper() in {"TLT", "EDV", "VGLT", "ZROZ", "BLV"}
+    )
+    short_duration_cash = sum(
+        wi for ti, wi, at in zip(tickers, w, asset_types) if ti.upper() in {"BIL", "SGOV", "SHY", "SHV"} or at == "T-Bills"
+    )
     tech = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in TECH_TICKERS)
     qqq_spy = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in {"QQQ", "SPY"})
     intl = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in {"VXUS", "VEA", "IEFA", "EFA", "IXUS"})
@@ -981,6 +987,8 @@ def allocation_profile(
         "reit": float(reit),
         "dividend": float(dividend),
         "real_assets": float(real_assets),
+        "long_duration_bonds": float(long_duration_bonds),
+        "short_duration_cash": float(short_duration_cash),
         "tech": float(tech),
         "qqq_spy": float(qqq_spy),
         "intl": float(intl),
@@ -1199,18 +1207,19 @@ def _rate_environment_effects(env: str, profile: dict) -> tuple[float, float, li
     ret_shift, vol_mult = 0.0, 1.0
     notes: list[str] = []
     eq, bonds, tbills, reit = profile["equity"], profile["bonds"], profile["tbills"], profile["reit"]
+    long_bonds = profile["long_duration_bonds"]
     if env == "Falling Rates":
-        ret_shift += 0.02 * eq + 0.025 * bonds + 0.015 * reit - 0.005 * tbills
-        vol_mult *= 0.92
-        notes.append("Falling rates tend to support growth stocks, bonds, and REITs while reducing volatility.")
+        ret_shift += 0.025 * eq + 0.045 * bonds + 0.020 * reit - 0.005 * tbills + 0.020 * long_bonds
+        vol_mult *= 0.90
+        notes.append("Falling rates typically support growth stocks and bonds, with stronger upside for long-duration bonds.")
     elif env == "Rising Rates":
-        ret_shift -= 0.01 * eq - 0.035 * bonds + 0.015 * tbills - 0.02 * reit
-        vol_mult *= 1.12
-        notes.append("Rising rates may hurt long-duration bonds and growth equities; T-bills may benefit.")
+        ret_shift += -0.020 * eq - 0.060 * bonds + 0.020 * tbills - 0.030 * reit - 0.040 * long_bonds
+        vol_mult *= 1.20
+        notes.append("Rising rates pressure duration-sensitive assets; T-bills become relatively more attractive.")
     elif env == "High Rate Environment":
-        ret_shift -= 0.015 * eq - 0.04 * bonds + 0.02 * tbills - 0.025 * reit
-        vol_mult *= 1.18
-        notes.append("A high-rate backdrop pressures valuations and favors shorter-duration assets.")
+        ret_shift += -0.030 * eq - 0.070 * bonds + 0.025 * tbills - 0.035 * reit - 0.050 * long_bonds
+        vol_mult *= 1.30
+        notes.append("Persistently high rates compress equity valuations and can materially hurt long-duration bonds.")
     else:
         notes.append("Stable rates imply modest macro drift; historical relationships may persist.")
     return ret_shift, vol_mult, notes
@@ -1219,16 +1228,25 @@ def _rate_environment_effects(env: str, profile: dict) -> tuple[float, float, li
 def _inflation_effects(inflation: str, profile: dict) -> tuple[float, float, list[str]]:
     ret_shift, vol_mult = 0.0, 1.0
     notes: list[str] = []
+    long_bonds = profile["long_duration_bonds"]
+    cash_like = profile["short_duration_cash"]
     if inflation == "High Inflation":
-        ret_shift -= 0.04 * profile["bonds"] - 0.01 * profile["equity"] + 0.02 * profile["real_assets"] + 0.005 * profile["tbills"]
-        vol_mult *= 1.10
-        notes.append("High inflation may hurt bonds and nominal equities while supporting real assets and cash yields.")
+        ret_shift += (
+            -0.080 * profile["bonds"]
+            - 0.025 * profile["equity"]
+            + 0.030 * profile["real_assets"]
+            + 0.020 * profile["tbills"]
+            - 0.060 * long_bonds
+            + 0.010 * cash_like
+        )
+        vol_mult *= 1.28
+        notes.append("High inflation is punitive for duration: long bonds face larger downside, while T-bills/cash are more defensive.")
     elif inflation == "Deflation":
-        ret_shift += 0.015 * profile["bonds"] - 0.02 * profile["equity"] - 0.01 * profile["reit"]
-        vol_mult *= 1.15
+        ret_shift += 0.030 * profile["bonds"] - 0.030 * profile["equity"] - 0.020 * profile["reit"] + 0.010 * long_bonds
+        vol_mult *= 1.22
         notes.append("Deflation can support high-quality bonds but pressure earnings and risk assets.")
     elif inflation == "Low Inflation":
-        ret_shift += 0.005 * profile["equity"]
+        ret_shift += 0.010 * profile["equity"] + 0.005 * profile["bonds"]
         notes.append("Low inflation is generally supportive for duration and growth assets.")
     else:
         notes.append("Moderate inflation is typically manageable for diversified portfolios.")
@@ -1252,14 +1270,43 @@ def _valuation_effects(valuation: str, profile: dict) -> tuple[float, float, lis
 
 def _economic_regime_effects(regime: str, profile: dict) -> tuple[float, float, list[str]]:
     notes: list[str] = []
+    long_bonds = profile["long_duration_bonds"]
     mapping = {
-        "Expansion": (0.02 * profile["equity"], 0.95, "Expansion supports earnings growth and risk assets."),
-        "Slow Growth": (-0.01 * profile["equity"], 1.05, "Slow growth may compress multiples and favor quality/defensive assets."),
-        "Recession": (-0.10 * profile["equity"] + 0.02 * profile["tbills"], 1.40, "Recession scenarios stress equities and raise volatility."),
-        "Recovery": (0.04 * profile["equity"], 1.10, "Recovery phases often favor cyclicals and equities early in the cycle."),
-        "Stagflation": (-0.06 * profile["equity"] - 0.04 * profile["bonds"], 1.30, "Stagflation challenges both stocks and bonds."),
-        "AI / Tech Boom": (0.07 * profile["tech"] + 0.02 * profile["equity"], 1.20, "Tech-led expansion can boost growth but increase volatility."),
-        "Credit Crisis": (-0.12 * profile["equity"] + 0.03 * profile["tbills"], 1.55, "Credit stress raises correlations and drawdown risk."),
+        "Expansion": (
+            0.020 * profile["equity"] - 0.005 * profile["tbills"],
+            0.95,
+            "Expansion supports earnings and risk assets, while defensive cash drags upside.",
+        ),
+        "Slow Growth": (
+            -0.020 * profile["equity"] + 0.010 * profile["tbills"] + 0.005 * profile["bonds"],
+            1.10,
+            "Slow growth pressures cyclicals and favors defensive fixed income.",
+        ),
+        "Recession": (
+            -0.180 * profile["equity"] - 0.030 * profile["reit"] + 0.020 * profile["tbills"] + 0.015 * profile["bonds"],
+            1.65,
+            "Recession stress materially lowers equity returns and raises volatility/correlation.",
+        ),
+        "Recovery": (
+            0.050 * profile["equity"] - 0.010 * profile["tbills"],
+            1.15,
+            "Recovery phases typically reward risk assets but volatility often stays elevated.",
+        ),
+        "Stagflation": (
+            -0.100 * profile["equity"] - 0.080 * profile["bonds"] - 0.050 * long_bonds + 0.015 * profile["tbills"],
+            1.45,
+            "Stagflation is challenging for both equities and bonds; shorter-duration cash is relatively defensive.",
+        ),
+        "AI / Tech Boom": (
+            0.120 * profile["tech"] + 0.030 * profile["equity"] - 0.005 * profile["tbills"],
+            1.30,
+            "Tech-led expansions can improve returns but often come with higher regime volatility.",
+        ),
+        "Credit Crisis": (
+            -0.220 * profile["equity"] - 0.060 * profile["reit"] + 0.035 * profile["tbills"] - 0.010 * profile["bonds"],
+            1.95,
+            "Credit crises drive sharp drawdowns, spread widening, and significantly higher realized volatility.",
+        ),
     }
     ret_shift, vol_mult, note = mapping.get(regime, (0.0, 1.0, "Regime effects applied to forward assumptions."))
     notes.append(note)
@@ -1291,9 +1338,14 @@ def compute_forward_projection_with_profile(
     vol_mult *= v1 * v2 * v3 * v4
 
     recession_prob = float(np.clip(assumptions.recession_probability, 0.0, 1.0))
-    ret_shift -= recession_prob * 0.12 * profile["equity"]
-    vol_mult *= 1.0 + recession_prob * 0.45
-    drawdown_mult = 1.0 + recession_prob * 0.35
+    ret_shift += (
+        -0.180 * recession_prob * profile["equity"]
+        -0.040 * recession_prob * profile["reit"]
+        +0.030 * recession_prob * profile["tbills"]
+        +0.010 * recession_prob * profile["bonds"]
+    )
+    vol_mult *= 1.0 + recession_prob * 0.75
+    drawdown_mult = 1.0 + recession_prob * 0.90
 
     adj_return = metrics.annual_return + ret_shift
     adj_vol = max(0.001, metrics.volatility * vol_mult)
@@ -1313,8 +1365,9 @@ def compute_forward_projection_with_profile(
     if assumptions.override_volatility is not None:
         adj_vol = assumptions.override_volatility
     if assumptions.override_inflation is not None and assumptions.override_inflation > 0.04:
-        adj_return -= 0.02 * profile["bonds"]
-        adj_vol *= 1.05
+        inflation_excess = min(0.08, assumptions.override_inflation - 0.04)
+        adj_return -= inflation_excess * (1.20 * profile["bonds"] + 1.50 * profile["long_duration_bonds"])
+        adj_vol *= 1.0 + 1.5 * inflation_excess
 
     adj_sharpe = sharpe_ratio(adj_return, adj_vol, risk_free_rate)
     adj_dd = metrics.max_drawdown * drawdown_mult
@@ -1322,13 +1375,17 @@ def compute_forward_projection_with_profile(
 
     type_shifts = {"Equity": 0.0, "Bonds": 0.0, "T-Bills": 0.0, "REIT": 0.0, "Dividend ETF": 0.0, "Other": 0.0}
     if assumptions.rate_environment == "Rising Rates":
-        type_shifts.update({"Bonds": -0.03, "T-Bills": 0.01, "Equity": -0.01})
+        type_shifts.update({"Bonds": -0.05, "T-Bills": 0.02, "Equity": -0.02, "REIT": -0.02})
     elif assumptions.rate_environment == "Falling Rates":
-        type_shifts.update({"Bonds": 0.02, "Equity": 0.015, "REIT": 0.015})
+        type_shifts.update({"Bonds": 0.03, "T-Bills": -0.005, "Equity": 0.02, "REIT": 0.02})
     if assumptions.inflation == "High Inflation":
-        type_shifts.update({"Bonds": -0.03, "REIT": 0.01})
+        type_shifts.update({"Bonds": -0.06, "T-Bills": 0.015, "REIT": 0.015, "Dividend ETF": -0.005})
+    if assumptions.economic_regime == "Recession":
+        type_shifts.update({"Equity": type_shifts["Equity"] - 0.10, "REIT": type_shifts["REIT"] - 0.04, "T-Bills": type_shifts["T-Bills"] + 0.02})
+    if assumptions.economic_regime == "Credit Crisis":
+        type_shifts.update({"Equity": type_shifts["Equity"] - 0.14, "REIT": type_shifts["REIT"] - 0.06, "Bonds": type_shifts["Bonds"] - 0.02, "T-Bills": type_shifts["T-Bills"] + 0.03})
     if assumptions.economic_regime == "AI / Tech Boom":
-        type_shifts["Equity"] += 0.03
+        type_shifts["Equity"] += 0.06
 
     adjusted_mean = mean_returns.copy()
     for i, at in enumerate(asset_types):
@@ -1343,13 +1400,15 @@ def compute_forward_projection_with_profile(
                 adjusted_mean[i] = assumptions.override_bond_return
 
     vol_scale = adj_vol / max(metrics.volatility, 1e-6)
-    adjusted_cov = cov * (vol_scale**2)
+    corr_stress = 1.0 + recession_prob * 0.30
+    adjusted_cov = cov * (vol_scale**2) * corr_stress
 
     insights: list[str] = list(rate_notes) + list(infl_notes) + list(regime_notes)
     if recession_prob >= 0.5:
         insights.append("High recession probability reduces expected equity returns and raises stress-test volatility.")
+        insights.append("Under institutional stress assumptions, recession drawdowns are materially larger for growth-heavy portfolios.")
     if assumptions.inflation == "High Inflation":
-        insights.append("The portfolio may struggle under sustained high inflation.")
+        insights.append("Sustained high inflation is modeled as significantly damaging for long-duration bond exposure.")
     if assumptions.rate_environment == "Falling Rates" and profile["equity"] >= 0.50:
         insights.append("Falling-rate environments may improve growth-stock performance.")
     if assumptions.valuation in ("Expensive", "Bubble-like"):
