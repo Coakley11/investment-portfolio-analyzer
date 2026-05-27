@@ -86,7 +86,12 @@ TECH_TICKERS = frozenset(
     {"QQQ", "VGT", "XLK", "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "ARKK"}
 )
 ROLLING_WINDOW = 63
-BENCHMARK_TICKERS = ("SPY", "QQQ", "AGG", "BIL")
+BENCHMARK_TICKERS = {
+    "SPY": "S&P 500",
+    "QQQ": "Nasdaq 100",
+    "AGG": "Aggregate Bonds",
+    "BIL": "Treasury Bills",
+}
 
 
 @dataclass(frozen=True)
@@ -130,6 +135,45 @@ class OptimizerResult:
     volatility: float
     sharpe_ratio: float
     label: str
+
+
+@dataclass(frozen=True)
+class PortfolioExplanation:
+    portfolio_overview: list[str]
+    risk_analysis: list[str]
+    macro_sensitivity: list[str]
+    investor_suitability: list[str]
+    strengths: list[str]
+    weaknesses: list[str]
+    suggested_improvements: list[str]
+    full_memo: str
+
+
+@dataclass(frozen=True)
+class ForwardMacroAssumptions:
+    rate_environment: str
+    inflation: str
+    recession_probability: float
+    valuation: str
+    economic_regime: str
+    override_equity_return: float | None = None
+    override_bond_return: float | None = None
+    override_inflation: float | None = None
+    override_volatility: float | None = None
+
+
+@dataclass(frozen=True)
+class ForwardProjectionResult:
+    adjusted_return: float
+    adjusted_volatility: float
+    adjusted_sharpe: float
+    adjusted_max_drawdown: float
+    projected_value: float
+    forward_insights: list[str]
+    rate_commentary: list[str]
+    inflation_commentary: list[str]
+    adjusted_mean_returns: np.ndarray
+    adjusted_cov: np.ndarray
 
 
 def normalize_weights(weights: Iterable[float]) -> np.ndarray:
@@ -489,12 +533,20 @@ def monte_carlo_simulation(
     simulations: int,
     target_value: float | None = None,
     seed: int | None = 42,
+    expected_annual_return: float | None = None,
+    expected_annual_volatility: float | None = None,
 ) -> MonteCarloResult:
     """Geometric Brownian motion on portfolio daily returns."""
     rng = np.random.default_rng(seed)
     port_rets = portfolio_daily_returns(asset_returns, weights)
-    mu = port_rets.mean()
-    sigma = port_rets.std()
+    if expected_annual_return is not None:
+        mu = (1 + expected_annual_return) ** (1 / TRADING_DAYS) - 1
+    else:
+        mu = port_rets.mean()
+    if expected_annual_volatility is not None:
+        sigma = expected_annual_volatility / np.sqrt(TRADING_DAYS)
+    else:
+        sigma = port_rets.std()
     days = years * TRADING_DAYS
 
     paths = np.zeros((simulations, days + 1))
@@ -903,4 +955,415 @@ def recommend_portfolio(
         allocation=alloc,
         rationale=rationale,
         suggested_holdings=df.to_dict(orient="records"),
+    )
+
+
+def allocation_profile(
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+) -> dict[str, float | int | str]:
+    w = normalize_weights(weights)
+    equity = sum(wi for wi, at in zip(w, asset_types) if at in ("Equity", "REIT", "Dividend ETF"))
+    bonds = sum(wi for wi, at in zip(w, asset_types) if at == "Bonds")
+    tbills = sum(wi for wi, at in zip(w, asset_types) if at == "T-Bills")
+    reit = sum(wi for wi, at in zip(w, asset_types) if at == "REIT")
+    dividend = sum(wi for wi, at in zip(w, asset_types) if at == "Dividend ETF")
+    real_assets = sum(wi for wi, at in zip(w, asset_types) if at in ("REIT", "Other"))
+    tech = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in TECH_TICKERS)
+    qqq_spy = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in {"QQQ", "SPY"})
+    intl = sum(wi for ti, wi in zip(tickers, w) if ti.upper() in {"VXUS", "VEA", "IEFA", "EFA", "IXUS"})
+    top_idx = int(np.argmax(w))
+    return {
+        "equity": float(equity),
+        "bonds": float(bonds),
+        "tbills": float(tbills),
+        "reit": float(reit),
+        "dividend": float(dividend),
+        "real_assets": float(real_assets),
+        "tech": float(tech),
+        "qqq_spy": float(qqq_spy),
+        "intl": float(intl),
+        "bond_cash": float(bonds + tbills),
+        "concentration": float(w[top_idx]),
+        "top_ticker": tickers[top_idx],
+        "n_holdings": len(tickers),
+    }
+
+
+def _memo_section(title: str, bullets: list[str]) -> str:
+    lines = [title, "-" * len(title)]
+    lines.extend(f"• {b}" for b in bullets)
+    return "\n".join(lines)
+
+
+def generate_portfolio_explanation(
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    metrics: ExtendedPortfolioMetrics,
+    corr: pd.DataFrame,
+    risk_contrib: pd.DataFrame,
+    benchmark_rets: pd.Series | None = None,
+) -> PortfolioExplanation:
+    """Generate a structured investment memo from portfolio metrics and allocation."""
+    profile = allocation_profile(tickers, weights, asset_types)
+    overview: list[str] = []
+    risk: list[str] = []
+    macro: list[str] = []
+    suitability: list[str] = []
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    improvements: list[str] = []
+
+    eq, bc = profile["equity"], profile["bond_cash"]
+    if eq < 0.50 and bc >= 0.40:
+        overview.append(
+            "This portfolio is moderately conservative with balanced equity and fixed-income exposure."
+        )
+    elif profile["qqq_spy"] >= 0.35 or profile["tech"] >= 0.40:
+        overview.append(
+            "The portfolio is growth-oriented due to elevated SPY/QQQ or technology allocations."
+        )
+    elif profile["tbills"] >= 0.25:
+        overview.append("The portfolio emphasizes stability through T-bill and cash-like exposure.")
+    elif eq >= 0.75:
+        overview.append("This portfolio is equity-heavy and oriented toward long-term capital appreciation.")
+    else:
+        overview.append("This portfolio blends growth assets with defensive fixed income in a balanced structure.")
+
+    overview.append(
+        f"Allocation snapshot: ~{eq*100:.0f}% growth-oriented assets, "
+        f"~{profile['bonds']*100:.0f}% bonds, ~{profile['tbills']*100:.0f}% T-bills/cash."
+    )
+
+    spy_vol = None
+    if benchmark_rets is not None and len(benchmark_rets) > 20:
+        spy_vol = annualized_volatility(benchmark_rets)
+        if metrics.volatility < spy_vol * 0.90:
+            risk.append("Volatility is below the S&P 500, likely due to bond and diversification benefits.")
+        elif metrics.volatility > spy_vol * 1.15:
+            risk.append("Volatility exceeds the S&P 500, indicating above-market risk-taking.")
+        else:
+            risk.append("Volatility is broadly in line with the S&P 500.")
+
+    if metrics.volatility < 0.12:
+        risk.append(f"Annualized volatility ({metrics.volatility*100:.1f}%) is relatively low for a multi-asset portfolio.")
+    elif metrics.volatility > 0.20:
+        risk.append(f"Elevated volatility ({metrics.volatility*100:.1f}%) suggests meaningful drawdown potential.")
+
+    if metrics.sharpe_ratio >= 1.0:
+        risk.append(f"Sharpe ratio ({metrics.sharpe_ratio:.2f}) indicates strong risk-adjusted returns versus the risk-free rate.")
+    elif metrics.sharpe_ratio < 0.5:
+        risk.append(
+            "A low Sharpe ratio means the portfolio may not be earning enough return for the risk taken."
+        )
+    else:
+        risk.append(f"Sharpe ratio ({metrics.sharpe_ratio:.2f}) is moderate on a historical basis.")
+
+    if metrics.sortino_ratio >= metrics.sharpe_ratio and metrics.sortino_ratio >= 0.8:
+        risk.append(f"Sortino ratio ({metrics.sortino_ratio:.2f}) suggests downside risk is relatively contained.")
+    elif metrics.sortino_ratio < 0.5:
+        risk.append(f"Sortino ratio ({metrics.sortino_ratio:.2f}) highlights meaningful downside volatility.")
+
+    if metrics.beta_spy > 1.1:
+        risk.append(f"Beta vs SPY ({metrics.beta_spy:.2f}) implies above-market sensitivity in risk-on environments.")
+    elif 0 < metrics.beta_spy < 0.85:
+        risk.append(f"Beta below 1.0 ({metrics.beta_spy:.2f}) means the portfolio is less sensitive to the S&P 500.")
+
+    if metrics.max_drawdown < -0.25:
+        risk.append(
+            f"Maximum drawdown ({metrics.max_drawdown*100:.1f}%) indicates the portfolio has experienced severe peak-to-trough declines."
+        )
+    if profile["tech"] >= 0.30:
+        risk.append("The portfolio may experience elevated drawdowns during technology selloffs.")
+    if profile["tbills"] >= 0.20:
+        risk.append("A large T-bill allocation reduces market sensitivity and can cushion equity drawdowns.")
+
+    if profile["concentration"] >= 0.35:
+        risk.append(
+            f"Concentration risk: {profile['top_ticker']} represents {profile['concentration']*100:.1f}% of the portfolio."
+        )
+    top_risk = risk_contrib.iloc[0]
+    risk.append(
+        f"{top_risk['Ticker']} contributes {top_risk['Risk Contribution (%)']:.1f}% of total portfolio risk."
+    )
+
+    if profile["bonds"] >= 0.25:
+        macro.append(
+            "High inflation could pressure long-duration bond holdings; shorter-duration and T-bill exposure may be more resilient."
+        )
+    if profile["qqq_spy"] >= 0.25 or profile["tech"] >= 0.30:
+        macro.append(
+            "The portfolio may benefit from falling rates because growth exposure is elevated."
+        )
+        macro.append("Rising rates could weigh on growth stocks and long-duration bonds simultaneously.")
+    if profile["tbills"] >= 0.15:
+        macro.append("Elevated cash/T-bill exposure may outperform during credit stress and flight-to-quality episodes.")
+    if profile["reit"] + profile["real_assets"] >= 0.10:
+        macro.append("Real assets and REIT exposure may provide partial inflation hedging over long horizons.")
+    if eq >= 0.60:
+        macro.append("Recession risk would likely pressure equities; defensive sleeves may partially offset losses.")
+    else:
+        macro.append("The portfolio appears relatively resilient during recessions because of defensive asset exposure.")
+    if profile["tech"] >= 0.25:
+        macro.append("An AI/tech-driven expansion could amplify returns but also increase volatility and drawdown risk.")
+    if profile["bond_cash"] >= 0.35:
+        macro.append("Falling interest rates may support bond prices and reduce portfolio volatility.")
+    if not macro:
+        macro.append("Macro sensitivity appears balanced across growth, income, and defensive sleeves.")
+
+    if metrics.volatility < 0.14 and bc >= 0.45:
+        suitability.append("May be suitable for retirement or capital-preservation-oriented investors.")
+    if eq >= 0.65 and metrics.volatility < 0.22:
+        suitability.append("Suitable for long-term growth investors with a multi-year horizon.")
+    if metrics.volatility > 0.20:
+        suitability.append("May be too volatile for short-term cash needs or near-term spending goals.")
+    if 0.12 <= metrics.volatility <= 0.18:
+        suitability.append("Suitable for moderate-risk investors seeking balanced growth and stability.")
+    if profile["tbills"] >= 0.40:
+        suitability.append("Appropriate for short-term cash management with limited market exposure.")
+    if not suitability:
+        suitability.append("Investor fit depends on horizon and liquidity needs; review risk metrics before allocating.")
+
+    if len(corr) >= 2:
+        upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+        max_corr = float(upper.max().max())
+        if max_corr < 0.65:
+            strengths.append("Diversification benefits appear meaningful across holdings.")
+        if max_corr > 0.85:
+            weaknesses.append("High pairwise correlation may limit diversification benefits.")
+
+    if profile["n_holdings"] >= 4 and profile["concentration"] < 0.35:
+        strengths.append("Holdings are spread across multiple positions, reducing single-name risk.")
+    if profile["bond_cash"] >= 0.25 and metrics.volatility < 0.16:
+        strengths.append("Defensive positioning helps stabilize volatility relative to pure equity portfolios.")
+    if metrics.sharpe_ratio >= 0.8:
+        strengths.append("Historical risk-adjusted returns are competitive versus typical balanced portfolios.")
+    if profile["intl"] >= 0.10:
+        strengths.append("International diversification may improve risk-adjusted return over time.")
+
+    if profile["concentration"] >= 0.40:
+        weaknesses.append(f"Concentration in {profile['top_ticker']} increases idiosyncratic risk.")
+    if profile["bond_cash"] < 0.10 and metrics.volatility > 0.18:
+        weaknesses.append("Insufficient fixed-income exposure for investors seeking drawdown protection.")
+    if metrics.annual_return < 0.05 and metrics.volatility > 0.12:
+        weaknesses.append("Low expected return relative to volatility may limit long-term wealth accumulation.")
+    if metrics.volatility > 0.22:
+        weaknesses.append("Excessive volatility may challenge investors with low risk tolerance.")
+    if profile["reit"] + profile["real_assets"] < 0.05 and profile["bonds"] > 0.30:
+        weaknesses.append("Inflation vulnerability: bond-heavy portfolios can struggle in sustained high-inflation regimes.")
+    if metrics.max_drawdown < -0.30:
+        weaknesses.append("Historical drawdowns have been severe; recovery periods may be lengthy.")
+
+    if profile["bond_cash"] < 0.20 and metrics.volatility > 0.16:
+        improvements.append("Increasing bond exposure could reduce volatility and improve stability.")
+    if profile["qqq_spy"] >= 0.40:
+        improvements.append("Reducing concentration in QQQ/SPY may lower drawdown risk during growth selloffs.")
+    if profile["intl"] < 0.08 and eq > 0.50:
+        improvements.append("Adding international diversification may improve risk-adjusted return.")
+    if profile["concentration"] >= 0.35:
+        improvements.append(f"Consider trimming {profile['top_ticker']} to reduce concentration risk.")
+    if metrics.sharpe_ratio < 0.6:
+        improvements.append("Rebalancing toward higher Sharpe sleeves (bonds, diversifiers) may improve efficiency.")
+    if profile["tbills"] < 0.05 and metrics.beta_spy > 1.1:
+        improvements.append("A modest T-bill sleeve could reduce beta and provide liquidity in stress scenarios.")
+    if not improvements:
+        improvements.append("Current positioning is reasonable; periodic rebalancing remains prudent.")
+
+    sections = [
+        _memo_section("Portfolio Overview", overview),
+        _memo_section("Risk Analysis", risk),
+        _memo_section("Macro Sensitivity", macro),
+        _memo_section("Investor Suitability", suitability),
+        _memo_section("Strengths", strengths),
+        _memo_section("Weaknesses", weaknesses),
+        _memo_section("Suggested Improvements", improvements),
+    ]
+    header = "PORTFOLIO INVESTMENT MEMO\n" + "=" * 52 + "\n"
+    full_memo = header + "\n\n".join(sections) + "\n\nDisclaimer: Educational analysis only. Not financial advice."
+
+    return PortfolioExplanation(
+        portfolio_overview=overview,
+        risk_analysis=risk,
+        macro_sensitivity=macro,
+        investor_suitability=suitability,
+        strengths=strengths,
+        weaknesses=weaknesses,
+        suggested_improvements=improvements,
+        full_memo=full_memo,
+    )
+
+
+def _rate_environment_effects(env: str, profile: dict) -> tuple[float, float, list[str]]:
+    ret_shift, vol_mult = 0.0, 1.0
+    notes: list[str] = []
+    eq, bonds, tbills, reit = profile["equity"], profile["bonds"], profile["tbills"], profile["reit"]
+    if env == "Falling Rates":
+        ret_shift += 0.02 * eq + 0.025 * bonds + 0.015 * reit - 0.005 * tbills
+        vol_mult *= 0.92
+        notes.append("Falling rates tend to support growth stocks, bonds, and REITs while reducing volatility.")
+    elif env == "Rising Rates":
+        ret_shift -= 0.01 * eq - 0.035 * bonds + 0.015 * tbills - 0.02 * reit
+        vol_mult *= 1.12
+        notes.append("Rising rates may hurt long-duration bonds and growth equities; T-bills may benefit.")
+    elif env == "High Rate Environment":
+        ret_shift -= 0.015 * eq - 0.04 * bonds + 0.02 * tbills - 0.025 * reit
+        vol_mult *= 1.18
+        notes.append("A high-rate backdrop pressures valuations and favors shorter-duration assets.")
+    else:
+        notes.append("Stable rates imply modest macro drift; historical relationships may persist.")
+    return ret_shift, vol_mult, notes
+
+
+def _inflation_effects(inflation: str, profile: dict) -> tuple[float, float, list[str]]:
+    ret_shift, vol_mult = 0.0, 1.0
+    notes: list[str] = []
+    if inflation == "High Inflation":
+        ret_shift -= 0.04 * profile["bonds"] - 0.01 * profile["equity"] + 0.02 * profile["real_assets"] + 0.005 * profile["tbills"]
+        vol_mult *= 1.10
+        notes.append("High inflation may hurt bonds and nominal equities while supporting real assets and cash yields.")
+    elif inflation == "Deflation":
+        ret_shift += 0.015 * profile["bonds"] - 0.02 * profile["equity"] - 0.01 * profile["reit"]
+        vol_mult *= 1.15
+        notes.append("Deflation can support high-quality bonds but pressure earnings and risk assets.")
+    elif inflation == "Low Inflation":
+        ret_shift += 0.005 * profile["equity"]
+        notes.append("Low inflation is generally supportive for duration and growth assets.")
+    else:
+        notes.append("Moderate inflation is typically manageable for diversified portfolios.")
+    return ret_shift, vol_mult, notes
+
+
+def _valuation_effects(valuation: str, profile: dict) -> tuple[float, float, list[str]]:
+    notes: list[str] = []
+    shifts = {"Cheap": 0.02, "Fair Value": 0.0, "Expensive": -0.015, "Bubble-like": -0.03}
+    vol_mults = {"Cheap": 0.95, "Fair Value": 1.0, "Expensive": 1.08, "Bubble-like": 1.15}
+    shift = shifts.get(valuation, 0.0) * profile["equity"]
+    vol_mult = vol_mults.get(valuation, 1.0)
+    if valuation in ("Expensive", "Bubble-like"):
+        notes.append("The current valuation environment may limit future equity upside and raise drawdown risk.")
+    elif valuation == "Cheap":
+        notes.append("A cheap valuation backdrop may support above-average forward equity returns.")
+    else:
+        notes.append("Fair valuations suggest returns may track earnings growth and macro conditions.")
+    return shift, vol_mult, notes
+
+
+def _economic_regime_effects(regime: str, profile: dict) -> tuple[float, float, list[str]]:
+    notes: list[str] = []
+    mapping = {
+        "Expansion": (0.02 * profile["equity"], 0.95, "Expansion supports earnings growth and risk assets."),
+        "Slow Growth": (-0.01 * profile["equity"], 1.05, "Slow growth may compress multiples and favor quality/defensive assets."),
+        "Recession": (-0.10 * profile["equity"] + 0.02 * profile["tbills"], 1.40, "Recession scenarios stress equities and raise volatility."),
+        "Recovery": (0.04 * profile["equity"], 1.10, "Recovery phases often favor cyclicals and equities early in the cycle."),
+        "Stagflation": (-0.06 * profile["equity"] - 0.04 * profile["bonds"], 1.30, "Stagflation challenges both stocks and bonds."),
+        "AI / Tech Boom": (0.07 * profile["tech"] + 0.02 * profile["equity"], 1.20, "Tech-led expansion can boost growth but increase volatility."),
+        "Credit Crisis": (-0.12 * profile["equity"] + 0.03 * profile["tbills"], 1.55, "Credit stress raises correlations and drawdown risk."),
+    }
+    ret_shift, vol_mult, note = mapping.get(regime, (0.0, 1.0, "Regime effects applied to forward assumptions."))
+    notes.append(note)
+    return ret_shift, vol_mult, notes
+
+
+def compute_forward_projection_with_profile(
+    metrics: ExtendedPortfolioMetrics,
+    mean_returns: np.ndarray,
+    cov: np.ndarray,
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    assumptions: ForwardMacroAssumptions,
+    initial_value: float,
+    years: float,
+    risk_free_rate: float,
+) -> ForwardProjectionResult:
+    """Forward projection using actual portfolio allocation profile."""
+    profile = allocation_profile(tickers, weights, asset_types)
+    ret_shift = 0.0
+    vol_mult = 1.0
+
+    r1, v1, rate_notes = _rate_environment_effects(assumptions.rate_environment, profile)
+    r2, v2, infl_notes = _inflation_effects(assumptions.inflation, profile)
+    r3, v3, _ = _valuation_effects(assumptions.valuation, profile)
+    r4, v4, regime_notes = _economic_regime_effects(assumptions.economic_regime, profile)
+    ret_shift += r1 + r2 + r3 + r4
+    vol_mult *= v1 * v2 * v3 * v4
+
+    recession_prob = float(np.clip(assumptions.recession_probability, 0.0, 1.0))
+    ret_shift -= recession_prob * 0.12 * profile["equity"]
+    vol_mult *= 1.0 + recession_prob * 0.45
+    drawdown_mult = 1.0 + recession_prob * 0.35
+
+    adj_return = metrics.annual_return + ret_shift
+    adj_vol = max(0.001, metrics.volatility * vol_mult)
+
+    if assumptions.override_equity_return is not None:
+        blended = (
+            assumptions.override_equity_return * profile["equity"]
+            + (assumptions.override_bond_return or metrics.annual_return) * profile["bonds"]
+            + metrics.annual_return * profile["tbills"]
+            + metrics.annual_return * profile["dividend"]
+        )
+        adj_return = blended / max(
+            profile["equity"] + profile["bonds"] + profile["tbills"] + profile["dividend"], 0.01
+        )
+    elif assumptions.override_bond_return is not None:
+        adj_return += (assumptions.override_bond_return - metrics.annual_return) * profile["bonds"]
+    if assumptions.override_volatility is not None:
+        adj_vol = assumptions.override_volatility
+    if assumptions.override_inflation is not None and assumptions.override_inflation > 0.04:
+        adj_return -= 0.02 * profile["bonds"]
+        adj_vol *= 1.05
+
+    adj_sharpe = sharpe_ratio(adj_return, adj_vol, risk_free_rate)
+    adj_dd = metrics.max_drawdown * drawdown_mult
+    projected = initial_value * (1 + adj_return) ** years
+
+    type_shifts = {"Equity": 0.0, "Bonds": 0.0, "T-Bills": 0.0, "REIT": 0.0, "Dividend ETF": 0.0, "Other": 0.0}
+    if assumptions.rate_environment == "Rising Rates":
+        type_shifts.update({"Bonds": -0.03, "T-Bills": 0.01, "Equity": -0.01})
+    elif assumptions.rate_environment == "Falling Rates":
+        type_shifts.update({"Bonds": 0.02, "Equity": 0.015, "REIT": 0.015})
+    if assumptions.inflation == "High Inflation":
+        type_shifts.update({"Bonds": -0.03, "REIT": 0.01})
+    if assumptions.economic_regime == "AI / Tech Boom":
+        type_shifts["Equity"] += 0.03
+
+    adjusted_mean = mean_returns.copy()
+    for i, at in enumerate(asset_types):
+        adjusted_mean[i] += type_shifts.get(at, 0.0)
+    if assumptions.override_equity_return is not None:
+        for i, at in enumerate(asset_types):
+            if at in ("Equity", "REIT", "Dividend ETF"):
+                adjusted_mean[i] = assumptions.override_equity_return
+    if assumptions.override_bond_return is not None:
+        for i, at in enumerate(asset_types):
+            if at in ("Bonds", "T-Bills"):
+                adjusted_mean[i] = assumptions.override_bond_return
+
+    vol_scale = adj_vol / max(metrics.volatility, 1e-6)
+    adjusted_cov = cov * (vol_scale**2)
+
+    insights: list[str] = list(rate_notes) + list(infl_notes) + list(regime_notes)
+    if recession_prob >= 0.5:
+        insights.append("High recession probability reduces expected equity returns and raises stress-test volatility.")
+    if assumptions.inflation == "High Inflation":
+        insights.append("The portfolio may struggle under sustained high inflation.")
+    if assumptions.rate_environment == "Falling Rates" and profile["equity"] >= 0.50:
+        insights.append("Falling-rate environments may improve growth-stock performance.")
+    if assumptions.valuation in ("Expensive", "Bubble-like"):
+        insights.append("The current valuation environment may limit future upside.")
+
+    return ForwardProjectionResult(
+        adjusted_return=adj_return,
+        adjusted_volatility=adj_vol,
+        adjusted_sharpe=adj_sharpe,
+        adjusted_max_drawdown=adj_dd,
+        projected_value=projected,
+        forward_insights=insights,
+        rate_commentary=rate_notes,
+        inflation_commentary=infl_notes,
+        adjusted_mean_returns=adjusted_mean,
+        adjusted_cov=adjusted_cov,
     )

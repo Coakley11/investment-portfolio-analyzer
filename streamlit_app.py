@@ -264,12 +264,14 @@ tabs = st.tabs(
         "Overview",
         "Portfolio Inputs",
         "Risk Analysis",
+        "Explain This Portfolio",
+        "Forward-Looking Macro Analysis",
         "Monte Carlo",
         "Optimization",
         "Efficient Frontier",
     ]
 )
-tab_overview, tab_inputs, tab_risk, tab_mc, tab_opt, tab_frontier = tabs
+tab_overview, tab_inputs, tab_risk, tab_explain, tab_forward, tab_mc, tab_opt, tab_frontier = tabs
 
 with tab_inputs:
     section_header("Portfolio Inputs", "Tickers and target weights. Normalized to 100% if needed.")
@@ -348,6 +350,9 @@ with st.spinner("Loading market data and running analytics…"):
         )
         macro_df = core.macro_regime_analysis(
             metrics, settings["initial_value"], years=1, weights=weights, asset_types=asset_types
+        )
+        explanation = core.generate_portfolio_explanation(
+            tickers, weights, asset_types, metrics, corr, risk_contrib, benchmark_rets=bench_rets
         )
     except Exception as ex:
         st.error(f"Analysis failed: {ex}")
@@ -457,6 +462,47 @@ with tab_overview:
             use_container_width=True,
         )
 
+# ── Explain This Portfolio ─────────────────────────────────────────────────────
+
+with tab_explain:
+    section_header(
+        "Explain This Portfolio",
+        "AI-style memo synthesized from allocation, risk metrics, and macro sensitivity.",
+    )
+    st.markdown("##### Portfolio Overview")
+    for item in explanation.portfolio_overview:
+        st.markdown(f"- {item}")
+    st.markdown("##### Risk Analysis")
+    for item in explanation.risk_analysis:
+        st.markdown(f"- {item}")
+    st.markdown("##### Macro Sensitivity")
+    for item in explanation.macro_sensitivity:
+        st.markdown(f"- {item}")
+    st.markdown("##### Investor Suitability")
+    for item in explanation.investor_suitability:
+        st.markdown(f"- {item}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("##### Strengths")
+        for item in explanation.strengths:
+            st.markdown(f"- {item}")
+    with c2:
+        st.markdown("##### Weaknesses")
+        for item in explanation.weaknesses:
+            st.markdown(f"- {item}")
+    st.markdown("##### Suggested Improvements")
+    for item in explanation.suggested_improvements:
+        st.markdown(f"- {item}")
+
+    st.download_button(
+        "Download Investment Memo (.txt)",
+        explanation.full_memo,
+        "portfolio_investment_memo.txt",
+        "text/plain",
+        use_container_width=False,
+    )
+
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
 with tab_risk:
@@ -501,6 +547,159 @@ with tab_risk:
     md["Adjusted Sharpe"] = md["Adjusted Sharpe"].map(lambda x: f"{x:.2f}")
     md["Adjusted Projected Value"] = md["Adjusted Projected Value"].map(_money)
     st.dataframe(md, use_container_width=True, hide_index=True)
+
+# ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
+
+with tab_forward:
+    section_header(
+        "Forward-Looking Macro Analysis",
+        "Set future macro assumptions and propagate them into projections, Monte Carlo, and optimization inputs.",
+    )
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        rate_env = st.selectbox(
+            "Interest Rate Environment",
+            ["Falling Rates", "Stable Rates", "Rising Rates", "High Rate Environment"],
+            index=1,
+        )
+        recession_prob_pct = st.slider("Recession Probability (%)", 0, 100, 25, 5)
+    with f2:
+        inflation_env = st.selectbox(
+            "Inflation Assumption",
+            ["Low Inflation", "Moderate Inflation", "High Inflation", "Deflation"],
+            index=1,
+        )
+        valuation_env = st.selectbox(
+            "Valuation Environment",
+            ["Cheap", "Fair Value", "Expensive", "Bubble-like"],
+            index=1,
+        )
+    with f3:
+        econ_regime = st.selectbox(
+            "Economic Regime",
+            ["Expansion", "Slow Growth", "Recession", "Recovery", "Stagflation", "AI / Tech Boom", "Credit Crisis"],
+            index=0,
+        )
+
+    st.markdown("##### Optional Forward Return Overrides")
+    o1, o2, o3, o4 = st.columns(4)
+    with o1:
+        use_eq = st.checkbox("Override equity return", value=False)
+        eq_ret = st.number_input("Expected equity return (%)", -20.0, 30.0, 8.0, 0.5) / 100.0
+    with o2:
+        use_bond = st.checkbox("Override bond return", value=False)
+        bond_ret = st.number_input("Expected bond return (%)", -10.0, 20.0, 4.0, 0.5) / 100.0
+    with o3:
+        use_infl = st.checkbox("Override inflation", value=False)
+        exp_infl = st.number_input("Expected inflation (%)", -2.0, 15.0, 2.5, 0.25) / 100.0
+    with o4:
+        use_vol = st.checkbox("Override volatility", value=False)
+        exp_vol = st.number_input("Expected volatility (%)", 1.0, 60.0, max(1.0, metrics.volatility * 100), 0.5) / 100.0
+
+    assumptions = core.ForwardMacroAssumptions(
+        rate_environment=rate_env,
+        inflation=inflation_env,
+        recession_probability=recession_prob_pct / 100.0,
+        valuation=valuation_env,
+        economic_regime=econ_regime,
+        override_equity_return=eq_ret if use_eq else None,
+        override_bond_return=bond_ret if use_bond else None,
+        override_inflation=exp_infl if use_infl else None,
+        override_volatility=exp_vol if use_vol else None,
+    )
+    fwd_years = st.slider("Forward projection horizon (years)", 1, 15, 5)
+    forward = core.compute_forward_projection_with_profile(
+        metrics=metrics,
+        mean_returns=mean_rets.copy(),
+        cov=cov.copy(),
+        tickers=tickers,
+        weights=weights,
+        asset_types=asset_types,
+        assumptions=assumptions,
+        initial_value=settings["initial_value"],
+        years=float(fwd_years),
+        risk_free_rate=settings["risk_free"],
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Forward Return", _pct(forward.adjusted_return))
+    m2.metric("Forward Volatility", _pct(forward.adjusted_volatility))
+    m3.metric("Forward Sharpe", f"{forward.adjusted_sharpe:.2f}")
+    m4.metric("Forward Projected Value", _money(forward.projected_value))
+    m5, m6 = st.columns(2)
+    m5.metric("Forward Max Drawdown", _pct(forward.adjusted_max_drawdown))
+    m6.metric("Recession Probability", f"{recession_prob_pct}%")
+
+    st.markdown("##### Forward-Looking Insights")
+    for note in forward.forward_insights:
+        st.markdown(f"- {note}")
+
+    with st.expander("Rate Environment Effects"):
+        for note in forward.rate_commentary:
+            st.markdown(f"- {note}")
+    with st.expander("Inflation Effects"):
+        for note in forward.inflation_commentary:
+            st.markdown(f"- {note}")
+
+    section_header("Forward Optimizer Snapshot", "Optimizer outputs under your forward assumptions.")
+    f_max_sharpe = core.optimize_max_sharpe(
+        forward.adjusted_mean_returns,
+        forward.adjusted_cov,
+        settings["risk_free"],
+        len(tickers),
+    )
+    f_min_vol = core.optimize_min_volatility(
+        forward.adjusted_mean_returns,
+        forward.adjusted_cov,
+        settings["risk_free"],
+        len(tickers),
+    )
+    oc1, oc2 = st.columns(2)
+    with oc1:
+        st.metric("Forward Max Sharpe Return", _pct(f_max_sharpe.annual_return))
+        st.metric("Forward Max Sharpe Volatility", _pct(f_max_sharpe.volatility))
+        st.metric("Forward Max Sharpe Ratio", f"{f_max_sharpe.sharpe_ratio:.2f}")
+    with oc2:
+        st.metric("Forward Min Vol Return", _pct(f_min_vol.annual_return))
+        st.metric("Forward Min Volatility", _pct(f_min_vol.volatility))
+        st.metric("Forward Min Vol Sharpe", f"{f_min_vol.sharpe_ratio:.2f}")
+
+    fmc_years = st.slider("Forward Monte Carlo years", 1, 15, 5, key="fmc_years")
+    fmc_sims = st.selectbox("Forward Monte Carlo simulations", [200, 500, 1000], index=1, key="fmc_sims")
+    fmc_target = st.number_input(
+        "Forward Monte Carlo target value ($)",
+        min_value=1_000,
+        max_value=25_000_000,
+        value=int(settings["initial_value"] * 1.8),
+        step=5_000,
+        key="fmc_target",
+    )
+    with st.spinner("Running forward-looking Monte Carlo…"):
+        mc_forward = core.monte_carlo_simulation(
+            returns,
+            weights,
+            settings["initial_value"],
+            years=fmc_years,
+            simulations=fmc_sims,
+            target_value=float(fmc_target),
+            expected_annual_return=forward.adjusted_return,
+            expected_annual_volatility=forward.adjusted_volatility,
+        )
+    c1, c2 = st.columns([1.15, 1.0])
+    with c1:
+        st.plotly_chart(
+            charts.monte_carlo_paths(
+                mc_forward.chart_df,
+                f"Forward Paths · {fmc_sims:,} sims · {fmc_years}Y · {econ_regime}",
+            ),
+            use_container_width=True,
+        )
+    with c2:
+        sf = mc_forward.summary
+        st.metric("P(Loss)", _pct(sf["prob_loss"]))
+        st.metric("P(Reach Target)", _pct(sf["prob_reach_target"]))
+        st.metric("Expected Shortfall", _money(sf["expected_shortfall"]))
+        st.caption(f"Median ending value: {_money(sf['p50'])}")
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
