@@ -526,31 +526,58 @@ def efficient_frontier(
 
 
 def monte_carlo_simulation(
-    asset_returns: pd.DataFrame,
-    weights: np.ndarray,
-    initial_value: float,
-    years: int,
-    simulations: int,
+    asset_returns: pd.DataFrame | None = None,
+    weights: np.ndarray | None = None,
+    initial_value: float | None = None,
+    years: int = 10,
+    simulations: int = 1000,
     target_value: float | None = None,
     seed: int | None = 42,
+    *,
+    starting_value: float | None = None,
+    annual_return: float | None = None,
+    annual_volatility: float | None = None,
     expected_annual_return: float | None = None,
     expected_annual_volatility: float | None = None,
+    returns: pd.DataFrame | None = None,
 ) -> MonteCarloResult:
-    """Geometric Brownian motion on portfolio daily returns."""
+    """
+    Geometric Brownian motion on portfolio returns.
+
+    If `returns` (or `asset_returns`) and `weights` are provided, historical
+    daily returns estimate mu/sigma unless overridden by annual_return/volatility.
+    Otherwise supply annual_return and annual_volatility directly.
+    """
+    if returns is not None:
+        asset_returns = returns
+    start_val = starting_value if starting_value is not None else initial_value
+    if start_val is None:
+        raise ValueError("starting_value or initial_value is required.")
+
+    ann_ret = annual_return if annual_return is not None else expected_annual_return
+    ann_vol = annual_volatility if annual_volatility is not None else expected_annual_volatility
+
     rng = np.random.default_rng(seed)
-    port_rets = portfolio_daily_returns(asset_returns, weights)
-    if expected_annual_return is not None:
-        mu = (1 + expected_annual_return) ** (1 / TRADING_DAYS) - 1
+    if asset_returns is not None and weights is not None:
+        port_rets = portfolio_daily_returns(asset_returns, weights)
+        hist_ann_ret = float(port_rets.mean() * TRADING_DAYS)
+        hist_ann_vol = float(port_rets.std() * np.sqrt(TRADING_DAYS))
+        use_ann_ret = ann_ret if ann_ret is not None else hist_ann_ret
+        use_ann_vol = ann_vol if ann_vol is not None else hist_ann_vol
+    elif ann_ret is not None and ann_vol is not None:
+        use_ann_ret = ann_ret
+        use_ann_vol = ann_vol
     else:
-        mu = port_rets.mean()
-    if expected_annual_volatility is not None:
-        sigma = expected_annual_volatility / np.sqrt(TRADING_DAYS)
-    else:
-        sigma = port_rets.std()
+        raise ValueError(
+            "Provide returns+weights for historical estimation, or annual_return and annual_volatility."
+        )
+
+    mu = (1 + use_ann_ret) ** (1 / TRADING_DAYS) - 1
+    sigma = use_ann_vol / np.sqrt(TRADING_DAYS)
     days = years * TRADING_DAYS
 
     paths = np.zeros((simulations, days + 1))
-    paths[:, 0] = initial_value
+    paths[:, 0] = start_val
     shocks = rng.normal(mu, sigma, size=(simulations, days))
     for t in range(1, days + 1):
         paths[:, t] = paths[:, t - 1] * (1 + shocks[:, t - 1])
@@ -559,13 +586,13 @@ def monte_carlo_simulation(
     percentiles = [5, 25, 50, 75, 95]
     summary: dict[str, float] = {f"p{p}": float(np.percentile(ending, p)) for p in percentiles}
     summary["mean"] = float(ending.mean())
-    summary["prob_loss"] = float((ending < initial_value).mean())
+    summary["prob_loss"] = float((ending < start_val).mean())
     summary["prob_below_start"] = summary["prob_loss"]
-    summary["prob_double"] = float((ending >= initial_value * 2).mean())
-    goal = target_value if target_value is not None and target_value > 0 else initial_value
+    summary["prob_double"] = float((ending >= start_val * 2).mean())
+    goal = target_value if target_value is not None and target_value > 0 else start_val
     summary["target_value"] = float(goal)
     summary["prob_reach_target"] = float((ending >= goal).mean())
-    summary["downside_std"] = float(np.std(np.minimum(0, ending / initial_value - 1)))
+    summary["downside_std"] = float(np.std(np.minimum(0, ending / start_val - 1)))
     bad_tail = ending[ending <= summary["p5"]]
     summary["expected_shortfall"] = float(bad_tail.mean()) if len(bad_tail) else float(summary["p5"])
     summary["ci_low"] = summary["p5"]
