@@ -18,7 +18,7 @@ import portfolio_core as core
 # ── Page config & styling ─────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Portfolio Analyzer",
+    page_title="Daniel Cohen Investment Portfolio Analyzer",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -27,35 +27,152 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2.5rem; max-width: 1280px; }
+    :root {
+        --dc-bg: #0b1220;
+        --dc-surface: #141c2b;
+        --dc-surface-2: #1a2436;
+        --dc-border: #2d3f57;
+        --dc-text: #e8eef7;
+        --dc-muted: #94a3b8;
+        --dc-accent: #4da3ff;
+        --dc-gold: #f5a623;
+    }
+    .block-container {
+        padding-top: 1.25rem;
+        padding-bottom: 2.75rem;
+        max-width: 1320px;
+    }
+    .hero-header {
+        background: linear-gradient(135deg, #0c1524 0%, #152238 45%, #1a2d4a 100%);
+        border: 1px solid var(--dc-border);
+        border-radius: 16px;
+        padding: 1.35rem 1.55rem 1.2rem;
+        margin: 0 0 1.35rem 0;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+        position: relative;
+        overflow: hidden;
+    }
+    .hero-header::before {
+        content: "";
+        position: absolute;
+        top: -40%;
+        right: -8%;
+        width: 280px;
+        height: 280px;
+        background: radial-gradient(circle, rgba(77, 163, 255, 0.18) 0%, rgba(77, 163, 255, 0) 70%);
+        pointer-events: none;
+    }
+    .hero-inner { position: relative; z-index: 1; }
+    .hero-eyebrow {
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--dc-accent);
+        font-weight: 600;
+        margin: 0 0 0.45rem 0;
+    }
+    .hero-title {
+        font-size: clamp(1.45rem, 2.6vw, 2.05rem);
+        font-weight: 700;
+        color: var(--dc-text);
+        margin: 0;
+        letter-spacing: -0.03em;
+        line-height: 1.15;
+    }
+    .hero-subtitle {
+        color: var(--dc-muted);
+        font-size: 0.95rem;
+        margin: 0.55rem 0 0.85rem 0;
+        line-height: 1.5;
+        max-width: 920px;
+    }
+    .hero-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }
+    .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        background: rgba(20, 28, 43, 0.85);
+        border: 1px solid #334155;
+        color: #cbd5e1;
+        font-size: 0.74rem;
+        padding: 0.28rem 0.62rem;
+        border-radius: 999px;
+        white-space: nowrap;
+    }
+    .section-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #f1f5f9;
+        margin: 0 0 0.35rem 0;
+        letter-spacing: -0.01em;
+    }
+    .section-lead {
+        color: var(--dc-muted);
+        font-size: 0.88rem;
+        margin: 0 0 0.7rem 0;
+        line-height: 1.45;
+    }
+    .section-divider {
+        border-top: 1px solid var(--dc-border);
+        margin: 0 0 1.15rem 0;
+    }
+    .section-spacer { margin-top: 0.35rem; }
     [data-testid="stMetric"] {
         background: linear-gradient(160deg, #1e2a3a 0%, #141c28 100%);
         border: 1px solid #334155;
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 0.75rem 0.9rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.18);
     }
     [data-testid="stMetric"] label {
-        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
         color: #94a3b8 !important;
     }
     [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 1.35rem; font-weight: 600; color: #f1f5f9;
+        font-size: 1.35rem;
+        font-weight: 600;
+        color: #f1f5f9;
     }
-    .dashboard-title {
-        font-size: 1.65rem; font-weight: 700; color: #f8fafc;
-        margin: 0 0 0.1rem 0; letter-spacing: -0.02em;
-    }
-    .dashboard-sub { color: #64748b; font-size: 0.9rem; margin-bottom: 1rem; }
-    .section-lead { color: #94a3b8; font-size: 0.88rem; margin-bottom: 0.65rem; line-height: 1.45; }
     .insight-card {
-        background: #1a2332; border-left: 3px solid #4da3ff;
-        padding: 0.65rem 0.9rem; margin-bottom: 0.5rem;
-        border-radius: 0 6px 6px 0; font-size: 0.9rem; color: #cbd5e1;
+        background: linear-gradient(90deg, #1a2332 0%, #172030 100%);
+        border-left: 3px solid var(--dc-accent);
+        padding: 0.65rem 0.9rem;
+        margin-bottom: 0.5rem;
+        border-radius: 0 8px 8px 0;
+        font-size: 0.9rem;
+        color: #cbd5e1;
     }
-    .finance-divider { border-top: 1px solid #334155; margin: 1.25rem 0; }
+    div[data-baseweb="tab-list"] {
+        gap: 0.35rem;
+        border-bottom: 1px solid var(--dc-border);
+        margin-bottom: 0.35rem;
+    }
+    button[data-baseweb="tab"] {
+        background-color: transparent;
+        border-radius: 8px 8px 0 0;
+        color: #94a3b8;
+        font-weight: 500;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background: linear-gradient(180deg, #1a2840 0%, #152238 100%);
+        color: #f8fafc;
+        border: 1px solid var(--dc-border);
+        border-bottom-color: transparent;
+    }
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
+        border: 1px solid #2a3a52;
+        border-radius: 10px;
+        overflow: hidden;
+    }
     @media (max-width: 768px) {
         .block-container { padding-left: 1rem; padding-right: 1rem; }
+        .hero-header { padding: 1rem 1rem 0.95rem; }
         [data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.1rem; }
     }
     </style>
@@ -83,11 +200,36 @@ def _money(x: float) -> str:
     return f"${x:,.0f}"
 
 
+def render_branded_header():
+    st.markdown(
+        """
+        <div class="hero-header">
+          <div class="hero-inner">
+            <p class="hero-eyebrow">📈 Institutional Portfolio Analytics</p>
+            <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
+            <p class="hero-subtitle">
+              Quantitative Portfolio Analytics • Risk Analysis • Monte Carlo Simulation • Optimization
+            </p>
+            <div class="hero-badges">
+              <span class="hero-badge">📊 Real market data</span>
+              <span class="hero-badge">⚖️ Risk metrics</span>
+              <span class="hero-badge">🎲 Monte Carlo</span>
+              <span class="hero-badge">📐 Efficient frontier</span>
+              <span class="hero-badge">🌐 Macro stress testing</span>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def section_header(title: str, lead: str = ""):
-    st.markdown(f"#### {title}")
+    st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
+    st.markdown(f'<h4 class="section-title">{title}</h4>', unsafe_allow_html=True)
     if lead:
         st.markdown(f'<p class="section-lead">{lead}</p>', unsafe_allow_html=True)
-    st.markdown('<div class="finance-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -324,11 +466,7 @@ def export_buttons(
 
 # ── Header ──────────────────────────────────────────────────────────────────────
 
-st.markdown('<p class="dashboard-title">Investment Portfolio Analyzer</p>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="dashboard-sub">Professional portfolio analytics · Real market data · Risk & optimization</p>',
-    unsafe_allow_html=True,
-)
+render_branded_header()
 
 settings = render_sidebar()
 init_holdings()
