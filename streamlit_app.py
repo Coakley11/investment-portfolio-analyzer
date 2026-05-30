@@ -148,6 +148,46 @@ st.markdown(
         font-size: 0.9rem;
         color: #cbd5e1;
     }
+    .health-card {
+        border-radius: 12px;
+        padding: 1rem 1.15rem;
+        margin-bottom: 0.75rem;
+        border: 1px solid #334155;
+    }
+    .health-card-green {
+        background: linear-gradient(135deg, rgba(46, 204, 113, 0.12) 0%, rgba(20, 28, 43, 0.95) 100%);
+        border-left: 4px solid #2ecc71;
+    }
+    .health-card-yellow {
+        background: linear-gradient(135deg, rgba(245, 166, 35, 0.12) 0%, rgba(20, 28, 43, 0.95) 100%);
+        border-left: 4px solid #f5a623;
+    }
+    .health-card-orange {
+        background: linear-gradient(135deg, rgba(230, 126, 34, 0.12) 0%, rgba(20, 28, 43, 0.95) 100%);
+        border-left: 4px solid #e67e22;
+    }
+    .health-card-red {
+        background: linear-gradient(135deg, rgba(231, 76, 60, 0.12) 0%, rgba(20, 28, 43, 0.95) 100%);
+        border-left: 4px solid #e74c3c;
+    }
+    .health-working {
+        background: linear-gradient(90deg, rgba(46, 204, 113, 0.08) 0%, #141c2b 100%);
+        border-left: 3px solid #2ecc71;
+        padding: 0.55rem 0.85rem;
+        margin-bottom: 0.45rem;
+        border-radius: 0 8px 8px 0;
+        font-size: 0.88rem;
+        color: #cbd5e1;
+    }
+    .health-not {
+        background: linear-gradient(90deg, rgba(231, 76, 60, 0.08) 0%, #141c2b 100%);
+        border-left: 3px solid #e74c3c;
+        padding: 0.55rem 0.85rem;
+        margin-bottom: 0.45rem;
+        border-radius: 0 8px 8px 0;
+        font-size: 0.88rem;
+        color: #cbd5e1;
+    }
     div[data-baseweb="tab-list"] {
         gap: 0.35rem;
         border-bottom: 1px solid var(--dc-border);
@@ -318,6 +358,31 @@ def render_insights(insights: list[str]):
         st.markdown(f'<div class="insight-card">💡 {plain}</div>', unsafe_allow_html=True)
 
 
+def render_health_score_card(health: core.PortfolioHealthResult):
+    color_class = {
+        "green": "health-card-green",
+        "yellow": "health-card-yellow",
+        "orange": "health-card-orange",
+        "red": "health-card-red",
+    }.get(health.score_color, "health-card-yellow")
+    st.markdown(
+        f"""
+        <div class="health-card {color_class}">
+            <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;">
+                Portfolio Health Score
+            </div>
+            <div style="font-size:2.4rem;font-weight:700;color:#f1f5f9;line-height:1.1;">
+                {health.score:.0f}<span style="font-size:1rem;color:#94a3b8;"> / 100</span>
+            </div>
+            <div style="font-size:1rem;font-weight:600;color:#e2e8f0;margin-top:0.25rem;">
+                {health.score_label}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def metrics_row_primary(m: core.ExtendedPortfolioMetrics, initial: float):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Annual Return", _pct(m.annual_return))
@@ -477,6 +542,7 @@ tabs = st.tabs(
         "Overview",
         "Portfolio Inputs",
         "Risk Analysis",
+        "Portfolio Health",
         "Explain This Portfolio",
         "Forward-Looking Macro Analysis",
         "Monte Carlo",
@@ -484,7 +550,7 @@ tabs = st.tabs(
         "Efficient Frontier",
     ]
 )
-tab_overview, tab_inputs, tab_risk, tab_explain, tab_forward, tab_mc, tab_opt, tab_frontier = tabs
+tab_overview, tab_inputs, tab_risk, tab_health, tab_explain, tab_forward, tab_mc, tab_opt, tab_frontier = tabs
 
 with tab_inputs:
     section_header("Portfolio Inputs", "Tickers and target weights. Normalized to 100% if needed.")
@@ -800,6 +866,209 @@ with tab_risk:
                 st.dataframe(md, use_container_width=True, hide_index=True)
             else:
                 st.caption("Macro regime analysis runs only when requested.")
+
+# ── Portfolio Health ──────────────────────────────────────────────────────────
+
+with tab_health:
+    section_header(
+        "Portfolio Health Monitor",
+        "Model-based evaluation of performance, risk, drift, and macro fit. For educational purposes only — not financial advice.",
+    )
+    if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
+        st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
+        st.session_state.run_health = True
+
+    h1, h2, h3 = st.columns(3)
+    with h1:
+        health_rate = st.selectbox(
+            "Interest Rate Environment",
+            ["Falling Rates", "Stable Rates", "Rising Rates", "High Rate Environment"],
+            index=1,
+            key="health_rate_env",
+        )
+        health_recession = st.slider("Recession Probability (%)", 0, 100, 25, 5, key="health_recession")
+    with h2:
+        health_inflation = st.selectbox(
+            "Inflation Assumption",
+            ["Low Inflation", "Moderate Inflation", "High Inflation", "Deflation"],
+            index=1,
+            key="health_inflation",
+        )
+        health_valuation = st.selectbox(
+            "Valuation Environment",
+            ["Cheap", "Fair Value", "Expensive", "Bubble-like"],
+            index=1,
+            key="health_valuation",
+        )
+    with h3:
+        health_regime = st.selectbox(
+            "Economic Regime",
+            ["Expansion", "Slow Growth", "Recession", "Recovery", "Stagflation", "AI / Tech Boom", "Credit Crisis"],
+            index=0,
+            key="health_regime",
+        )
+        health_objective = st.selectbox(
+            "Portfolio Objective (alignment check)",
+            [
+                "balanced growth",
+                "capital preservation",
+                "aggressive growth",
+                "income",
+                "retirement",
+                "short-term cash management",
+            ],
+            index=0,
+            key="health_objective",
+        )
+
+    hc1, hc2 = st.columns(2)
+    with hc1:
+        health_bond_min = st.slider("Minimum bond/cash constraint (%)", 0, 80, 0, 5, key="health_bond_min")
+    with hc2:
+        health_run_optimizer = st.checkbox(
+            "Include optimizer allocation in drift analysis",
+            value=not (settings["mode"] == "Fast mode"),
+            key="health_run_optimizer",
+        )
+
+    if not st.session_state.get("run_health", False):
+        st.info("Click **Refresh Portfolio Health** to run the health analysis with your current settings.")
+    else:
+        health_assumptions = core.ForwardMacroAssumptions(
+            rate_environment=health_rate,
+            inflation=health_inflation,
+            recession_probability=health_recession / 100.0,
+            valuation=health_valuation,
+            economic_regime=health_regime,
+        )
+        opt_weights = None
+        if health_run_optimizer:
+            with st.spinner("Running optimizer for drift comparison…"):
+                opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
+                opt_weights = opt_pack["max_sharpe"].weights
+
+        rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
+        with st.spinner("Evaluating portfolio health…"):
+            health = core.evaluate_portfolio_health(
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                metrics=metrics,
+                asset_returns=returns,
+                corr=base_risk_pack["corr"],
+                risk_contrib_df=base_risk_pack["risk_contrib"],
+                assumptions=health_assumptions,
+                objective=health_objective,
+                risk_free_rate=settings["risk_free"],
+                initial_value=settings["initial_value"],
+                benchmark_returns=bench_rets,
+                optimizer_weights=opt_weights,
+                recommended_type_mix=rec.allocation,
+                bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
+            )
+
+        st.markdown(
+            f'<div class="insight-card">📋 <b>Status:</b> {health.status_message}</div>',
+            unsafe_allow_html=True,
+        )
+
+        section_header("Portfolio Health Score", "Composite score from return, risk, diversification, objective, and macro fit.")
+        sc1, sc2 = st.columns([1, 2])
+        with sc1:
+            render_health_score_card(health)
+        with sc2:
+            breakdown_df = pd.DataFrame(
+                {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
+            )
+            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+
+        section_header("What's Working / What's Not", "Model-identified positives and areas to monitor.")
+        wn1, wn2 = st.columns(2)
+        with wn1:
+            st.markdown("**What's Working**")
+            for item in health.whats_working:
+                st.markdown(f'<div class="health-working">✓ {item}</div>', unsafe_allow_html=True)
+        with wn2:
+            st.markdown("**What's Not Working**")
+            for item in health.whats_not_working:
+                st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
+
+        section_header("Allocation Drift / Rebalancing Suggestions", "Compare current weights to objective, optimizer, and recommended mixes.")
+        st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
+        drift_notes = health.rebalance_df[health.rebalance_df["Model Note"] != "Within tolerance"]["Model Note"].tolist()
+        if drift_notes:
+            for note in drift_notes[:6]:
+                st.markdown(f"- *{note}* (for educational purposes)")
+        else:
+            st.caption("No material drift detected vs objective/optimizer in the model.")
+
+        section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
+        for note in health.macro_fit:
+            st.markdown(f"- {note}")
+        st.markdown("**Model-based considerations**")
+        for note in health.recommendations:
+            st.markdown(f"- {note}")
+
+        section_header("Visual Portfolio Diagnostics", "Return/risk contributions, allocation comparison, macro sensitivity, and benchmark view.")
+        d1, d2 = st.columns(2)
+        with d1:
+            st.plotly_chart(
+                charts.contribution_bar_chart(
+                    health.return_contrib_df,
+                    "Return Contribution (%)",
+                    "Contribution to Return by Asset",
+                ),
+                use_container_width=True,
+            )
+        with d2:
+            st.plotly_chart(
+                charts.contribution_bar_chart(
+                    health.risk_contrib_df,
+                    "Risk Contribution (%)",
+                    "Contribution to Risk by Asset",
+                ),
+                use_container_width=True,
+            )
+        d3, d4 = st.columns(2)
+        with d3:
+            st.plotly_chart(
+                charts.contribution_bar_chart(
+                    health.drawdown_contrib_df,
+                    "Drawdown Contribution (%)",
+                    "Drawdown Contribution by Asset",
+                ),
+                use_container_width=True,
+            )
+        with d4:
+            st.plotly_chart(
+                charts.allocation_comparison_chart(health.allocation_compare_df),
+                use_container_width=True,
+            )
+        d5, d6 = st.columns(2)
+        with d5:
+            st.plotly_chart(
+                charts.macro_sensitivity_heatmap(health.macro_heatmap_df),
+                use_container_width=True,
+            )
+        with d6:
+            try:
+                cmp_prices = load_comparison_prices(settings["start"], settings["end"])
+                cmp_rets = compute_daily_returns(cmp_prices)
+                port_rets = base_risk_pack["port_rets"]
+                mini = pd.DataFrame({"Date": port_rets.index})
+                mini["Portfolio"] = settings["initial_value"] * (1 + port_rets).cumprod()
+                for bc in cmp_rets.columns:
+                    if bc.upper() in ("SPY", "QQQ"):
+                        mini[bc.upper()] = settings["initial_value"] * (1 + cmp_rets[bc]).cumprod()
+                st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
+            except Exception:
+                mini = pd.DataFrame({"Date": growth.index, "Portfolio": growth.values})
+                st.plotly_chart(charts.benchmark_mini_chart(mini, title="Portfolio Growth"), use_container_width=True)
+
+        st.caption(
+            "Portfolio Health outputs are rule-based and model-driven for educational purposes. "
+            "They do not constitute investment advice. Refresh after changing tickers, weights, or macro settings."
+        )
 
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
 

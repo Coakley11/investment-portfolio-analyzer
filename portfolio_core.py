@@ -176,6 +176,35 @@ class ForwardProjectionResult:
     adjusted_cov: np.ndarray
 
 
+@dataclass(frozen=True)
+class PortfolioHealthResult:
+    score: float
+    score_label: str
+    score_color: str
+    status_message: str
+    whats_working: list[str]
+    whats_not_working: list[str]
+    recommendations: list[str]
+    macro_fit: list[str]
+    rebalance_df: pd.DataFrame
+    return_contrib_df: pd.DataFrame
+    risk_contrib_df: pd.DataFrame
+    drawdown_contrib_df: pd.DataFrame
+    allocation_compare_df: pd.DataFrame
+    macro_heatmap_df: pd.DataFrame
+    score_breakdown: dict[str, float]
+
+
+OBJECTIVE_ALLOCATIONS: dict[str, dict[str, float]] = {
+    "capital preservation": {"equity": 0.20, "bonds": 0.45, "tbills": 0.35},
+    "balanced growth": {"equity": 0.60, "bonds": 0.30, "tbills": 0.10},
+    "aggressive growth": {"equity": 0.85, "bonds": 0.10, "tbills": 0.05},
+    "income": {"equity": 0.40, "bonds": 0.40, "tbills": 0.20},
+    "retirement": {"equity": 0.45, "bonds": 0.40, "tbills": 0.15},
+    "short-term cash management": {"equity": 0.10, "bonds": 0.20, "tbills": 0.70},
+}
+
+
 def normalize_weights(weights: Iterable[float]) -> np.ndarray:
     w = np.asarray(list(weights), dtype=float)
     if w.sum() <= 0:
@@ -1452,4 +1481,482 @@ def compute_forward_projection_with_profile(
         inflation_commentary=infl_notes,
         adjusted_mean_returns=adjusted_mean,
         adjusted_cov=adjusted_cov,
+    )
+
+
+def _health_score_label(score: float) -> tuple[str, str]:
+    if score >= 80:
+        return "Healthy / On Track", "green"
+    if score >= 60:
+        return "Watch Carefully", "yellow"
+    if score >= 40:
+        return "Needs Review", "orange"
+    return "High Risk / Rebalance Consideration", "red"
+
+
+def _macro_sensitivity_by_type() -> dict[str, dict[str, float]]:
+    return {
+        "Equity": {
+            "Falling Rates": 0.6,
+            "Rising Rates": -0.4,
+            "High Inflation": -0.3,
+            "Recession": -0.8,
+            "Credit Crisis": -0.9,
+            "AI / Tech Boom": 0.9,
+        },
+        "Bonds": {
+            "Falling Rates": 0.7,
+            "Rising Rates": -0.8,
+            "High Inflation": -0.7,
+            "Recession": 0.2,
+            "Credit Crisis": -0.3,
+            "AI / Tech Boom": -0.1,
+        },
+        "T-Bills": {
+            "Falling Rates": -0.2,
+            "Rising Rates": 0.5,
+            "High Inflation": 0.3,
+            "Recession": 0.6,
+            "Credit Crisis": 0.8,
+            "AI / Tech Boom": 0.0,
+        },
+        "REIT": {
+            "Falling Rates": 0.5,
+            "Rising Rates": -0.5,
+            "High Inflation": 0.2,
+            "Recession": -0.6,
+            "Credit Crisis": -0.7,
+            "AI / Tech Boom": 0.1,
+        },
+        "Dividend ETF": {
+            "Falling Rates": 0.3,
+            "Rising Rates": -0.2,
+            "High Inflation": -0.4,
+            "Recession": -0.3,
+            "Credit Crisis": -0.4,
+            "AI / Tech Boom": 0.2,
+        },
+        "Other": {
+            "Falling Rates": 0.0,
+            "Rising Rates": 0.0,
+            "High Inflation": 0.0,
+            "Recession": -0.2,
+            "Credit Crisis": -0.3,
+            "AI / Tech Boom": 0.0,
+        },
+    }
+
+
+def _return_contribution_df(
+    asset_returns: pd.DataFrame,
+    weights: np.ndarray,
+) -> pd.DataFrame:
+    w = normalize_weights(weights)
+    ann = asset_returns.mean() * TRADING_DAYS
+    contrib = w * ann.values
+    total = float(contrib.sum())
+    pct = contrib / total if abs(total) > 1e-9 else contrib
+    return pd.DataFrame(
+        {
+            "Ticker": asset_returns.columns[: len(w)],
+            "Weight": w,
+            "Annual Return": ann.values[: len(w)],
+            "Return Contribution": contrib,
+            "Return Contribution (%)": pct * 100,
+        }
+    ).sort_values("Return Contribution", ascending=False)
+
+
+def _drawdown_contribution_df(
+    asset_returns: pd.DataFrame,
+    weights: np.ndarray,
+) -> pd.DataFrame:
+    w = normalize_weights(weights)
+    dds = []
+    for col in asset_returns.columns[: len(w)]:
+        dds.append(maximum_drawdown(asset_returns[col]))
+    dds_arr = np.asarray(dds)
+    contrib = w * np.abs(dds_arr)
+    total = float(contrib.sum()) if contrib.sum() > 0 else 1.0
+    return pd.DataFrame(
+        {
+            "Ticker": asset_returns.columns[: len(w)],
+            "Weight": w,
+            "Max Drawdown": dds_arr,
+            "Drawdown Contribution (%)": contrib / total * 100,
+        }
+    ).sort_values("Drawdown Contribution (%)", ascending=False)
+
+
+def _macro_heatmap_df(asset_types: list[str]) -> pd.DataFrame:
+    sens = _macro_sensitivity_by_type()
+    scenarios = ["Falling Rates", "Rising Rates", "High Inflation", "Recession", "Credit Crisis", "AI / Tech Boom"]
+    unique_types = sorted(set(asset_types))
+    rows = []
+    for at in unique_types:
+        row = {"Asset Type": at}
+        for sc in scenarios:
+            row[sc] = sens.get(at, sens["Other"]).get(sc, 0.0)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _objective_type_targets(objective: str) -> dict[str, float]:
+    key = objective.strip().lower()
+    return OBJECTIVE_ALLOCATIONS.get(key, OBJECTIVE_ALLOCATIONS["balanced growth"])
+
+
+def evaluate_portfolio_health(
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    metrics: ExtendedPortfolioMetrics,
+    asset_returns: pd.DataFrame,
+    corr: pd.DataFrame,
+    risk_contrib_df: pd.DataFrame,
+    assumptions: ForwardMacroAssumptions,
+    objective: str,
+    risk_free_rate: float,
+    initial_value: float,
+    benchmark_returns: pd.Series | None = None,
+    optimizer_weights: np.ndarray | None = None,
+    recommended_type_mix: dict[str, float] | None = None,
+    bond_min_pct: float | None = None,
+) -> PortfolioHealthResult:
+    w = normalize_weights(weights)
+    profile = allocation_profile(tickers, w, asset_types)
+    ret_contrib = _return_contribution_df(asset_returns, w)
+    dd_contrib = _drawdown_contribution_df(asset_returns, w)
+    risk_df = risk_contrib_df.copy()
+    macro_heatmap = _macro_heatmap_df(asset_types)
+
+    bench_ret = 0.0
+    if benchmark_returns is not None and len(benchmark_returns.dropna()) > 5:
+        bench_ret = annualized_return(benchmark_returns.dropna())
+
+    # ── Score components (0–100) ──
+    ret_gap = metrics.annual_return - bench_ret
+    if ret_gap >= 0.02:
+        s_return = 15.0
+    elif ret_gap >= 0:
+        s_return = 12.0
+    elif ret_gap >= -0.02:
+        s_return = 8.0
+    elif ret_gap >= -0.05:
+        s_return = 4.0
+    else:
+        s_return = 0.0
+
+    vol = metrics.volatility
+    if vol <= 0.12:
+        s_vol = 12.0
+    elif vol <= 0.18:
+        s_vol = 10.0
+    elif vol <= 0.25:
+        s_vol = 6.0
+    else:
+        s_vol = 2.0
+
+    s_sharpe = float(np.clip(metrics.sharpe_ratio * 10, 0, 15))
+    dd = metrics.max_drawdown
+    if dd >= -0.10:
+        s_dd = 12.0
+    elif dd >= -0.20:
+        s_dd = 8.0
+    elif dd >= -0.30:
+        s_dd = 4.0
+    else:
+        s_dd = 0.0
+
+    off_diag = corr.values.copy()
+    np.fill_diagonal(off_diag, np.nan)
+    max_corr = float(np.nanmax(np.abs(off_diag))) if off_diag.size else 0.0
+    if max_corr < 0.50:
+        s_div = 12.0
+    elif max_corr < 0.70:
+        s_div = 8.0
+    elif max_corr < 0.85:
+        s_div = 4.0
+    else:
+        s_div = 0.0
+
+    max_w = float(profile["concentration"])
+    if max_w <= 0.25:
+        s_conc = 12.0
+    elif max_w <= 0.35:
+        s_conc = 8.0
+    elif max_w <= 0.45:
+        s_conc = 4.0
+    else:
+        s_conc = 0.0
+
+    obj_targets = _objective_type_targets(objective)
+    eq_drift = abs(float(profile["equity"]) - obj_targets["equity"])
+    bond_drift = abs(float(profile["bonds"]) - obj_targets["bonds"])
+    tbill_drift = abs(float(profile["tbills"]) - obj_targets["tbills"])
+    avg_drift = (eq_drift + bond_drift + tbill_drift) / 3
+    s_obj = float(np.clip(12 - avg_drift * 30, 0, 12))
+
+    s_macro = 5.0
+    recession_prob = assumptions.recession_probability
+    if assumptions.rate_environment == "Falling Rates" and float(profile["equity"]) >= 0.45:
+        s_macro += 1.5
+    if assumptions.rate_environment in ("Rising Rates", "High Rate Environment") and float(profile["tbills"]) >= 0.10:
+        s_macro += 1.5
+    if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) <= 0.15:
+        s_macro += 1.0
+    elif assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.25:
+        s_macro -= 1.5
+    if recession_prob >= 0.5 and float(profile["equity"]) <= 0.55:
+        s_macro += 1.0
+    elif recession_prob >= 0.5 and float(profile["equity"]) > 0.70:
+        s_macro -= 2.0
+    if assumptions.economic_regime == "AI / Tech Boom" and float(profile["tech"]) >= 0.15:
+        s_macro += 1.0
+    if assumptions.economic_regime == "Credit Crisis" and float(profile["tbills"]) >= 0.15:
+        s_macro += 1.0
+    s_macro = float(np.clip(s_macro, 0, 10))
+
+    breakdown = {
+        "Return vs Benchmark": s_return,
+        "Volatility Level": s_vol,
+        "Sharpe Ratio": s_sharpe,
+        "Max Drawdown": s_dd,
+        "Diversification": s_div,
+        "Concentration Risk": s_conc,
+        "Objective Alignment": s_obj,
+        "Macro Regime Fit": s_macro,
+    }
+    score = float(np.clip(sum(breakdown.values()), 0, 100))
+    score_label, score_color = _health_score_label(score)
+
+    # ── What's working / not ──
+    whats_working: list[str] = []
+    whats_not: list[str] = []
+
+    for _, row in ret_contrib.head(3).iterrows():
+        if row["Return Contribution"] > 0:
+            whats_working.append(
+                f"{row['Ticker']} contributed positively to modeled return ({row['Return Contribution'] * 100:.2f}%)."
+            )
+
+    stabilizers = [
+        t for t in tickers
+        if asset_types[tickers.index(t)] in ("T-Bills", "Bonds")
+        and w[tickers.index(t)] >= 0.05
+    ]
+    for t in stabilizers[:3]:
+        whats_working.append(f"{t} may act as a lower-volatility stabilizer in the model.")
+
+    if ret_gap > 0:
+        whats_working.append("Portfolio return is above the SPY benchmark over the selected period (model-based).")
+    if max_corr < 0.65:
+        whats_working.append("Holdings show moderate correlation — diversification may be helping.")
+    if metrics.beta_spy < 0.85 and float(profile["bonds"] + profile["tbills"]) >= 0.20:
+        whats_working.append("Lower market sensitivity than SPY may be supported by bond/T-bill exposure.")
+
+    for _, row in ret_contrib.iterrows():
+        if row["Return Contribution"] < -0.001:
+            whats_not.append(f"{row['Ticker']} has a negative return contribution in the analysis window.")
+
+    for _, row in dd_contrib.head(2).iterrows():
+        if row["Max Drawdown"] < -0.15:
+            whats_not.append(
+                f"{row['Ticker']} experienced a deep drawdown ({row['Max Drawdown'] * 100:.1f}%) — a potential risk contributor."
+            )
+
+    if max_w > 0.35:
+        whats_not.append(
+            f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% — concentration may be worth reviewing."
+        )
+    if max_corr >= 0.80:
+        whats_not.append("Some holdings appear highly correlated — diversification benefits may be limited.")
+
+    if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) >= 0.15:
+        whats_not.append("Long-duration bond exposure may be pressured under high-inflation assumptions.")
+    if recession_prob >= 0.45 and float(profile["equity"]) >= 0.65:
+        whats_not.append("Elevated recession probability with high equity weight may increase stress-test sensitivity.")
+
+    if not whats_working:
+        whats_working.append("No clear positive contributors identified — consider reviewing holdings and weights.")
+    if not whats_not:
+        whats_not.append("No major model flags detected — continue monitoring drift and macro assumptions.")
+
+    # ── Recommendations (rule-based, educational) ──
+    recommendations: list[str] = []
+    obj_key = objective.strip().lower()
+
+    if recession_prob > 0.50 and float(profile["equity"]) > 0.70:
+        recommendations.append(
+            "Based on the model, recession probability above 50% with equity above 70% may be worth reviewing for equity exposure."
+        )
+    if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.20:
+        recommendations.append(
+            "High inflation assumptions combined with long-duration bonds may warrant reviewing bond sensitivity (for educational purposes)."
+        )
+    if metrics.sharpe_ratio < 0.4:
+        recommendations.append(
+            "Sharpe ratio below 0.4 suggests risk-adjusted return may be weak — consider reviewing the risk/return mix."
+        )
+    if metrics.max_drawdown < -0.25:
+        recommendations.append(
+            "Max drawdown worse than -25% flags drawdown risk in the historical window — may be worth reviewing defensive buffers."
+        )
+    if max_w > 0.35:
+        recommendations.append(
+            f"Largest holding exceeds 35% ({profile['top_ticker']}) — concentration risk may deserve attention."
+        )
+    if obj_key == "short-term cash management" and float(profile["equity"]) > 0.40:
+        recommendations.append(
+            "For a short-term cash objective, equity above 40% may not align with the selected objective in this model."
+        )
+    if metrics.sortino_ratio < 0.35:
+        recommendations.append("Sortino ratio is low — downside volatility may be elevated relative to return.")
+    if metrics.beta_spy > 1.15:
+        recommendations.append("Beta above 1.15 vs SPY suggests higher market sensitivity than the benchmark.")
+    if bond_min_pct is not None and (float(profile["bonds"]) + float(profile["tbills"])) * 100 < bond_min_pct:
+        recommendations.append(
+            f"Bond/cash allocation is below the selected minimum constraint ({bond_min_pct:.0f}%) — may be worth reviewing."
+        )
+    if not recommendations:
+        recommendations.append(
+            "No urgent model flags — continue monitoring allocation drift and macro assumptions."
+        )
+
+    # ── Macro fit commentary ──
+    macro_fit: list[str] = []
+    if assumptions.rate_environment == "Falling Rates":
+        macro_fit.append(
+            "This portfolio may be relatively well-positioned for falling rates because growth exposure could benefit in the model."
+        )
+    elif assumptions.rate_environment in ("Rising Rates", "High Rate Environment"):
+        macro_fit.append(
+            "Rising or high-rate environments may favor T-bill/cash exposure — review bond duration accordingly."
+        )
+    if assumptions.inflation == "High Inflation":
+        macro_fit.append("High inflation may pressure bond holdings, especially long-duration positions.")
+    if recession_prob >= 0.50:
+        macro_fit.append("High recession probability suggests reviewing equity concentration and defensive buffers.")
+    if float(profile["tbills"]) >= 0.10:
+        macro_fit.append("T-bill exposure may help during high-rate or uncertain environments in stress scenarios.")
+    if float(profile["tech"]) >= 0.20:
+        if assumptions.economic_regime == "AI / Tech Boom":
+            macro_fit.append("A tech-heavy portfolio may benefit in an AI/Tech Boom regime in this framework.")
+        elif assumptions.economic_regime == "Credit Crisis":
+            macro_fit.append("A tech-heavy portfolio may suffer more in credit stress under modeled assumptions.")
+    if assumptions.valuation in ("Expensive", "Bubble-like"):
+        macro_fit.append("An expensive valuation environment may limit forward upside in the model.")
+
+    # ── Rebalance / drift table ──
+    obj_eq, obj_bond, obj_tb = obj_targets["equity"], obj_targets["bonds"], obj_targets["tbills"]
+    type_to_obj = {
+        "Equity": obj_eq,
+        "REIT": obj_eq * 0.5,
+        "Dividend ETF": obj_eq * 0.5,
+        "Bonds": obj_bond,
+        "T-Bills": obj_tb,
+        "Other": 0.05,
+    }
+    obj_w = np.array([type_to_obj.get(at, 0.05) for at in asset_types], dtype=float)
+    obj_w = normalize_weights(obj_w)
+
+    opt_w = optimizer_weights if optimizer_weights is not None else w.copy()
+    rec_mix = recommended_type_mix or obj_targets
+    rec_w = np.zeros(len(tickers))
+    for i, at in enumerate(asset_types):
+        if at in ("Equity", "REIT", "Dividend ETF"):
+            rec_w[i] = rec_mix.get("equity", 0.6) / max(
+                sum(1 for a in asset_types if a in ("Equity", "REIT", "Dividend ETF")), 1
+            )
+        elif at == "Bonds":
+            rec_w[i] = rec_mix.get("bonds", 0.3) / max(sum(1 for a in asset_types if a == "Bonds"), 1)
+        elif at == "T-Bills":
+            rec_w[i] = rec_mix.get("tbills", 0.1) / max(sum(1 for a in asset_types if a == "T-Bills"), 1)
+        else:
+            rec_w[i] = 0.02
+    rec_w = normalize_weights(rec_w)
+
+    rebalance_rows = []
+    for i, t in enumerate(tickers):
+        drift_obj = (w[i] - obj_w[i]) * 100
+        drift_opt = (w[i] - opt_w[i]) * 100
+        suggestion = ""
+        if drift_obj >= 3:
+            suggestion = f"Consider reducing {t} by ~{drift_obj:.1f}% (vs objective mix)"
+        elif drift_obj <= -3:
+            suggestion = f"Consider increasing {t} by ~{abs(drift_obj):.1f}% (vs objective mix)"
+        elif drift_opt >= 3:
+            suggestion = f"May be overweight vs optimizer — consider reducing {t} by ~{drift_opt:.1f}%"
+        elif drift_opt <= -3:
+            suggestion = f"May be underweight vs optimizer — consider increasing {t} by ~{abs(drift_opt):.1f}%"
+        rebalance_rows.append(
+            {
+                "Ticker": t,
+                "Current (%)": round(w[i] * 100, 1),
+                "Objective (%)": round(obj_w[i] * 100, 1),
+                "Optimizer (%)": round(opt_w[i] * 100, 1),
+                "Recommended (%)": round(rec_w[i] * 100, 1),
+                "Drift vs Objective (%)": round(drift_obj, 1),
+                "Drift vs Optimizer (%)": round(drift_opt, 1),
+                "Model Note": suggestion or "Within tolerance",
+            }
+        )
+    rebalance_df = pd.DataFrame(rebalance_rows)
+
+    alloc_compare = pd.DataFrame(
+        {
+            "Category": ["Equity", "Bonds", "T-Bills"],
+            "Current (%)": [
+                float(profile["equity"]) * 100,
+                float(profile["bonds"]) * 100,
+                float(profile["tbills"]) * 100,
+            ],
+            "Objective (%)": [obj_eq * 100, obj_bond * 100, obj_tb * 100],
+            "Recommended (%)": [
+                rec_mix.get("equity", obj_eq) * 100,
+                rec_mix.get("bonds", obj_bond) * 100,
+                rec_mix.get("tbills", obj_tb) * 100,
+            ],
+        }
+    )
+    if optimizer_weights is not None:
+        opt_eq = sum(opt_w[i] for i, at in enumerate(asset_types) if at in ("Equity", "REIT", "Dividend ETF"))
+        opt_bond = sum(opt_w[i] for i, at in enumerate(asset_types) if at == "Bonds")
+        opt_tb = sum(opt_w[i] for i, at in enumerate(asset_types) if at == "T-Bills")
+        alloc_compare["Optimizer (%)"] = [opt_eq * 100, opt_bond * 100, opt_tb * 100]
+
+    # ── Status message ──
+    health_word = "strong" if score >= 80 else "moderately healthy" if score >= 60 else "mixed" if score >= 40 else "stressed"
+    beta_note = (
+        f"lower market sensitivity than SPY (beta {metrics.beta_spy:.2f})"
+        if metrics.beta_spy < 0.95
+        else f"market-like sensitivity (beta {metrics.beta_spy:.2f})"
+    )
+    sharpe_note = "strong" if metrics.sharpe_ratio >= 0.8 else "adequate" if metrics.sharpe_ratio >= 0.4 else "weak"
+    conc_note = ""
+    if max_w >= 0.30:
+        conc_note = f", but {profile['top_ticker']} concentration ({max_w * 100:.0f}%) should be monitored"
+    status_message = (
+        f"Your portfolio appears {health_word} (score {score:.0f}/100). "
+        f"It has {beta_note} because of the current mix, "
+        f"but the Sharpe ratio is {sharpe_note}{conc_note}. "
+        f"This is model-based commentary for educational purposes — not financial advice."
+    )
+
+    return PortfolioHealthResult(
+        score=score,
+        score_label=score_label,
+        score_color=score_color,
+        status_message=status_message,
+        whats_working=whats_working,
+        whats_not_working=whats_not,
+        recommendations=recommendations,
+        macro_fit=macro_fit,
+        rebalance_df=rebalance_df,
+        return_contrib_df=ret_contrib,
+        risk_contrib_df=risk_df,
+        drawdown_contrib_df=dd_contrib,
+        allocation_compare_df=alloc_compare,
+        macro_heatmap_df=macro_heatmap,
+        score_breakdown=breakdown,
     )

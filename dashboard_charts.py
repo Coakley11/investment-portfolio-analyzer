@@ -206,3 +206,83 @@ def efficient_frontier_chart(
     fig.update_xaxes(tickformat=".0%")
     fig.update_yaxes(tickformat=".0%")
     return apply_axes(fig, "Expected Return (annual)", "Volatility (annual)")
+
+
+def contribution_bar_chart(
+    df: pd.DataFrame,
+    value_col: str,
+    title: str,
+    y_label: str = "Contribution (%)",
+) -> go.Figure:
+    colors = [COLORS["positive"] if v >= 0 else COLORS["negative"] for v in df[value_col]]
+    fig = go.Figure(
+        go.Bar(
+            x=df["Ticker"],
+            y=df[value_col],
+            marker_color=colors,
+            hovertemplate="<b>%{x}</b><br>%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.update_layout(**base_layout(title=title, height=360))
+    return apply_axes(fig, y_label, "Ticker")
+
+
+def allocation_comparison_chart(alloc_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    categories = alloc_df["Category"].tolist()
+    series_cols = [c for c in alloc_df.columns if c != "Category"]
+    for i, col in enumerate(series_cols):
+        fig.add_trace(
+            go.Bar(
+                name=col.replace(" (%)", ""),
+                x=categories,
+                y=alloc_df[col],
+                marker_color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)],
+                hovertemplate=f"<b>{col}</b><br>%{{x}}: %{{y:.1f}}%<extra></extra>",
+            )
+        )
+    fig.update_layout(**base_layout(title="Current vs Recommended Allocation", height=400, barmode="group"))
+    return apply_axes(fig, "Weight (%)", "Category")
+
+
+def macro_sensitivity_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
+    asset_col = "Asset Type"
+    scenarios = [c for c in heatmap_df.columns if c != asset_col]
+    z = heatmap_df[scenarios].values
+    fig = go.Figure(
+        go.Heatmap(
+            z=z,
+            x=scenarios,
+            y=heatmap_df[asset_col],
+            colorscale=[
+                [0.0, COLORS["negative"]],
+                [0.5, COLORS["muted"]],
+                [1.0, COLORS["positive"]],
+            ],
+            zmid=0,
+            zmin=-1,
+            zmax=1,
+            hovertemplate="Asset: %{y}<br>Scenario: %{x}<br>Sensitivity: %{z:.2f}<extra></extra>",
+        )
+    )
+    fig.update_layout(**base_layout(title="Macro Sensitivity by Asset Class (Model)", height=380))
+    return apply_axes(fig, "", "Asset Type")
+
+
+def benchmark_mini_chart(growth_df: pd.DataFrame, title: str = "Portfolio vs Benchmark") -> go.Figure:
+    fig = go.Figure()
+    for i, col in enumerate(growth_df.columns):
+        if col == "Date":
+            continue
+        width = 3.0 if col.upper() in ("PORTFOLIO", "SPY") else 1.8
+        fig.add_trace(
+            go.Scatter(
+                x=growth_df["Date"],
+                y=growth_df[col],
+                mode="lines",
+                name=col,
+                line=dict(color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)], width=width),
+            )
+        )
+    fig.update_layout(**base_layout(title=title, height=320))
+    return apply_axes(fig, "Value ($)", "Date")
