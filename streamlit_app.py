@@ -14,6 +14,9 @@ import streamlit as st
 
 import dashboard_charts as charts
 import portfolio_core as core
+from components.problem_solving import render_problem_solving_lab
+
+APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
 
 # ── Page config & styling ─────────────────────────────────────────────────────
 
@@ -102,6 +105,58 @@ st.markdown(
         padding: 0.28rem 0.62rem;
         border-radius: 999px;
         white-space: nowrap;
+    }
+    .health-header-badge {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.55rem 0.85rem;
+        padding: 0.55rem 0.9rem;
+        margin: -0.45rem 0 1.1rem 0;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        background: rgba(20, 28, 43, 0.72);
+        font-size: 0.82rem;
+        color: #cbd5e1;
+    }
+    .health-header-badge-green {
+        border-color: rgba(46, 204, 113, 0.45);
+        background: linear-gradient(90deg, rgba(46, 204, 113, 0.10) 0%, rgba(20, 28, 43, 0.85) 100%);
+    }
+    .health-header-badge-yellow {
+        border-color: rgba(245, 166, 35, 0.45);
+        background: linear-gradient(90deg, rgba(245, 166, 35, 0.10) 0%, rgba(20, 28, 43, 0.85) 100%);
+    }
+    .health-header-badge-orange {
+        border-color: rgba(230, 126, 34, 0.45);
+        background: linear-gradient(90deg, rgba(230, 126, 34, 0.10) 0%, rgba(20, 28, 43, 0.85) 100%);
+    }
+    .health-header-badge-red {
+        border-color: rgba(231, 76, 60, 0.45);
+        background: linear-gradient(90deg, rgba(231, 76, 60, 0.10) 0%, rgba(20, 28, 43, 0.85) 100%);
+    }
+    .health-header-badge-neutral {
+        border-color: #334155;
+        background: rgba(20, 28, 43, 0.72);
+    }
+    .health-header-score {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #f1f5f9;
+        letter-spacing: -0.02em;
+    }
+    .health-header-label {
+        font-weight: 600;
+        color: #e2e8f0;
+    }
+    .health-header-note {
+        font-size: 0.72rem;
+        color: #94a3b8;
+        margin-left: auto;
+    }
+    .health-header-prompt {
+        color: #94a3b8;
+        font-style: italic;
     }
     .section-title {
         font-size: 1.05rem;
@@ -250,9 +305,11 @@ def render_branded_header():
             <p class="hero-subtitle">
               Quantitative Portfolio Analytics • Risk Analysis • Monte Carlo Simulation • Optimization
             </p>
+            <p style="color:#64748b;font-size:0.78rem;margin:0 0 0.85rem 0;">Educational model-based analysis, not financial advice.</p>
             <div class="hero-badges">
               <span class="hero-badge">📊 Real market data</span>
               <span class="hero-badge">⚖️ Risk metrics</span>
+              <span class="hero-badge">🩺 Portfolio Health</span>
               <span class="hero-badge">🎲 Monte Carlo</span>
               <span class="hero-badge">📐 Efficient frontier</span>
               <span class="hero-badge">🌐 Macro stress testing</span>
@@ -383,6 +440,67 @@ def render_health_score_card(health: core.PortfolioHealthResult):
     )
 
 
+def _portfolio_fingerprint(tickers: list[str], weights: np.ndarray) -> str:
+    w = core.normalize_weights(weights)
+    return "|".join(f"{t}:{w[i]:.4f}" for i, t in enumerate(tickers))
+
+
+def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str], weights: np.ndarray) -> None:
+    st.session_state.health_summary = {
+        "score": float(health.score),
+        "score_label": health.score_label,
+        "score_color": health.score_color,
+        "fingerprint": _portfolio_fingerprint(tickers, weights),
+    }
+
+
+def get_health_badge_state(tickers: list[str], weights: np.ndarray) -> tuple[str, dict | None]:
+    summary = st.session_state.get("health_summary")
+    if not summary:
+        return "missing", None
+    if summary.get("fingerprint") != _portfolio_fingerprint(tickers, weights):
+        return "stale", None
+    return "ok", summary
+
+
+def render_health_header_badge(slot, tickers: list[str], weights: np.ndarray) -> None:
+    state, summary = get_health_badge_state(tickers, weights)
+    disclaimer = APP_DISCLAIMER
+
+    if state == "ok" and summary:
+        color_class = {
+            "green": "health-header-badge-green",
+            "yellow": "health-header-badge-yellow",
+            "orange": "health-header-badge-orange",
+            "red": "health-header-badge-red",
+        }.get(summary["score_color"], "health-header-badge-yellow")
+        html = f"""
+        <div class="health-header-badge {color_class}">
+            <span>🩺 <strong>Portfolio Health</strong></span>
+            <span class="health-header-score">{summary['score']:.0f}<span style="font-weight:500;color:#94a3b8;"> / 100</span></span>
+            <span class="health-header-label">{summary['score_label']}</span>
+            <span class="health-header-note">{disclaimer}</span>
+        </div>
+        """
+    elif state == "stale":
+        html = f"""
+        <div class="health-header-badge health-header-badge-neutral">
+            <span>🩺 <strong>Portfolio Health</strong></span>
+            <span class="health-header-prompt">Portfolio changed — run Portfolio Health analysis for updated score.</span>
+            <span class="health-header-note">{disclaimer}</span>
+        </div>
+        """
+    else:
+        html = f"""
+        <div class="health-header-badge health-header-badge-neutral">
+            <span>🩺 <strong>Portfolio Health</strong></span>
+            <span class="health-header-prompt">Run Portfolio Health analysis for updated score.</span>
+            <span class="health-header-note">{disclaimer}</span>
+        </div>
+        """
+    slot.markdown(html, unsafe_allow_html=True)
+
+
 def metrics_row_primary(m: core.ExtendedPortfolioMetrics, initial: float):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Annual Return", _pct(m.annual_return))
@@ -436,7 +554,7 @@ def render_sidebar() -> dict:
     st.sidebar.caption("Downloads appear after analysis loads.")
 
     st.sidebar.divider()
-    st.sidebar.caption("Data: yfinance · Not financial advice")
+    st.sidebar.caption(APP_DISCLAIMER)
     st.sidebar.divider()
     st.sidebar.markdown("### Performance")
     mode = st.sidebar.radio("Analysis mode", ["Fast mode", "Full analysis mode"], index=0)
@@ -532,6 +650,7 @@ def export_buttons(
 # ── Header ──────────────────────────────────────────────────────────────────────
 
 render_branded_header()
+health_badge_slot = st.empty()
 
 settings = render_sidebar()
 init_holdings()
@@ -548,9 +667,21 @@ tabs = st.tabs(
         "Monte Carlo",
         "Optimization",
         "Efficient Frontier",
+        "Math Problem Solving Lab",
     ]
 )
-tab_overview, tab_inputs, tab_risk, tab_health, tab_explain, tab_forward, tab_mc, tab_opt, tab_frontier = tabs
+(
+    tab_overview,
+    tab_inputs,
+    tab_risk,
+    tab_health,
+    tab_explain,
+    tab_forward,
+    tab_mc,
+    tab_opt,
+    tab_frontier,
+    tab_problem_lab,
+) = tabs
 
 with tab_inputs:
     section_header("Portfolio Inputs", "Tickers and target weights. Normalized to 100% if needed.")
@@ -589,17 +720,11 @@ with st.spinner("Loading market data and running analytics…"):
             returns, weights, settings["risk_free"], settings["initial_value"], benchmark_rets=bench_rets
         )
         growth = core.portfolio_growth_series(returns, weights, settings["initial_value"])
-        mc_default = compute_monte_carlo(
-            returns,
-            tuple(weights.tolist()),
-            settings["initial_value"],
-            years=5,
-            simulations=1000,
-            target_value=settings["initial_value"] * 1.5,
-        )
     except Exception as ex:
         st.error(f"Analysis failed: {ex}")
         st.stop()
+
+mc_summary = st.session_state.get("mc_cached_summary")
 
 latest = prices.iloc[-1]
 holdings_df = core.holdings_breakdown(tickers, weights, asset_types, settings["initial_value"], latest)
@@ -616,7 +741,7 @@ explanation = core.generate_portfolio_explanation(
     tickers, weights, asset_types, metrics, base_risk_pack["corr"], base_risk_pack["risk_contrib"], benchmark_rets=bench_rets
 )
 report_text = core.build_summary_report(
-    tickers, weights, metrics, mc_default.summary, insights, settings
+    tickers, weights, metrics, mc_summary, insights, settings
 )
 export_buttons(
     holdings_df,
@@ -630,7 +755,7 @@ export_buttons(
 # ── Overview ──────────────────────────────────────────────────────────────────
 
 with tab_overview:
-    section_header("Portfolio Summary", "Historical risk/return based on daily returns.")
+    section_header("Portfolio Summary", f"Historical risk/return based on daily returns. {APP_DISCLAIMER}")
     metrics_row_primary(metrics, settings["initial_value"])
     metrics_row_extended(metrics)
     fast_mode = settings["mode"] == "Fast mode"
@@ -769,7 +894,7 @@ with tab_overview:
 with tab_explain:
     section_header(
         "Explain This Portfolio",
-        "AI-style memo synthesized from allocation, risk metrics, and macro sensitivity.",
+        f"AI-style memo synthesized from allocation, risk metrics, and macro sensitivity. {APP_DISCLAIMER}",
     )
     st.markdown("##### Portfolio Overview")
     for item in explanation.portfolio_overview:
@@ -872,7 +997,7 @@ with tab_risk:
 with tab_health:
     section_header(
         "Portfolio Health Monitor",
-        "Model-based evaluation of performance, risk, drift, and macro fit. For educational purposes only — not financial advice.",
+        f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
     )
     if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
@@ -966,6 +1091,7 @@ with tab_health:
                 recommended_type_mix=rec.allocation,
                 bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
             )
+        cache_health_summary(health, tickers, weights)
 
         st.markdown(
             f'<div class="insight-card">📋 <b>Status:</b> {health.status_message}</div>',
@@ -1066,8 +1192,8 @@ with tab_health:
                 st.plotly_chart(charts.benchmark_mini_chart(mini, title="Portfolio Growth"), use_container_width=True)
 
         st.caption(
-            "Portfolio Health outputs are rule-based and model-driven for educational purposes. "
-            "They do not constitute investment advice. Refresh after changing tickers, weights, or macro settings."
+            f"Portfolio Health outputs are rule-based and model-driven. {APP_DISCLAIMER} "
+            "Refresh after changing tickers, weights, or macro settings."
         )
 
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
@@ -1082,7 +1208,7 @@ with tab_forward:
     if not fast_mode and st.session_state.get("run_forward_macro", False):
         section_header(
             "Forward-Looking Macro Analysis",
-            "Set future macro assumptions and propagate them into projections, Monte Carlo, and optimization inputs.",
+            f"Set future macro assumptions and propagate them into projections, Monte Carlo, and optimization inputs. {APP_DISCLAIMER}",
         )
         f1, f2, f3 = st.columns(3)
         with f1:
@@ -1199,7 +1325,7 @@ with tab_forward:
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
 with tab_mc:
-    section_header("Monte Carlo Simulation", HELP["monte_carlo"])
+    section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
     fast_mode = settings["mode"] == "Fast mode"
     if fast_mode:
         st.info("Monte Carlo is disabled in Fast mode.")
@@ -1228,6 +1354,7 @@ with tab_mc:
                     mc_sims,
                     float(mc_target),
                 )
+            st.session_state.mc_cached_summary = mc.summary
             st.plotly_chart(
                 charts.monte_carlo_paths(mc.chart_df, f"Projection paths · {mc_sims:,} simulations · {mc_years}Y"),
                 use_container_width=True,
@@ -1339,3 +1466,16 @@ with tab_frontier:
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not fast_mode:
         st.caption("Frontier construction is on demand.")
+
+# ── Math Problem Solving Lab ──────────────────────────────────────────────────
+
+with tab_problem_lab:
+    section_header(
+        "Mathematical Problem Solving Lab",
+        f"Practice portfolio math with guided exercises and formula reference. {APP_DISCLAIMER}",
+    )
+    render_problem_solving_lab()
+
+# ── Header health badge (cached; no heavy health calc on load) ─────────────────
+
+render_health_header_badge(health_badge_slot, tickers, weights)
