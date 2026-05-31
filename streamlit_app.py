@@ -14,6 +14,7 @@ import streamlit as st
 
 import dashboard_charts as charts
 import portfolio_core as core
+from components.getting_started_guide import render_getting_started_guide
 from components.problem_solving import render_problem_solving_lab
 
 APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
@@ -307,6 +308,7 @@ def render_branded_header():
             </p>
             <p style="color:#64748b;font-size:0.78rem;margin:0 0 0.85rem 0;">Educational model-based analysis, not financial advice.</p>
             <div class="hero-badges">
+              <span class="hero-badge">📘 Getting Started Guide</span>
               <span class="hero-badge">📊 Real market data</span>
               <span class="hero-badge">⚖️ Risk metrics</span>
               <span class="hero-badge">🩺 Portfolio Health</span>
@@ -658,6 +660,7 @@ apply_asset_preset(settings["asset_preset"])
 
 tabs = st.tabs(
     [
+        "Getting Started Guide",
         "Overview",
         "Portfolio Inputs",
         "Risk Analysis",
@@ -671,6 +674,7 @@ tabs = st.tabs(
     ]
 )
 (
+    tab_guide,
     tab_overview,
     tab_inputs,
     tab_risk,
@@ -682,6 +686,13 @@ tabs = st.tabs(
     tab_frontier,
     tab_problem_lab,
 ) = tabs
+
+with tab_guide:
+    section_header(
+        "Getting Started Guide",
+        f"Step-by-step tutorial for building, analyzing, and monitoring your portfolio. {APP_DISCLAIMER}",
+    )
+    render_getting_started_guide()
 
 with tab_inputs:
     section_header("Portfolio Inputs", "Tickers and target weights. Normalized to 100% if needed.")
