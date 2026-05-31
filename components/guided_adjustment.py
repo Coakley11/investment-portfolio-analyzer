@@ -86,6 +86,7 @@ def render_guided_portfolio_adjustment(
     metrics: core.ExtendedPortfolioMetrics,
     returns: pd.DataFrame,
     assumptions: core.ForwardMacroAssumptions | None = None,
+    key_prefix: str = "guided",
 ) -> None:
     beginner = is_beginner_mode(settings)
     initial_value = float(settings["initial_value"])
@@ -154,15 +155,25 @@ def render_guided_portfolio_adjustment(
         suggested_w = core.suggested_weights_from_rebalance(
             health.rebalance_df, tickers, weights, target_column="Objective (%)"
         )
-        preview_key = "guided_preview_active"
+        preview_key = f"{key_prefix}_preview_active"
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            preview = st.button("Preview Suggested Change", type="primary", key="guided_preview_btn")
+            preview = st.button(
+                "Preview Suggested Change",
+                type="primary",
+                key=f"{key_prefix}_preview_btn",
+            )
         with c2:
-            apply = st.button("Apply Suggested Allocation", key="guided_apply_btn")
+            apply = st.button(
+                "Apply Suggested Allocation",
+                key=f"{key_prefix}_apply_btn",
+            )
         with c3:
-            keep = st.button("Keep Current Portfolio", key="guided_keep_btn")
+            keep = st.button(
+                "Keep Current Portfolio",
+                key=f"{key_prefix}_keep_btn",
+            )
 
         if keep:
             st.session_state.pop(preview_key, None)

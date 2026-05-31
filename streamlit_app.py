@@ -942,6 +942,7 @@ def render_overview_tab(
             metrics=metrics,
             returns=returns,
             assumptions=macro_assumptions_from_session(),
+            key_prefix="overview_guided",
         )
     elif health_status == "settings_stale" and st.session_state.get("health_result"):
         st.warning("Recommendations may be outdated — refresh analysis to update.")
@@ -1593,6 +1594,7 @@ with tab_health:
             metrics=metrics,
             returns=returns,
             assumptions=macro_assumptions_from_session(),
+            key_prefix="health_guided",
         )
 
         section_header(
