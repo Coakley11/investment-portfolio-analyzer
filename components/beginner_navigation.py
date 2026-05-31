@@ -15,7 +15,6 @@ BEGINNER_TAB_LABELS = [
     "🎲 Monte Carlo",
     "⚙️ Optimizer",
     "📊 Efficient Frontier",
-    "🔬 Problem Lab",
 ]
 
 ADVANCED_TAB_LABELS = [
@@ -29,7 +28,6 @@ ADVANCED_TAB_LABELS = [
     "Monte Carlo",
     "Optimization",
     "Efficient Frontier",
-    "Math Problem Solving Lab",
 ]
 
 CHECKLIST_STEPS = [

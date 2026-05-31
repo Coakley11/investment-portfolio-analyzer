@@ -1322,7 +1322,6 @@ tabs = st.tabs(tab_labels)
     tab_mc,
     tab_opt,
     tab_frontier,
-    tab_problem_lab,
 ) = tabs
 
 with tab_guide:
@@ -2318,15 +2317,6 @@ with tab_frontier:
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
-
-# ── Math Problem Solving Lab ──────────────────────────────────────────────────
-
-with tab_problem_lab:
-    section_header(
-        "Mathematical Problem Solving Lab",
-        f"Practice portfolio math with guided exercises and formula reference. {APP_DISCLAIMER}",
-    )
-    render_problem_solving_lab()
 
 # ── Header health badge (cached; no heavy health calc on load) ─────────────────
 
