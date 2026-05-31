@@ -2262,6 +2262,22 @@ class InvestmentPlanResult:
     summary_lines: list[str]
     educational_notes: list[str]
 
+    def to_dict(self) -> dict[str, float | list[str]]:
+        """Stable dict view (includes legacy key aliases for UI fallbacks)."""
+        return {
+            "total_available": self.total_available,
+            "emergency_reserve": self.suggested_emergency_reserve,
+            "short_term_reserve": self.short_term_cash_amount,
+            "debt_reserve": self.debt_reserve,
+            "available_to_invest": self.amount_potentially_investable,
+            "suggested_long_term_amount": self.long_term_suggested,
+            "suggested_safer_amount": self.short_term_investable,
+            "monthly_contribution": self.monthly_contribution,
+            "summary_lines": list(self.summary_lines),
+            "educational_notes": list(self.educational_notes),
+            "rationale": list(self.educational_notes),
+        }
+
 
 def compute_investment_plan(
     total_available: float,

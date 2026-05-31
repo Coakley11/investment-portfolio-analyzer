@@ -225,11 +225,19 @@ def render_guided_portfolio_adjustment(
 
     plan = st.session_state.get("investment_plan")
     if plan and beginner:
+        if isinstance(plan, dict):
+            total_avail = float(plan.get("total_available", plan.get("total_cash", 0)))
+            short_term = float(plan.get("short_term_cash_amount", plan.get("short_term_reserve", 0)))
+            long_term = float(plan.get("long_term_suggested", plan.get("suggested_long_term_amount", 0)))
+        else:
+            total_avail = float(getattr(plan, "total_available", 0))
+            short_term = float(getattr(plan, "short_term_cash_amount", 0))
+            long_term = float(getattr(plan, "long_term_suggested", 0))
         st.markdown("---")
         st.markdown("#### Investment amount context")
         st.markdown(
-            f"If your total available cash is **{_money(plan.total_available)}** but you may need "
-            f"**{_money(plan.short_term_cash_amount)}** in the next year or two, the model suggests keeping "
+            f"If your total available cash is **{_money(total_avail)}** but you may need "
+            f"**{_money(short_term)}** in the next year or two, the model suggests keeping "
             f"that portion in short-term/cash-like assets and analyzing about "
-            f"**{_money(plan.long_term_suggested)}** as long-term investable money."
+            f"**{_money(long_term)}** as long-term investable money."
         )
