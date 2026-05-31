@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 
 import portfolio_core as core
+from components.beginner_navigation import PRESET_DISPLAY
+from components.monthly_review import render_monthly_review_workflow
 
 APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
 
@@ -54,27 +56,21 @@ PRESET_RATIONALE: dict[str, str] = {
         "Designed for users who want dividends and income-oriented holdings — "
         "dividend ETFs, REITs, and bonds."
     ),
-    "Tech Growth": (
-        "Designed for users comfortable with technology concentration — "
-        "growth-oriented equity ETFs with a small bond buffer."
-    ),
     "Retirement": (
         "Designed for long-term investing with a diversified mix of growth and stability — "
         "more bonds than balanced, plus dividend exposure."
     ),
-    "All Weather": (
-        "Designed to perform across different economic environments — "
-        "stocks, long-term bonds, gold, and commodities."
-    ),
 }
 
-SAMPLE_PORTFOLIOS = {
-    "Conservative": "Mostly bonds and cash-like funds. Smoother, slower growth.",
-    "Balanced": "Mix of stocks, bonds, and real estate. A common long-term starting point.",
-    "Aggressive": "Mostly stocks. Higher growth potential, bigger swings.",
-    "Dividend Income": "Focus on dividends and bond interest.",
-    "Retirement": "Blend built for long-term saving with some income and stability.",
-}
+# Presets shown one-at-a-time in tabs (Capital Preservation uses Conservative holdings)
+PRESET_TABS = [
+    ("Conservative", "Conservative", "capital preservation"),
+    ("Balanced", "Balanced", "balanced growth"),
+    ("Aggressive", "Growth", "aggressive growth"),
+    ("Dividend Income", "Income", "income"),
+    ("Retirement", "Retirement", "retirement"),
+    ("Conservative", "Capital Preservation", "capital preservation"),
+]
 
 
 def _apply_preset(name: str, *, sync_objective: str | None = None) -> None:
@@ -91,7 +87,6 @@ def _apply_preset(name: str, *, sync_objective: str | None = None) -> None:
 
 
 def _auto_apply_for_goal(goal: str) -> None:
-    """When the user picks or changes a goal, load the matching preset and sync the health objective."""
     _, preset, objective = GOAL_CHOICES[goal]
     last = st.session_state.get("guide_last_applied_goal")
     if last == goal:
@@ -111,6 +106,24 @@ def _auto_apply_for_goal(goal: str) -> None:
         st.session_state.pop("health_result_fingerprint", None)
 
 
+def _render_preset_tab(preset_key: str, tab_label: str, objective: str, suggested: str) -> None:
+    info = PRESET_DISPLAY.get(preset_key, {})
+    st.markdown(f"**{tab_label}** — {info.get('tagline', PRESET_RATIONALE.get(preset_key, ''))}")
+    st.caption(f"Expected characteristics: {info.get('characteristics', 'See allocation below.')}")
+    st.markdown(f"**Why this mix?** {PRESET_RATIONALE.get(preset_key, '')}")
+    if preset_key == suggested:
+        st.success("✓ Matches your goal from Step 1")
+    if st.button(f"Use {tab_label} portfolio", key=f"guide_preset_{tab_label}", use_container_width=True):
+        _apply_preset(preset_key, sync_objective=objective)
+    active = st.session_state.get("preset_applied", suggested)
+    if preset_key == active or (tab_label == "Capital Preservation" and active == "Conservative"):
+        st.dataframe(
+            pd.DataFrame(core.PORTFOLIO_PRESETS[preset_key]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
 def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
     st.markdown(
         f"""
@@ -118,8 +131,7 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
         border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1rem;">
         <h3 style="color:#f1f5f9;margin:0 0 0.35rem 0;">Your portfolio coach</h3>
         <p style="color:#94a3b8;margin:0;font-size:0.92rem;line-height:1.55;">
-        This app tells you <b>what to do</b> and <b>why</b> — in everyday language.
-        You do not need a finance degree. Follow the six steps below (also in the sidebar checklist).
+        Step-by-step guidance — not a long report. Use the tabs below and the sidebar checklist.
         </p>
         </div>
         <p style="color:#f5d08a;font-size:0.85rem;margin:0 0 1rem 0;">⚠️ {APP_DISCLAIMER}</p>
@@ -127,13 +139,13 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
         unsafe_allow_html=True,
     )
 
-    st.info(
-        "Market prices load **automatically** for the investments you enter. "
-        "Use **Refresh Market Data** in the sidebar when you want the latest prices — no file upload required."
+    step_tabs = st.tabs(
+        ["1 · Goal", "2 · Portfolio", "3 · Analyze", "4 · Health", "5 · Tips", "6 · Monthly"]
     )
 
-    with st.expander("Step 1 — What is your goal?", expanded=True):
-        st.markdown("Pick the option that sounds most like you. **Your portfolio loads automatically** when you choose:")
+    with step_tabs[0]:
+        st.markdown("#### Step 1 — Choose your goal")
+        st.caption("Your portfolio loads automatically when you pick an option.")
         goal = st.radio(
             "Your goal",
             list(GOAL_CHOICES.keys()),
@@ -144,154 +156,69 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
         _auto_apply_for_goal(goal)
         st.markdown(f"**In plain English:** {explain}")
         st.session_state.guide_suggested_preset = preset
-
         auto = st.session_state.get("guide_auto_applied_preset")
         if auto == preset:
-            st.success(f"✓ Loaded the **{preset}** portfolio for you. See Step 2 for why this mix was chosen.")
+            st.success(f"✓ Loaded the **{preset}** portfolio. See Step 2 for details.")
             st.session_state.pop("guide_auto_applied_preset", None)
+        st.caption(f"Portfolio objective: **{objective.replace('_', ' ')}**")
 
-        st.caption(f"Portfolio objective set to **{objective.replace('_', ' ')}** for health scoring.")
-
-    with st.expander("Step 2 — Your suggested portfolio (and why)", expanded=True):
+    with step_tabs[1]:
+        st.markdown("#### Step 2 — Pick a portfolio type")
+        st.caption("One portfolio at a time — click a tab to compare types.")
         suggested = st.session_state.get("guide_suggested_preset", "Balanced")
+        st.info(f"Currently loaded: **{st.session_state.get('preset_applied', suggested)}**")
+        tab_labels = [t[1] for t in PRESET_TABS]
+        preset_tabs = st.tabs(tab_labels)
+        for tab_obj, (preset_key, label, obj) in zip(preset_tabs, PRESET_TABS):
+            with tab_obj:
+                _render_preset_tab(preset_key, label, obj, suggested)
+
+    with step_tabs[2]:
+        st.markdown("#### Step 3 — Analyze your portfolio")
         st.markdown(
-            f"**Currently loaded:** {st.session_state.get('preset_applied', suggested)}  \n"
-            f"**Why this mix?** {PRESET_RATIONALE.get(suggested, SAMPLE_PORTFOLIOS.get(suggested, ''))}"
+            "1. Open **💼 Portfolio Inputs** → confirm **How Much to Invest** and your mix.\n"
+            "2. Open **🏠 Overview** → click **Analyze Portfolio**.\n"
+            "3. The app downloads prices and prepares your health score."
         )
-        st.markdown(
-            "Each option below is a ready-made mix of funds (ETFs). "
-            "Click **Use this portfolio** to switch to a different starting mix."
-        )
-        cols = st.columns(2)
-        names = list(SAMPLE_PORTFOLIOS.keys())
-        for i, name in enumerate(names):
-            with cols[i % 2]:
-                st.markdown(f"**{name}**")
-                st.caption(SAMPLE_PORTFOLIOS[name])
-                if name == suggested:
-                    st.caption("✓ Matches your goal from Step 1")
-                if st.button(f"Use {name}", key=f"guide_preset_{name}", use_container_width=True):
-                    obj = st.session_state.get("health_objective", "balanced growth")
-                    for _, (_, p, o) in GOAL_CHOICES.items():
-                        if p == name:
-                            obj = o
-                            break
-                    _apply_preset(name, sync_objective=obj)
-
-        st.dataframe(
-            pd.DataFrame(core.PORTFOLIO_PRESETS.get(st.session_state.get("preset_applied", suggested), [])),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    with st.expander("Step 3 — Analyze your portfolio", expanded=not st.session_state.get("run_health", False)):
-        st.markdown(
-            """
-            **What happens when you analyze:**
-
-            1. The app downloads recent prices for your tickers (like SPY or BND).
-            2. It calculates how your mix would have behaved in the past.
-            3. It prepares your health score, action plan, and suggestions.
-
-            **What you should do now:**
-
-            1. Open the **📋 Overview** tab (see the banner above the tabs).
-            2. In **💼 Portfolio Inputs**, review **How Much Should I Invest?** and your dollar amounts.
-            3. Click the blue **Analyze Portfolio** button.
-            """
-        )
-        if st.button("Go to Overview & Analyze", type="primary", key="guide_analyze_cta"):
+        if st.button("Analyze Portfolio Now", type="primary", key="guide_analyze_cta"):
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
-            st.info("Switch to the **📋 Overview** tab — analysis will run automatically.")
             st.rerun()
 
-    with st.expander("Step 4 — Read your Portfolio Health Score", expanded=False):
+    with step_tabs[3]:
+        st.markdown("#### Step 4 — Review your health score")
         st.markdown(
-            """
-            **What it means:** A score from 0–100 that summarizes how well your mix fits a simple model of
-            return, risk, diversification, and your goal. Think of it as a checkup, not a grade on your worth.
-
-            **Your Portfolio Journey / Action Plan** (Overview & Portfolio Health) answers:
-            - **Today** — what to look at now
-            - **This Month** — rebalance or refresh?
-            - **This Year** — still aligned with your goal?
-
-            | Score | Plain English |
-            |-------|----------------|
-            | **70+** | Generally in good shape for the model's assumptions |
-            | **50–69** | Okay, but worth reviewing suggestions |
-            | **Below 50** | Consider changes — higher risk or misalignment with your goal |
-
-            **How to improve it:** Follow the app's suggestions (Step 5), diversify, align with your goal,
-            and avoid one holding dominating the portfolio.
-            """
+            "| Score | Meaning |\n|-------|--------|\n"
+            "| **70+** | Generally in good shape |\n"
+            "| **50–69** | Worth reviewing suggestions |\n"
+            "| **Below 50** | Consider changes |"
         )
-        st.markdown("📍 Open **❤️ Portfolio Health** → click **Refresh Portfolio Health**")
+        st.caption("Open **❤️ Portfolio Health** after analyzing.")
 
-    with st.expander("Step 5 — Review suggestions", expanded=False):
+    with step_tabs[4]:
+        st.markdown("#### Step 5 — Read recommendations")
         st.markdown(
-            """
-            **What recommendations mean:** Each suggestion includes **Why am I seeing this?** with:
-            - **Issue** — what the model flagged
-            - **Why it matters** — why you should care
-            - **Triggered by** — the metric that caused it
-            - **Possible benefit** — what might improve if you review it
-
-            Examples: rebalance drift, high concentration, elevated recession probability.
-            """
-        )
-        st.markdown("📍 **📋 Overview** (recommendations) · **📄 Explain Portfolio** (plain memo) · **❤️ Portfolio Health**")
-
-    with st.expander("Step 6 — Check your portfolio every month", expanded=False):
-        st.markdown(
-            """
-            **Simple monthly routine (about 10 minutes):**
-
-            1. Click **Refresh Market Data** in the sidebar.
-            2. Open **❤️ Portfolio Health** and refresh your score.
-            3. Read your **Portfolio Journey** (Today / Month / Year) and **Why?** on each recommendation.
-            4. Glance at **📋 Overview** to see if performance still fits your goal.
-
-            **Once a year:** Revisit Step 1 — your goal or comfort with risk may have changed.
-            """
+            "Each suggestion includes **Why am I seeing this?** with the issue, why it matters, "
+            "and what the model is trying to improve. Found on **🏠 Overview** and **❤️ Portfolio Health**."
         )
 
-    with st.expander("Bonus — What are macro assumptions?", expanded=False):
-        st.markdown(
-            """
-            On the **❤️ Portfolio Health** tab you'll see settings like interest rates, inflation,
-            and recession probability. These describe what you think the economy might look like —
-            the app uses them to stress-test your portfolio and tailor suggestions.
-
-            **You do not need to be an expert.** Defaults are fine to start. Open the full guide on
-            the Portfolio Health tab: **How Do I Choose These Assumptions?**
-            """
-        )
+    with step_tabs[5]:
+        st.markdown("#### Step 6 — Monthly routine")
+        render_monthly_review_workflow(expanded=True)
 
     if not beginner_mode:
         with st.expander("Advanced topics (optional)", expanded=False):
             st.markdown(
-                """
-                - **Monte Carlo** — many random "what if" future paths; shows a range, not a prediction.
-                - **Optimizer** — math suggesting efficient mixes; a model, not a guarantee.
-                - **Correlation** — whether investments move together; lower can mean smoother combined ride.
-                - **Efficient Frontier** — chart of best risk/return tradeoffs in the model.
-
-                Switch to **Advanced Mode** in the sidebar for full charts and technical labels.
-                """
+                "Monte Carlo, Optimizer, Efficient Frontier — switch to **Advanced Mode** in the sidebar."
             )
 
-    with st.expander("Quick glossary (everyday language)", expanded=False):
-        terms = [
+    with st.expander("Quick glossary", expanded=False):
+        for term, plain in [
             ("Volatility", "How much your portfolio tends to move up and down."),
-            ("Risk/reward score (Sharpe)", "Whether return is worth the risk you're taking."),
-            ("Worst drop (drawdown)", "Biggest fall from a previous high."),
-            ("Diversification", "Not putting all eggs in one basket — different funds help smooth the ride."),
-            ("Rebalancing", "Adjusting back to your target percentages after markets move."),
-        ]
-        for term, plain in terms:
+            ("Rebalancing", "Adjusting back to target percentages after markets move."),
+            ("Diversification", "Spreading money across different types of investments."),
+        ]:
             st.markdown(f"**{term}** — {plain}")
 
 
-__all__ = ["PRESET_RATIONALE", "render_getting_started_guide", "GOAL_CHOICES", "SAMPLE_PORTFOLIOS"]
+__all__ = ["PRESET_RATIONALE", "render_getting_started_guide", "GOAL_CHOICES", "PRESET_TABS"]

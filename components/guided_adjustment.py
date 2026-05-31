@@ -8,6 +8,7 @@ import streamlit as st
 
 import portfolio_core as core
 from components.beginner_copy import translate_for_beginner
+from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode
 
 DISCLAIMER = f"Model-based educational guidance. {APP_DISCLAIMER}"
@@ -76,6 +77,78 @@ def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[
     )
 
 
+def _render_preview_apply_section(
+    health: core.PortfolioHealthResult,
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    settings: dict,
+    metrics: core.ExtendedPortfolioMetrics,
+    returns: pd.DataFrame,
+    adj_table: pd.DataFrame,
+    has_changes: bool,
+    key_prefix: str,
+    beginner: bool,
+) -> None:
+    suggested_w = core.suggested_weights_from_rebalance(
+        health.rebalance_df, tickers, weights, target_column="Objective (%)"
+    )
+    preview_key = f"{key_prefix}_preview_active"
+    initial_value = float(settings["initial_value"])
+
+    if has_changes:
+        st.dataframe(adj_table, use_container_width=True, hide_index=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        preview = st.button("Preview Suggested Change", type="primary", key=f"{key_prefix}_preview_btn")
+    with c2:
+        apply = st.button("Apply Suggested Allocation", key=f"{key_prefix}_apply_btn")
+    with c3:
+        keep = st.button("Keep Current Portfolio", key=f"{key_prefix}_keep_btn")
+
+    if keep:
+        st.session_state.pop(preview_key, None)
+        st.info("Keeping your current portfolio. No changes applied.")
+
+    if preview or st.session_state.get(preview_key):
+        st.session_state[preview_key] = True
+        preview_metrics = core.compute_extended_metrics(
+            returns, suggested_w, settings["risk_free"], initial_value
+        )
+        preview_df = pd.DataFrame(core.holdings_records_from_weights(tickers, suggested_w, asset_types))
+        preview_df["Value ($)"] = (preview_df["Weight (%)"] / 100 * initial_value).map(_money)
+        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+        m1, m2, m3 = st.columns(3)
+        m1.metric(
+            "Est. volatility" if beginner else "Volatility",
+            f"{preview_metrics.volatility * 100:.2f}%",
+            delta=f"{(preview_metrics.volatility - metrics.volatility) * 100:+.2f}%",
+        )
+        m2.metric(
+            "Est. 1Y value" if beginner else "Projected value (1Y)",
+            _money(preview_metrics.projected_value),
+            delta=_money(preview_metrics.projected_value - metrics.projected_value),
+        )
+        m3.metric(
+            "Risk/reward score" if beginner else "Sharpe",
+            f"{preview_metrics.sharpe_ratio:.2f}",
+            delta=f"{preview_metrics.sharpe_ratio - metrics.sharpe_ratio:+.2f}",
+        )
+        st.caption("Preview is educational, not a guarantee. " + DISCLAIMER)
+
+    if apply:
+        st.session_state.holdings_df = pd.DataFrame(
+            core.holdings_records_from_weights(tickers, suggested_w, asset_types)
+        )
+        st.session_state.run_health = False
+        st.session_state.pop("health_result", None)
+        st.session_state.pop("health_result_fingerprint", None)
+        st.session_state.pop(preview_key, None)
+        st.success("Suggested allocation applied. Re-run **Analyze Portfolio** to refresh.")
+        st.rerun()
+
+
 def render_guided_portfolio_adjustment(
     health: core.PortfolioHealthResult,
     *,
@@ -90,11 +163,16 @@ def render_guided_portfolio_adjustment(
 ) -> None:
     beginner = is_beginner_mode(settings)
     initial_value = float(settings["initial_value"])
-    st.markdown("## Guided Portfolio Adjustment")
-    st.caption(
-        "If the model flagged something, this walkthrough shows what you might consider — "
-        "in dollars and percentages. For educational purposes only."
-    )
+
+    if beginner:
+        adj_tabs = st.tabs(["Issue", "Suggestion", "Preview / Apply", "Timing"])
+    else:
+        st.markdown("## Guided Portfolio Adjustment")
+        st.caption(
+            "If the model flagged something, this walkthrough shows what you might consider — "
+            "in dollars and percentages. For educational purposes only."
+        )
+        adj_tabs = None
 
     issue, why = _primary_issue(health, beginner)
     adj_table = _build_adjustment_table(health.rebalance_df, initial_value)
@@ -103,11 +181,36 @@ def render_guided_portfolio_adjustment(
     if not has_changes and health.score >= 70:
         st.success(
             "The model does not suggest major allocation changes right now. "
-            "You may still review recommendations above during your next monthly check-in."
+            "You may still review recommendations during your next monthly check-in."
         )
         return
 
-    # Step 1
+    if beginner and adj_tabs:
+        with adj_tabs[0]:
+            st.markdown("#### What the model noticed")
+            st.markdown(issue)
+        with adj_tabs[1]:
+            st.markdown("#### Why it may matter")
+            st.markdown(why)
+            if health.recommendation_details:
+                d0 = health.recommendation_details[0]
+                st.markdown(f"**Suggestion:** {translate_for_beginner(d0.text) if beginner else d0.text}")
+            render_rebalancing_panel(health, settings=settings, key_prefix=f"{key_prefix}_guided")
+        with adj_tabs[2]:
+            _render_preview_apply_section(
+                health, tickers, weights, asset_types, settings, metrics, returns,
+                adj_table, has_changes, key_prefix, beginner,
+            )
+        with adj_tabs[3]:
+            st.markdown(
+                "- Review during your next **monthly or quarterly** check-in.\n"
+                "- No need to change immediately.\n"
+                "- For long-term portfolios, avoid overreacting to short-term moves."
+            )
+            st.caption(DISCLAIMER)
+        return
+
+    # Advanced: stacked layout
     with st.container(border=True):
         st.markdown("### Step 1 — Identify the issue")
         st.markdown(f"**What the model noticed:** {issue}")
@@ -152,76 +255,10 @@ def render_guided_portfolio_adjustment(
     # Step 5 — Preview / Apply
     with st.container(border=True):
         st.markdown("### Step 5 — Preview or apply")
-        suggested_w = core.suggested_weights_from_rebalance(
-            health.rebalance_df, tickers, weights, target_column="Objective (%)"
+        _render_preview_apply_section(
+            health, tickers, weights, asset_types, settings, metrics, returns,
+            adj_table, has_changes, key_prefix, beginner,
         )
-        preview_key = f"{key_prefix}_preview_active"
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            preview = st.button(
-                "Preview Suggested Change",
-                type="primary",
-                key=f"{key_prefix}_preview_btn",
-            )
-        with c2:
-            apply = st.button(
-                "Apply Suggested Allocation",
-                key=f"{key_prefix}_apply_btn",
-            )
-        with c3:
-            keep = st.button(
-                "Keep Current Portfolio",
-                key=f"{key_prefix}_keep_btn",
-            )
-
-        if keep:
-            st.session_state.pop(preview_key, None)
-            st.info("Keeping your current portfolio. No changes applied.")
-
-        if preview or st.session_state.get(preview_key):
-            st.session_state[preview_key] = True
-            preview_metrics = core.compute_extended_metrics(
-                returns, suggested_w, settings["risk_free"], initial_value
-            )
-            st.markdown("**Preview — new mix (educational)**")
-            preview_df = pd.DataFrame(
-                core.holdings_records_from_weights(tickers, suggested_w, asset_types)
-            )
-            preview_df["Value ($)"] = (preview_df["Weight (%)"] / 100 * initial_value).map(_money)
-            st.dataframe(preview_df, use_container_width=True, hide_index=True)
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric(
-                "Est. volatility" if beginner else "Volatility",
-                f"{preview_metrics.volatility * 100:.2f}%",
-                delta=f"{(preview_metrics.volatility - metrics.volatility) * 100:+.2f}%",
-            )
-            m2.metric(
-                "Est. 1Y value" if beginner else "Projected value (1Y)",
-                _money(preview_metrics.projected_value),
-                delta=_money(preview_metrics.projected_value - metrics.projected_value),
-            )
-            m3.metric(
-                "Risk/reward score" if beginner else "Sharpe",
-                f"{preview_metrics.sharpe_ratio:.2f}",
-                delta=f"{preview_metrics.sharpe_ratio - metrics.sharpe_ratio:+.2f}",
-            )
-            st.caption(
-                "Preview uses the same historical data — tradeoff is educational, not a guarantee. "
-                + DISCLAIMER
-            )
-
-        if apply:
-            st.session_state.holdings_df = pd.DataFrame(
-                core.holdings_records_from_weights(tickers, suggested_w, asset_types)
-            )
-            st.session_state.run_health = False
-            st.session_state.pop("health_result", None)
-            st.session_state.pop("health_result_fingerprint", None)
-            st.session_state.pop(preview_key, None)
-            st.success("Suggested allocation applied to Portfolio Inputs. Re-run **Analyze Portfolio** to refresh.")
-            st.rerun()
 
     # Step 6
     with st.container(border=True):

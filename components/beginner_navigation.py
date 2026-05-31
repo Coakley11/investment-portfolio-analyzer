@@ -6,7 +6,7 @@ import streamlit as st
 
 BEGINNER_TAB_LABELS = [
     "🧭 Getting Started",
-    "📋 Overview",
+    "🏠 Overview",
     "💼 Portfolio Inputs",
     "⚠️ Risk Analysis",
     "❤️ Portfolio Health",
@@ -14,7 +14,7 @@ BEGINNER_TAB_LABELS = [
     "🌎 Macro Analysis",
     "🎲 Monte Carlo",
     "⚙️ Optimizer",
-    "📈 Efficient Frontier",
+    "📊 Efficient Frontier",
     "🔬 Problem Lab",
 ]
 
@@ -33,12 +33,13 @@ ADVANCED_TAB_LABELS = [
 ]
 
 CHECKLIST_STEPS = [
-    ("goal", "Step 1: Choose your goal"),
-    ("portfolio", "Step 2: Load a suggested portfolio"),
-    ("analyze", "Step 3: Click Analyze Portfolio"),
-    ("health", "Step 4: Review Portfolio Health"),
-    ("recommendations", "Step 5: Review Recommendations"),
-    ("advanced", "Step 6: Explore advanced analysis"),
+    ("goal", "Step 1 — Choose Goal"),
+    ("invest", "Step 2 — Determine How Much To Invest"),
+    ("portfolio", "Step 3 — Build Portfolio"),
+    ("analyze", "Step 4 — Analyze Portfolio"),
+    ("health", "Step 5 — Review Health Score"),
+    ("recommendations", "Step 6 — Review Recommendations"),
+    ("implement", "Step 7 — Learn How To Implement"),
 ]
 
 OBJECTIVE_TO_PRESET: dict[str, str] = {
@@ -50,28 +51,57 @@ OBJECTIVE_TO_PRESET: dict[str, str] = {
     "short-term cash management": "Conservative",
 }
 
+PRESET_DISPLAY: dict[str, dict[str, str]] = {
+    "Conservative": {
+        "tab": "Conservative",
+        "tagline": "Lower bumps, more bonds and cash-like funds.",
+        "characteristics": "Smoother ride, slower growth potential.",
+    },
+    "Balanced": {
+        "tab": "Balanced",
+        "tagline": "Mix of stocks, bonds, and real estate.",
+        "characteristics": "Common long-term starting point.",
+    },
+    "Aggressive": {
+        "tab": "Growth",
+        "tagline": "Heavy stock exposure including growth (QQQ).",
+        "characteristics": "Higher growth potential, bigger swings.",
+    },
+    "Dividend Income": {
+        "tab": "Income",
+        "tagline": "Dividend ETFs, REITs, and bonds.",
+        "characteristics": "Income-oriented, moderate growth.",
+    },
+    "Retirement": {
+        "tab": "Retirement",
+        "tagline": "Diversified mix with more bonds than balanced.",
+        "characteristics": "Built for long-term saving with stability.",
+    },
+}
+
 
 def _checklist_state() -> dict[str, bool]:
     goal_done = bool(st.session_state.get("guide_goal_choice"))
+    invest_done = bool(st.session_state.get("investment_plan")) or bool(
+        st.session_state.get("plan_total_cash")
+    )
     portfolio_done = bool(st.session_state.get("preset_applied")) or st.session_state.get(
         "guide_portfolio_loaded", False
     )
     analyze_done = bool(st.session_state.get("run_health"))
-    health_done = analyze_done
-    rec_done = analyze_done and bool(st.session_state.get("health_result"))
-    advanced_done = bool(
-        st.session_state.get("visited_risk")
-        or st.session_state.get("visited_explain")
-        or st.session_state.get("visited_forward")
-        or st.session_state.get("experience") == "Advanced Mode"
+    health_done = bool(st.session_state.get("health_result"))
+    rec_done = health_done and bool(
+        st.session_state.get("health_result") and st.session_state.get("run_health")
     )
+    implement_done = bool(st.session_state.get("visited_implement"))
     return {
         "goal": goal_done,
+        "invest": invest_done,
         "portfolio": portfolio_done,
         "analyze": analyze_done,
         "health": health_done,
         "recommendations": rec_done,
-        "advanced": advanced_done,
+        "implement": implement_done,
     }
 
 
@@ -86,24 +116,51 @@ def _current_step_index() -> int:
 def get_recommended_next_step() -> tuple[str, str, str]:
     """Return (step_label, tab_hint, action_message)."""
     state = _checklist_state()
+    total = len(CHECKLIST_STEPS)
     if not state["goal"]:
-        return ("Step 1 of 6", "Getting Started", "Open the **🧭 Getting Started** tab and pick your goal.")
+        return (f"Step 1 of {total}", "Getting Started", "Open **🧭 Getting Started** and pick your goal.")
+    if not state["invest"]:
+        return (
+            f"Step 2 of {total}",
+            "Portfolio Inputs",
+            "Open **💼 Portfolio Inputs** → **How Much to Invest** and set your cash amounts.",
+        )
     if not state["portfolio"]:
-        return ("Step 2 of 6", "Portfolio Inputs", "Confirm your portfolio in **💼 Portfolio Inputs**.")
+        return (
+            f"Step 3 of {total}",
+            "Portfolio Inputs",
+            "Confirm your portfolio mix in **💼 Portfolio Inputs** or load a preset in Getting Started.",
+        )
     if not state["analyze"]:
-        return ("Step 3 of 6", "Overview", "Open **📋 Overview** and click **Analyze Portfolio**.")
+        return (
+            f"Step 4 of {total}",
+            "Overview",
+            "Open **🏠 Overview** and click **Analyze Portfolio**.",
+        )
     if not state["health"]:
-        return ("Step 4 of 6", "Portfolio Health", "Open **❤️ Portfolio Health** and review your score.")
+        return (
+            f"Step 5 of {total}",
+            "Portfolio Health",
+            "Open **❤️ Portfolio Health** and review your health score.",
+        )
     if not state["recommendations"]:
-        return ("Step 5 of 6", "Overview", "Read **Recommendations & why** on Overview or Portfolio Health.")
-    if not state["advanced"]:
-        return ("Step 6 of 6", "Explain Portfolio", "Optional: read **📄 Explain Portfolio** when ready.")
-    return ("All done", "Overview", "You're set! Revisit monthly: refresh market data and re-analyze.")
+        return (
+            f"Step 6 of {total}",
+            "Overview",
+            "Read **Recommendations & why** on Overview or Portfolio Health.",
+        )
+    if not state["implement"]:
+        return (
+            f"Step 7 of {total}",
+            "Portfolio Inputs",
+            "Open **💼 Portfolio Inputs** → **Implementation Guide** for how to invest in practice.",
+        )
+    return ("All done", "Overview", "You're set! Follow the monthly review checklist on Overview.")
 
 
 def render_beginner_sidebar_checklist() -> None:
     """Guided checklist in the sidebar for Beginner Mode."""
-    st.sidebar.markdown("### Your checklist")
+    st.sidebar.markdown("### Your journey")
     st.sidebar.caption("Follow these steps in order.")
     state = _checklist_state()
     current = _current_step_index()
@@ -123,6 +180,8 @@ def render_beginner_sidebar_checklist() -> None:
             f'<div style="{style}line-height:1.65;margin:0.2rem 0;">{icon} {label}</div>',
             unsafe_allow_html=True,
         )
+    if all(state.values()):
+        st.sidebar.success("All steps complete — great job!")
     st.sidebar.divider()
 
 
@@ -172,26 +231,35 @@ def render_recommended_next_step_card() -> bool:
     clicked = False
     with c1:
         if not state["goal"]:
-            if st.button("🧭 Open Getting Started", type="primary", use_container_width=True, key="cta_goal"):
+            if st.button("🧭 Choose Your Goal", type="primary", use_container_width=True, key="cta_goal"):
+                clicked = True
+        elif not state["invest"]:
+            if st.button("💰 Set Investment Amounts", type="primary", use_container_width=True, key="cta_invest"):
                 clicked = True
         elif not state["portfolio"]:
-            if st.button("💼 Review Portfolio Inputs", type="primary", use_container_width=True, key="cta_portfolio"):
+            if st.button("💼 Review Portfolio", type="primary", use_container_width=True, key="cta_portfolio"):
                 clicked = True
         elif not state["analyze"]:
             if st.button("📋 Analyze Portfolio Now", type="primary", use_container_width=True, key="cta_analyze"):
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
                 clicked = True
-        elif not state["recommendations"]:
+        elif not state["health"]:
             if st.button("❤️ Open Portfolio Health", type="primary", use_container_width=True, key="cta_health"):
                 clicked = True
+        elif not state["recommendations"]:
+            if st.button("📋 Read Recommendations", type="primary", use_container_width=True, key="cta_rec"):
+                clicked = True
+        elif not state["implement"]:
+            if st.button("📘 Open Implementation Guide", type="primary", use_container_width=True, key="cta_impl"):
+                st.session_state.visited_implement = True
+                clicked = True
         else:
-            if st.button("📄 Explain My Portfolio", type="secondary", use_container_width=True, key="cta_explain"):
-                st.session_state.visited_explain = True
+            if st.button("📅 View Monthly Routine", type="secondary", use_container_width=True, key="cta_monthly"):
                 clicked = True
     with c2:
-        if not state["analyze"] and state["portfolio"]:
-            st.caption("Tip: You can also click **Analyze Portfolio** on the Overview tab.")
-        elif state["analyze"] and not state["advanced"]:
-            st.caption("Optional — explore when you're comfortable with the basics.")
+        if state["analyze"] and not state["implement"]:
+            st.caption("Take your time — review suggestions before making any changes.")
+        elif all(state.values()):
+            st.caption("Revisit monthly: refresh data and re-analyze.")
     return clicked
