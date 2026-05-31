@@ -30,6 +30,7 @@ from components.beginner_navigation import (
 from components.beginner_copy import translate_for_beginner
 from components.getting_started_guide import PRESET_RATIONALE, render_getting_started_guide
 from components.guided_adjustment import render_guided_portfolio_adjustment
+from components.implementation_guide import render_implementation_guide
 from components.investment_planning import render_how_much_to_invest
 from components.macro_assumptions_guide import render_macro_assumptions_guide
 from components.macro_engine import (
@@ -944,10 +945,30 @@ def render_overview_tab(
             assumptions=macro_assumptions_from_session(),
             key_prefix="overview_guided",
         )
+        if beginner:
+            st.markdown("---")
+            render_implementation_guide(
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                settings=settings,
+                health=cached_health,
+                key_prefix="overview_impl",
+            )
     elif health_status == "settings_stale" and st.session_state.get("health_result"):
         st.warning("Recommendations may be outdated — refresh analysis to update.")
         stale_h = st.session_state.health_result
         render_recommendations_panel(stale_h, settings)
+        if beginner:
+            st.markdown("---")
+            render_implementation_guide(
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                settings=settings,
+                health=stale_h,
+                key_prefix="overview_impl_stale",
+            )
     else:
         if beginner and explanation.suggested_improvements:
             st.caption("Run **Analyze Portfolio** above for full Why? explanations tied to your metrics.")
@@ -959,6 +980,16 @@ def render_overview_tab(
             st.markdown("**Areas to watch**")
             for item in explanation.weaknesses[:3]:
                 st.markdown(f"- {item}")
+        if beginner:
+            st.markdown("---")
+            render_implementation_guide(
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                settings=settings,
+                health=None,
+                key_prefix="overview_impl_basic",
+            )
 
     # ── Priority 4: Performance ───────────────────────────────────────────────
     st.markdown("---")
@@ -1279,6 +1310,18 @@ export_buttons(
     base_risk_pack["risk_contrib"],
     report_text,
 )
+
+with tab_inputs:
+    if beginner_mode:
+        st.markdown("---")
+        render_implementation_guide(
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            settings=settings,
+            health=st.session_state.get("health_result"),
+            key_prefix="inputs_impl",
+        )
 
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
@@ -1606,6 +1649,17 @@ with tab_health:
             if col in reb_disp.columns:
                 reb_disp[col] = reb_disp[col].map(lambda x: _money(float(x)) if pd.notna(x) else "")
         st.dataframe(reb_disp, use_container_width=True, hide_index=True)
+
+        if beginner_mode:
+            st.markdown("---")
+            render_implementation_guide(
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                settings=settings,
+                health=health,
+                key_prefix="health_impl",
+            )
 
         if not beginner_mode:
             section_header("Category allocation ($)", "Current vs objective by asset category.")
