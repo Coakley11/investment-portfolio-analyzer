@@ -5,7 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 import portfolio_core as core
-from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode
+from components.beginner_copy import translate_for_beginner
+from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode, format_money
 
 DISCLAIMER = f"Model-based decision support for educational purposes. {APP_DISCLAIMER}"
 
@@ -63,18 +64,24 @@ def render_recommendation_detail(
     beginner: bool = True,
 ) -> None:
     st.markdown(f"**Recommendation {index + 1}**")
-    st.markdown(detail.text)
+    display_text = translate_for_beginner(detail.text) if beginner else detail.text
+    st.markdown(display_text)
 
     why_label = "Why am I seeing this?" if beginner else "Why? — model reasoning"
     with st.expander(why_label, expanded=False):
-        st.markdown(f"**Issue:** {detail.issue}")
-        st.markdown(f"**Why it matters:** {detail.why_it_matters}")
+        issue = translate_for_beginner(detail.issue) if beginner else detail.issue
+        why = translate_for_beginner(detail.why_it_matters) if beginner else detail.why_it_matters
+        st.markdown(f"**What is the issue?** {issue}")
+        st.markdown(f"**Why does it matter?** {why}")
+        st.markdown(f"**What might you consider?** {detail.possible_benefit}")
         st.markdown(f"**Triggered by:** {detail.triggered_by}")
-        st.markdown(f"**Possible benefit if reviewed:** {detail.possible_benefit}")
         if detail.evidence:
-            st.markdown("**Supporting metrics**")
+            st.markdown("**Supporting details**")
             for key, val in detail.evidence.items():
-                st.markdown(f"- {key}: `{val}`")
+                label = key
+                if beginner and key == "Approx. dollar amount":
+                    label = "About how much money is involved"
+                st.markdown(f"- {label}: `{val}`")
         st.caption(DISCLAIMER)
 
 

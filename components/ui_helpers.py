@@ -59,10 +59,6 @@ def what_why_do(title: str, what: str, why: str, action: str) -> None:
         st.markdown(f"**What should I do?** {action}")
 
 
-def clear_market_data_cache() -> None:
-    st.cache_data.clear()
-
-
 def refresh_market_data_sidebar() -> bool:
     """Sidebar control to refresh downloaded prices. Returns True if user clicked refresh."""
     st.sidebar.markdown("### Market data")
@@ -97,3 +93,18 @@ def refresh_market_data_sidebar() -> bool:
     if st.session_state.pop("market_data_refreshed", False):
         st.sidebar.success("Market data refreshed.")
     return clicked
+
+
+def format_money(x: float) -> str:
+    return f"${x:,.0f}"
+
+
+def add_value_column(df, weight_col: str, total_value: float, value_col: str = "Value ($)") -> "pd.DataFrame":
+    """Add dollar column from weight percentages and total portfolio value."""
+    import pandas as pd
+
+    out = df.copy()
+    if weight_col in out.columns:
+        out[value_col] = out[weight_col].astype(float) / 100.0 * total_value
+    return out
+

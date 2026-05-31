@@ -27,7 +27,10 @@ from components.beginner_navigation import (
     render_next_step_banner,
     render_recommended_next_step_card,
 )
+from components.beginner_copy import translate_for_beginner
 from components.getting_started_guide import PRESET_RATIONALE, render_getting_started_guide
+from components.guided_adjustment import render_guided_portfolio_adjustment
+from components.investment_planning import render_how_much_to_invest
 from components.macro_assumptions_guide import render_macro_assumptions_guide
 from components.macro_engine import (
     get_forward_projection,
@@ -485,9 +488,11 @@ def compute_monte_carlo(
     )
 
 
-def render_insights(insights: list[str]):
+def render_insights(insights: list[str], *, beginner: bool = False):
     for text in insights:
         plain = text.replace("**", "")
+        if beginner:
+            plain = translate_for_beginner(plain)
         st.markdown(f'<div class="insight-card">💡 {plain}</div>', unsafe_allow_html=True)
 
 
@@ -683,6 +688,20 @@ def render_sidebar() -> dict:
     refresh_market_data_sidebar()
 
     st.sidebar.divider()
+    st.sidebar.markdown("### Investment amount")
+    st.sidebar.caption("Used for dollar amounts across all tables and suggestions.")
+    if "sidebar_portfolio_value" not in st.session_state:
+        st.session_state.sidebar_portfolio_value = 100_000
+    initial_value = st.sidebar.number_input(
+        "Portfolio value ($)",
+        min_value=1_000,
+        max_value=10_000_000,
+        step=5_000,
+        help="Total investable amount for allocation dollar estimates.",
+        key="sidebar_portfolio_value",
+    )
+
+    st.sidebar.divider()
     st.sidebar.markdown("### Portfolio Presets")
     st.sidebar.caption("Load a ready-made mix into your portfolio.")
     preset_names = ["— custom —", *core.PORTFOLIO_PRESETS.keys()]
@@ -704,10 +723,6 @@ def render_sidebar() -> dict:
     with cb:
         end_date = st.date_input("End", value=end_default, help="Usually today — prices download automatically.")
 
-    initial_value = st.sidebar.number_input(
-        "Portfolio value ($)", 1_000, 100_000, 100_000, 5_000,
-        help="Used for dollar estimates in charts and projections.",
-    )
     risk_free = st.sidebar.slider(
         "Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25,
         help="Return on very safe assets like T-Bills. Used in risk/reward scores." if beginner
@@ -832,6 +847,7 @@ def render_overview_tab(
     returns: pd.DataFrame,
     weights: np.ndarray,
     tickers: list[str],
+    asset_types: list[str],
     base_risk_pack: dict,
 ) -> None:
     beginner = is_beginner_mode(settings)
@@ -916,15 +932,28 @@ def render_overview_tab(
     )
     if cached_health:
         render_recommendations_panel(cached_health, settings)
+        st.markdown("---")
+        render_guided_portfolio_adjustment(
+            cached_health,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            settings=settings,
+            metrics=metrics,
+            returns=returns,
+            assumptions=macro_assumptions_from_session(),
+        )
     elif health_status == "settings_stale" and st.session_state.get("health_result"):
         st.warning("Recommendations may be outdated — refresh analysis to update.")
-        render_recommendations_panel(st.session_state.health_result, settings)
+        stale_h = st.session_state.health_result
+        render_recommendations_panel(stale_h, settings)
     else:
         if beginner and explanation.suggested_improvements:
             st.caption("Run **Analyze Portfolio** above for full Why? explanations tied to your metrics.")
             for item in explanation.suggested_improvements[:5]:
-                st.markdown(f'<div class="insight-card">💡 {item.replace("**", "")}</div>', unsafe_allow_html=True)
-        render_insights(insights)
+                plain = translate_for_beginner(item.replace("**", "")) if beginner else item.replace("**", "")
+                st.markdown(f'<div class="insight-card">💡 {plain}</div>', unsafe_allow_html=True)
+        render_insights(insights, beginner=beginner)
         if explanation.weaknesses and beginner:
             st.markdown("**Areas to watch**")
             for item in explanation.weaknesses[:3]:
@@ -998,7 +1027,10 @@ def render_overview_tab(
     for reason in rec.rationale:
         st.markdown(f"- {reason}")
     rec_df = pd.DataFrame(rec.suggested_holdings)
-    st.dataframe(rec_df, use_container_width=True, hide_index=True)
+    rec_df["Value ($)"] = rec_df["Weight (%)"] / 100.0 * settings["initial_value"]
+    rec_display = rec_df.copy()
+    rec_display["Value ($)"] = rec_display["Value ($)"].map(_money)
+    st.dataframe(rec_display, use_container_width=True, hide_index=True)
     if st.button("Use this suggested portfolio", use_container_width=False, key="overview_apply_rec"):
         st.session_state.holdings_df = rec_df
         st.session_state.pop("health_summary", None)
@@ -1169,6 +1201,10 @@ with tab_inputs:
             "The app downloads prices for these tickers automatically — no upload needed.",
             "Pick a preset in the sidebar or use the Guide, then make sure weights add to 100%.",
         )
+    st.markdown("---")
+    render_how_much_to_invest(settings)
+    st.markdown("---")
+    st.markdown("#### Your allocation (percentages)")
     edited = st.data_editor(
         st.session_state.holdings_df,
         num_rows="dynamic",
@@ -1186,6 +1222,12 @@ with tab_inputs:
     ws = edited["Weight (%)"].fillna(0).sum()
     if abs(ws - 100) > 0.5:
         st.warning(f"Weights sum to **{ws:.1f}%** — auto-normalized in calculations.")
+    pv = float(settings["initial_value"])
+    alloc_preview = edited.copy()
+    alloc_preview["Value ($)"] = (alloc_preview["Weight (%)"].fillna(0) / 100.0 * pv).map(_money)
+    st.markdown("#### Dollar amounts (based on portfolio value)")
+    st.caption(f"Using **{_money(pv)}** from the sidebar — change it to update all dollar amounts.")
+    st.dataframe(alloc_preview, use_container_width=True, hide_index=True)
 
 try:
     tickers, weights, asset_types = parse_holdings(st.session_state.holdings_df)
@@ -1204,6 +1246,7 @@ with st.spinner("Loading market data and running analytics…"):
             returns, weights, settings["risk_free"], settings["initial_value"], benchmark_rets=bench_rets
         )
         growth = core.portfolio_growth_series(returns, weights, settings["initial_value"])
+        st.session_state.plan_compare_return = metrics.annual_return
     except Exception as ex:
         st.error(f"Analysis failed: {ex}")
         st.stop()
@@ -1540,15 +1583,41 @@ with tab_health:
         )
         render_recommendations_panel(health, settings)
 
+        st.markdown("---")
+        render_guided_portfolio_adjustment(
+            health,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            settings=settings,
+            metrics=metrics,
+            returns=returns,
+            assumptions=macro_assumptions_from_session(),
+        )
+
+        section_header(
+            "Rebalance guidance ($ and %)",
+            "Current vs objective with dollar changes — educational, not financial advice.",
+        )
+        reb_disp = health.rebalance_df.copy()
+        for col in ("Current ($)", "Objective ($)", "Recommended ($)", "Dollar Change ($)"):
+            if col in reb_disp.columns:
+                reb_disp[col] = reb_disp[col].map(lambda x: _money(float(x)) if pd.notna(x) else "")
+        st.dataframe(reb_disp, use_container_width=True, hide_index=True)
+
         if not beginner_mode:
-            section_header("Rebalance table", "Weight drift vs objective, optimizer, and recommended mixes.")
-            st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
+            section_header("Category allocation ($)", "Current vs objective by asset category.")
+            cat_disp = health.allocation_compare_df.copy()
+            for col in cat_disp.columns:
+                if "($)" in col:
+                    cat_disp[col] = cat_disp[col].map(lambda x: _money(float(x)) if pd.notna(x) else x)
+            st.dataframe(cat_disp, use_container_width=True, hide_index=True)
             section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
             for note in health.macro_fit:
                 st.markdown(f"- {note}")
-        elif any(health.rebalance_df["Model Note"] != "Within tolerance"):
-            with st.expander("View rebalance detail table (optional)", expanded=False):
-                st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
+        elif any(health.rebalance_df.get("Model Note", pd.Series()) != "Within tolerance"):
+            with st.expander("Category allocation detail (optional)", expanded=False):
+                st.dataframe(health.allocation_compare_df, use_container_width=True, hide_index=True)
 
         charts_label = "Detailed charts (optional)" if beginner_mode else "Visual Portfolio Diagnostics"
         with st.expander(charts_label, expanded=not beginner_mode):
@@ -1628,6 +1697,7 @@ with tab_overview:
         returns,
         weights,
         tickers,
+        asset_types,
         base_risk_pack,
     )
 
@@ -1870,8 +1940,9 @@ with tab_opt:
             {"Metric": "Volatility", "Value": _pct(res.volatility)},
             {"Metric": "Sharpe", "Value": f"{res.sharpe_ratio:.2f}"},
         ]
+        pv = settings["initial_value"]
         for t, w in zip(tickers, res.weights):
-            rows.append({"Metric": t, "Value": _pct(w)})
+            rows.append({"Metric": t, "Value": f"{_pct(w)} · {_money(pv * w)}"})
         return pd.DataFrame(rows)
 
     if not beginner_mode and st.session_state.get("run_optimizer", False):

@@ -196,8 +196,8 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
             **What you should do now:**
 
             1. Open the **📋 Overview** tab (see the banner above the tabs).
-            2. Click the blue **Analyze Portfolio** button.
-            3. If numbers look old, click **Refresh Market Data** in the sidebar first.
+            2. In **💼 Portfolio Inputs**, review **How Much Should I Invest?** and your dollar amounts.
+            3. Click the blue **Analyze Portfolio** button.
             """
         )
         if st.button("Go to Overview & Analyze", type="primary", key="guide_analyze_cta"):

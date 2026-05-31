@@ -2221,6 +2221,13 @@ def evaluate_portfolio_health(
         f"This is model-based commentary for educational purposes — not financial advice."
     )
 
+    rebalance_df = enrich_rebalance_with_dollars(rebalance_df, initial_value)
+    alloc_compare = enrich_allocation_compare_with_dollars(alloc_compare, initial_value)
+    recommendation_details = enrich_recommendation_details_with_dollars(
+        recommendation_details, tickers, w, initial_value, obj_label
+    )
+    recommendations = [d.text for d in recommendation_details]
+
     return PortfolioHealthResult(
         score=score,
         score_label=score_label,
@@ -2240,3 +2247,198 @@ def evaluate_portfolio_health(
         macro_heatmap_df=macro_heatmap,
         score_breakdown=breakdown,
     )
+
+
+@dataclass(frozen=True)
+class InvestmentPlanResult:
+    total_available: float
+    suggested_emergency_reserve: float
+    short_term_cash_amount: float
+    debt_reserve: float
+    amount_potentially_investable: float
+    long_term_suggested: float
+    short_term_investable: float
+    monthly_contribution: float
+    summary_lines: list[str]
+    educational_notes: list[str]
+
+
+def compute_investment_plan(
+    total_available: float,
+    emergency_fund_needed: float,
+    money_needed_1_2_years: float,
+    existing_debt_obligations: float,
+    planned_large_expenses: float,
+    horizon_years: int,
+    risk_tolerance: str,
+    monthly_contribution: float = 0.0,
+) -> InvestmentPlanResult:
+    """Educational estimate of how much cash may be available to invest."""
+    emergency = max(0.0, float(emergency_fund_needed))
+    short_term = max(0.0, float(money_needed_1_2_years) + float(planned_large_expenses))
+    debt = max(0.0, float(existing_debt_obligations))
+    total = max(0.0, float(total_available))
+    reserved = emergency + short_term + debt
+    investable = max(0.0, total - reserved)
+
+    if horizon_years <= 2:
+        long_pct = 0.30
+    elif horizon_years <= 5:
+        long_pct = 0.60
+    else:
+        long_pct = 0.85
+    risk_adj = {"Low": -0.12, "Medium": 0.0, "High": 0.05}.get(risk_tolerance, 0.0)
+    long_pct = float(np.clip(long_pct + risk_adj, 0.20, 0.92))
+
+    long_term = investable * long_pct
+    short_term_inv = investable - long_term
+
+    summary = [
+        f"Total available: ${total:,.0f}",
+        f"Suggested emergency reserve: ${emergency:,.0f}",
+        f"Short-term needs (1–2 years + planned expenses): ${short_term:,.0f}",
+        f"Debt / obligations set aside: ${debt:,.0f}",
+        f"Amount potentially available to invest: ${investable:,.0f}",
+        f"Model suggests for long-term investing: ${long_term:,.0f}",
+        f"Model suggests for shorter-term / safer sleeve: ${short_term_inv:,.0f}",
+    ]
+    if monthly_contribution > 0:
+        summary.append(f"Optional monthly contribution noted: ${monthly_contribution:,.0f}/month")
+
+    notes = [
+        "Based on these inputs, the model suggests separating money you may need soon from long-term investable amounts.",
+        "Consider keeping short-term needs in cash or T-bill style assets — educational estimate only.",
+        "This is for educational purposes only, not financial advice.",
+    ]
+    return InvestmentPlanResult(
+        total_available=total,
+        suggested_emergency_reserve=emergency,
+        short_term_cash_amount=short_term,
+        debt_reserve=debt,
+        amount_potentially_investable=investable,
+        long_term_suggested=long_term,
+        short_term_investable=short_term_inv,
+        monthly_contribution=float(monthly_contribution),
+        summary_lines=summary,
+        educational_notes=notes,
+    )
+
+
+def enrich_rebalance_with_dollars(rebalance_df: pd.DataFrame, initial_value: float) -> pd.DataFrame:
+    """Add dollar columns and change guidance to rebalance table."""
+    if rebalance_df.empty or initial_value <= 0:
+        return rebalance_df
+    out = rebalance_df.copy()
+    pct_cols = {
+        "Current (%)": "Current ($)",
+        "Objective (%)": "Objective ($)",
+        "Optimizer (%)": "Optimizer ($)",
+        "Recommended (%)": "Recommended ($)",
+    }
+    for pct_col, dollar_col in pct_cols.items():
+        if pct_col in out.columns:
+            out[dollar_col] = (out[pct_col] / 100.0 * initial_value).round(0)
+
+    if "Current (%)" in out.columns and "Objective (%)" in out.columns:
+        out["Change (pp)"] = (out["Objective (%)"] - out["Current (%)"]).round(1)
+        out["Dollar Change ($)"] = (out["Change (pp)"] / 100.0 * initial_value).round(0)
+        notes = []
+        for _, row in out.iterrows():
+            ch_pp = float(row["Change (pp)"])
+            ch_d = float(row["Dollar Change ($)"])
+            if abs(ch_pp) < 1.0:
+                notes.append("Within tolerance")
+            elif ch_pp < 0:
+                notes.append(
+                    f"Consider reducing {row['Ticker']} by {abs(ch_pp):.1f} pp, about ${abs(ch_d):,.0f}."
+                )
+            else:
+                notes.append(
+                    f"Consider increasing {row['Ticker']} by {ch_pp:.1f} pp, about ${ch_d:,.0f}."
+                )
+        out["Dollar Guidance"] = notes
+    return out
+
+
+def enrich_allocation_compare_with_dollars(alloc_df: pd.DataFrame, initial_value: float) -> pd.DataFrame:
+    if alloc_df.empty or initial_value <= 0:
+        return alloc_df
+    out = alloc_df.copy()
+    for pct_col in ("Current (%)", "Objective (%)", "Recommended (%)"):
+        if pct_col in out.columns:
+            out[pct_col.replace("(%)", "($)")] = (out[pct_col] / 100.0 * initial_value).round(0)
+    return out
+
+
+def enrich_recommendation_details_with_dollars(
+    details: list[RecommendationDetail],
+    tickers: list[str],
+    weights: np.ndarray,
+    initial_value: float,
+    objective_label: str,
+) -> list[RecommendationDetail]:
+    """Add dollar context to recommendation copy when portfolio value is known."""
+    if initial_value <= 0:
+        return details
+    w = normalize_weights(weights)
+    enriched: list[RecommendationDetail] = []
+    for d in details:
+        ev = dict(d.evidence)
+        top_t = ev.get("Largest holding") or ev.get("Ticker")
+        if top_t and top_t in tickers:
+            idx = tickers.index(top_t)
+            pct = w[idx] * 100
+            dollars = initial_value * w[idx]
+            ev["Approx. dollar amount"] = f"${dollars:,.0f} ({pct:.1f}%)"
+        text = d.text
+        if top_t and ("Largest holding" in d.issue or "concentration" in d.issue.lower()):
+            text = (
+                f"{top_t} is about {w[tickers.index(top_t)] * 100:.1f}% of your portfolio "
+                f"(~${initial_value * w[tickers.index(top_t)]:,.0f}). "
+                f"The model suggests reviewing whether concentration fits your {objective_label} goal."
+            )
+        enriched.append(
+            RecommendationDetail(
+                text=text,
+                issue=d.issue,
+                why_it_matters=d.why_it_matters,
+                triggered_by=d.triggered_by,
+                possible_benefit=d.possible_benefit,
+                evidence=ev,
+            )
+        )
+    return enriched
+
+
+def suggested_weights_from_rebalance(
+    rebalance_df: pd.DataFrame,
+    tickers: list[str],
+    current_weights: np.ndarray,
+    *,
+    target_column: str = "Objective (%)",
+) -> np.ndarray:
+    """Build weight vector from rebalance table target column."""
+    w = normalize_weights(current_weights)
+    if target_column not in rebalance_df.columns:
+        return w
+    lookup = {row["Ticker"]: row[target_column] / 100.0 for _, row in rebalance_df.iterrows()}
+    new_w = np.array([lookup.get(t, w[i]) for i, t in enumerate(tickers)], dtype=float)
+    if new_w.sum() <= 0:
+        return w
+    return normalize_weights(new_w)
+
+
+def holdings_records_from_weights(
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+) -> list[dict]:
+    w = normalize_weights(weights)
+    return [
+        {
+            "Ticker": tickers[i],
+            "Weight (%)": round(float(w[i]) * 100, 1),
+            "Asset Type": asset_types[i] if i < len(asset_types) else "Equity",
+        }
+        for i in range(len(tickers))
+    ]
