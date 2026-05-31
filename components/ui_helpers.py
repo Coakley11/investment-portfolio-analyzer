@@ -88,6 +88,8 @@ def refresh_market_data_sidebar() -> bool:
             "run_optimizer",
             "run_frontier",
             "health_summary",
+            "health_result",
+            "health_result_fingerprint",
         ):
             st.session_state.pop(key, None)
         st.session_state.market_data_refreshed = True

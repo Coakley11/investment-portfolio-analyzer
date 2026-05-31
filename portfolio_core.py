@@ -177,6 +177,24 @@ class ForwardProjectionResult:
 
 
 @dataclass(frozen=True)
+class RecommendationDetail:
+    text: str
+    issue: str
+    why_it_matters: str
+    triggered_by: str
+    possible_benefit: str
+    evidence: dict[str, str]
+
+
+@dataclass(frozen=True)
+class PortfolioActionPlan:
+    headline: str
+    today: list[str]
+    this_month: list[str]
+    this_year: list[str]
+
+
+@dataclass(frozen=True)
 class PortfolioHealthResult:
     score: float
     score_label: str
@@ -185,6 +203,8 @@ class PortfolioHealthResult:
     whats_working: list[str]
     whats_not_working: list[str]
     recommendations: list[str]
+    recommendation_details: list[RecommendationDetail]
+    action_plan: PortfolioActionPlan
     macro_fit: list[str]
     rebalance_df: pd.DataFrame
     return_contrib_df: pd.DataFrame
@@ -1606,6 +1626,91 @@ def _objective_type_targets(objective: str) -> dict[str, float]:
     return OBJECTIVE_ALLOCATIONS.get(key, OBJECTIVE_ALLOCATIONS["balanced growth"])
 
 
+def _make_rec_detail(
+    text: str,
+    issue: str,
+    why_it_matters: str,
+    triggered_by: str,
+    possible_benefit: str,
+    evidence: dict[str, str],
+) -> RecommendationDetail:
+    return RecommendationDetail(
+        text=text,
+        issue=issue,
+        why_it_matters=why_it_matters,
+        triggered_by=triggered_by,
+        possible_benefit=possible_benefit,
+        evidence=evidence,
+    )
+
+
+def _build_portfolio_action_plan(
+    score: float,
+    objective: str,
+    recommendation_details: list[RecommendationDetail],
+    profile: dict,
+    recession_prob: float,
+    avg_drift: float,
+    max_w: float,
+) -> PortfolioActionPlan:
+    obj_label = objective.strip().replace("_", " ").title()
+    urgent = any(
+        d.issue.lower().startswith(("portfolio concentration", "recession", "drawdown", "objective"))
+        for d in recommendation_details
+        if not d.text.lower().startswith("no urgent")
+    )
+
+    if score >= 75 and not urgent:
+        headline = f"Your portfolio is currently aligned with your {obj_label} objective."
+    elif score >= 55:
+        headline = f"Your portfolio is moderately aligned with your {obj_label} objective — a review may help."
+    else:
+        headline = f"Your portfolio may need attention to stay aligned with your {obj_label} objective."
+
+    today: list[str] = []
+    if score >= 75 and not urgent:
+        today.append(f"Portfolio Health Score: {score:.0f}/100 — no immediate model flags.")
+        today.append("Skim your status summary and confirm holdings still match your plan.")
+        today.append("No immediate changes are suggested by the model.")
+    else:
+        today.append(f"Portfolio Health Score: {score:.0f}/100 — review flagged items below.")
+        today.append("Open each recommendation and read **Why?** to see what triggered it.")
+        if recession_prob >= 0.45:
+            today.append(f"Recession probability is elevated ({recession_prob * 100:.0f}%) in your macro settings.")
+        if max_w >= 0.35:
+            today.append(
+                f"Largest holding concentration is {max_w * 100:.0f}% ({profile['top_ticker']}) — worth reviewing."
+            )
+        today.append("Based on the model, it may be worth reviewing allocation and diversification.")
+
+    this_month: list[str] = [
+        "Click **Refresh Market Data** in the sidebar, then rerun **Portfolio Health**.",
+        "Compare your Portfolio Health Score to last month — note any drop of 5+ points.",
+    ]
+    if avg_drift >= 0.05:
+        this_month.append("Check allocation drift vs. your objective — rebalance suggestions may apply.")
+    else:
+        this_month.append("Confirm weights have not drifted far from your target mix.")
+    if urgent:
+        this_month.append("Review at least one recommendation below and its tradeoffs before making changes.")
+    else:
+        this_month.append("Continue monitoring monthly; no rebalance required unless drift appears.")
+
+    this_year: list[str] = [
+        f"Reassess whether **{obj_label}** still matches your life goals and timeline.",
+        "Review your comfort with ups and downs — has your risk tolerance changed?",
+        "Update sidebar assumptions (portfolio value, date range, macro settings) if your situation changed.",
+        "Rerun Portfolio Health after major market moves or life events.",
+    ]
+
+    return PortfolioActionPlan(
+        headline=headline,
+        today=today,
+        this_month=this_month,
+        this_year=this_year,
+    )
+
+
 def evaluate_portfolio_health(
     tickers: list[str],
     weights: np.ndarray,
@@ -1782,45 +1887,181 @@ def evaluate_portfolio_health(
     if not whats_not:
         whats_not.append("No major model flags detected — continue monitoring drift and macro assumptions.")
 
-    # ── Recommendations (rule-based, educational) ──
-    recommendations: list[str] = []
+    # ── Recommendations (rule-based, educational) with transparent reasoning ──
+    recommendation_details: list[RecommendationDetail] = []
     obj_key = objective.strip().lower()
+    obj_label = objective.strip().replace("_", " ").title()
+    equity_pct = float(profile["equity"]) * 100
+    bond_cash_pct = (float(profile["bonds"]) + float(profile["tbills"])) * 100
+    long_bond_pct = float(profile["long_duration_bonds"]) * 100
 
     if recession_prob > 0.50 and float(profile["equity"]) > 0.70:
-        recommendations.append(
-            "Based on the model, recession probability above 50% with equity above 70% may be worth reviewing for equity exposure."
+        recommendation_details.append(
+            _make_rec_detail(
+                "Based on the model, recession probability above 50% with equity above 70% may be worth reviewing for equity exposure.",
+                issue="High equity exposure during elevated recession risk.",
+                why_it_matters="When recession probability is high, equity-heavy portfolios may experience larger stress in the model.",
+                triggered_by=f"Recession probability = {recession_prob * 100:.0f}% and equity allocation = {equity_pct:.0f}%.",
+                possible_benefit="Reviewing equity exposure may reduce modeled sensitivity to a downturn.",
+                evidence={
+                    "Recession probability": f"{recession_prob * 100:.0f}%",
+                    "Equity allocation": f"{equity_pct:.0f}%",
+                    "Portfolio objective": obj_label,
+                    "Portfolio Health Score": f"{score:.0f}/100",
+                },
+            )
         )
     if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.20:
-        recommendations.append(
-            "High inflation assumptions combined with long-duration bonds may warrant reviewing bond sensitivity (for educational purposes)."
+        recommendation_details.append(
+            _make_rec_detail(
+                "High inflation assumptions combined with long-duration bonds may warrant reviewing bond sensitivity (for educational purposes).",
+                issue="Long-duration bond exposure under high-inflation assumptions.",
+                why_it_matters="Longer-maturity bonds can be more sensitive to inflation and rate changes in stress models.",
+                triggered_by=f"Inflation assumption = High Inflation; long-duration bonds = {long_bond_pct:.0f}%.",
+                possible_benefit="Reviewing bond duration mix may improve resilience under high-inflation scenarios.",
+                evidence={
+                    "Inflation assumption": assumptions.inflation,
+                    "Long-duration bonds": f"{long_bond_pct:.0f}%",
+                    "Bond/cash allocation": f"{bond_cash_pct:.0f}%",
+                },
+            )
         )
     if metrics.sharpe_ratio < 0.4:
-        recommendations.append(
-            "Sharpe ratio below 0.4 suggests risk-adjusted return may be weak — consider reviewing the risk/return mix."
+        recommendation_details.append(
+            _make_rec_detail(
+                "Sharpe ratio below 0.4 suggests risk-adjusted return may be weak — consider reviewing the risk/return mix.",
+                issue="Risk-adjusted return appears weak in the model.",
+                why_it_matters="You may be taking risk without commensurate return relative to the risk-free rate.",
+                triggered_by=f"Sharpe ratio = {metrics.sharpe_ratio:.2f} (below 0.4 threshold).",
+                possible_benefit="Adjusting the mix may improve return per unit of risk taken.",
+                evidence={
+                    "Sharpe ratio": f"{metrics.sharpe_ratio:.2f}",
+                    "Annual return": f"{metrics.annual_return * 100:.1f}%",
+                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                },
+            )
         )
     if metrics.max_drawdown < -0.25:
-        recommendations.append(
-            "Max drawdown worse than -25% flags drawdown risk in the historical window — may be worth reviewing defensive buffers."
+        recommendation_details.append(
+            _make_rec_detail(
+                "Max drawdown worse than -25% flags drawdown risk in the historical window — may be worth reviewing defensive buffers.",
+                issue="Historical drawdown risk is elevated.",
+                why_it_matters="Large past drops may indicate the portfolio could fall sharply again in stress periods.",
+                triggered_by=f"Max drawdown = {metrics.max_drawdown * 100:.1f}% (worse than -25%).",
+                possible_benefit="Adding stabilizers (bonds/cash) or reducing risk assets may lower drawdown severity in the model.",
+                evidence={
+                    "Max drawdown": f"{metrics.max_drawdown * 100:.1f}%",
+                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                    "Beta vs SPY": f"{metrics.beta_spy:.2f}",
+                },
+            )
         )
     if max_w > 0.35:
-        recommendations.append(
-            f"Largest holding exceeds 35% ({profile['top_ticker']}) — concentration risk may deserve attention."
+        recommendation_details.append(
+            _make_rec_detail(
+                f"Largest holding exceeds 35% ({profile['top_ticker']}) — concentration risk may deserve attention.",
+                issue="Portfolio concentration is high.",
+                why_it_matters="A large position in one asset can increase risk if that holding falls sharply.",
+                triggered_by=f"Largest holding = {profile['top_ticker']} at {max_w * 100:.1f}%.",
+                possible_benefit="Greater diversification and lower concentration risk.",
+                evidence={
+                    "Largest holding": profile["top_ticker"],
+                    "Largest holding weight": f"{max_w * 100:.1f}%",
+                    "Equity allocation": f"{equity_pct:.0f}%",
+                    "Portfolio objective": obj_label,
+                },
+            )
         )
     if obj_key == "short-term cash management" and float(profile["equity"]) > 0.40:
-        recommendations.append(
-            "For a short-term cash objective, equity above 40% may not align with the selected objective in this model."
+        recommendation_details.append(
+            _make_rec_detail(
+                "For a short-term cash objective, equity above 40% may not align with the selected objective in this model.",
+                issue="Equity weight may exceed short-term cash objective.",
+                why_it_matters="Short-term goals often prioritize stability over growth in this framework.",
+                triggered_by=f"Portfolio objective = {obj_label}; equity allocation = {equity_pct:.0f}%.",
+                possible_benefit="Aligning equity with the objective may reduce unwanted volatility for near-term needs.",
+                evidence={
+                    "Portfolio objective": obj_label,
+                    "Equity allocation": f"{equity_pct:.0f}%",
+                    "T-Bills/cash allocation": f"{float(profile['tbills']) * 100:.0f}%",
+                },
+            )
         )
     if metrics.sortino_ratio < 0.35:
-        recommendations.append("Sortino ratio is low — downside volatility may be elevated relative to return.")
-    if metrics.beta_spy > 1.15:
-        recommendations.append("Beta above 1.15 vs SPY suggests higher market sensitivity than the benchmark.")
-    if bond_min_pct is not None and (float(profile["bonds"]) + float(profile["tbills"])) * 100 < bond_min_pct:
-        recommendations.append(
-            f"Bond/cash allocation is below the selected minimum constraint ({bond_min_pct:.0f}%) — may be worth reviewing."
+        recommendation_details.append(
+            _make_rec_detail(
+                "Sortino ratio is low — downside volatility may be elevated relative to return.",
+                issue="Downside risk appears elevated vs. return.",
+                why_it_matters="Bad drops may outweigh gains relative to what the model considers acceptable.",
+                triggered_by=f"Sortino ratio = {metrics.sortino_ratio:.2f} (below 0.35).",
+                possible_benefit="Reviewing defensive assets or diversification may reduce downside swings.",
+                evidence={
+                    "Sortino ratio": f"{metrics.sortino_ratio:.2f}",
+                    "Max drawdown": f"{metrics.max_drawdown * 100:.1f}%",
+                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                },
+            )
         )
-    if not recommendations:
-        recommendations.append(
-            "No urgent model flags — continue monitoring allocation drift and macro assumptions."
+    if metrics.beta_spy > 1.15:
+        recommendation_details.append(
+            _make_rec_detail(
+                "Beta above 1.15 vs SPY suggests higher market sensitivity than the benchmark.",
+                issue="Portfolio moves more than the broad market.",
+                why_it_matters="In market downturns, a high-beta portfolio may fall more than SPY.",
+                triggered_by=f"Beta vs SPY = {metrics.beta_spy:.2f} (above 1.15).",
+                possible_benefit="Adding lower-beta assets may reduce market-linked swings.",
+                evidence={
+                    "Beta vs SPY": f"{metrics.beta_spy:.2f}",
+                    "Equity allocation": f"{equity_pct:.0f}%",
+                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                },
+            )
+        )
+    if bond_min_pct is not None and (float(profile["bonds"]) + float(profile["tbills"])) * 100 < bond_min_pct:
+        recommendation_details.append(
+            _make_rec_detail(
+                f"Bond/cash allocation is below the selected minimum constraint ({bond_min_pct:.0f}%) — may be worth reviewing.",
+                issue="Bond/cash weight is below your stated minimum.",
+                why_it_matters="Your constraint signals desired stability that the current mix may not meet.",
+                triggered_by=f"Bond/cash = {bond_cash_pct:.0f}% vs minimum = {bond_min_pct:.0f}%.",
+                possible_benefit="Raising bond/cash toward your minimum may improve stability in the model.",
+                evidence={
+                    "Bond/cash allocation": f"{bond_cash_pct:.0f}%",
+                    "Minimum constraint": f"{bond_min_pct:.0f}%",
+                    "Portfolio objective": obj_label,
+                },
+            )
+        )
+    if max_corr >= 0.80:
+        recommendation_details.append(
+            _make_rec_detail(
+                "Some holdings appear highly correlated — diversification benefits may be limited.",
+                issue="Holdings move together more than ideal.",
+                why_it_matters="If assets rise and fall together, the portfolio may not be as diversified as it looks.",
+                triggered_by=f"Maximum pairwise correlation ≈ {max_corr:.2f} (≥ 0.80).",
+                possible_benefit="Adding less-correlated assets may smooth combined volatility.",
+                evidence={
+                    "Max correlation": f"{max_corr:.2f}",
+                    "Number of holdings": str(len(tickers)),
+                    "Portfolio objective": obj_label,
+                },
+            )
+        )
+
+    if not recommendation_details:
+        recommendation_details.append(
+            _make_rec_detail(
+                "No urgent model flags — continue monitoring allocation drift and macro assumptions.",
+                issue="No urgent model flags detected.",
+                why_it_matters="Regular checkups help catch drift before it becomes a larger gap from your plan.",
+                triggered_by=f"Portfolio Health Score = {score:.0f}/100 with no rule triggers active.",
+                possible_benefit="Staying on your current plan while monitoring monthly.",
+                evidence={
+                    "Portfolio Health Score": f"{score:.0f}/100",
+                    "Portfolio objective": obj_label,
+                    "Recession probability": f"{recession_prob * 100:.0f}%",
+                },
+            )
         )
 
     # ── Macro fit commentary ──
@@ -1903,6 +2144,43 @@ def evaluate_portfolio_health(
         )
     rebalance_df = pd.DataFrame(rebalance_rows)
 
+    for row in rebalance_rows:
+        note = row["Model Note"]
+        if not note or note == "Within tolerance":
+            continue
+        ticker = row["Ticker"]
+        recommendation_details.append(
+            _make_rec_detail(
+                note,
+                issue="Portfolio weight drifted from a reference mix.",
+                why_it_matters="Drift can push your portfolio away from the risk profile you selected or modeled.",
+                triggered_by=(
+                    f"{ticker}: current {row['Current (%)']}% vs objective {row['Objective (%)']}% "
+                    f"(drift {row['Drift vs Objective (%)']:+.1f}%)."
+                ),
+                possible_benefit="Rebalancing toward reference weights may restore intended diversification and risk balance.",
+                evidence={
+                    "Ticker": ticker,
+                    "Current weight": f"{row['Current (%)']}%",
+                    "Objective weight": f"{row['Objective (%)']}%",
+                    "Optimizer weight": f"{row['Optimizer (%)']}%",
+                    "Drift vs objective": f"{row['Drift vs Objective (%)']:+.1f}%",
+                    "Portfolio objective": obj_label,
+                },
+            )
+        )
+    recommendations = [d.text for d in recommendation_details]
+
+    action_plan = _build_portfolio_action_plan(
+        score=score,
+        objective=objective,
+        recommendation_details=recommendation_details,
+        profile=profile,
+        recession_prob=recession_prob,
+        avg_drift=avg_drift,
+        max_w=max_w,
+    )
+
     alloc_compare = pd.DataFrame(
         {
             "Category": ["Equity", "Bonds", "T-Bills"],
@@ -1951,6 +2229,8 @@ def evaluate_portfolio_health(
         whats_working=whats_working,
         whats_not_working=whats_not,
         recommendations=recommendations,
+        recommendation_details=recommendation_details,
+        action_plan=action_plan,
         macro_fit=macro_fit,
         rebalance_df=rebalance_df,
         return_contrib_df=ret_contrib,

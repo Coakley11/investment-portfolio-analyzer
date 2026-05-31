@@ -14,7 +14,27 @@ import streamlit as st
 
 import dashboard_charts as charts
 import portfolio_core as core
-from components.getting_started_guide import render_getting_started_guide
+from components.decision_coach import (
+    render_action_plan,
+    render_action_plan_placeholder,
+    render_recommendations_panel,
+)
+from components.beginner_navigation import (
+    ADVANCED_TAB_LABELS,
+    BEGINNER_TAB_LABELS,
+    OBJECTIVE_TO_PRESET,
+    render_beginner_sidebar_checklist,
+    render_next_step_banner,
+    render_recommended_next_step_card,
+)
+from components.getting_started_guide import PRESET_RATIONALE, render_getting_started_guide
+from components.macro_assumptions_guide import render_macro_assumptions_guide
+from components.macro_engine import (
+    get_forward_projection,
+    health_settings_fingerprint,
+    macro_assumption_summary,
+    macro_assumptions_from_session,
+)
 from components.problem_solving import render_problem_solving_lab
 from components.ui_helpers import (
     APP_DISCLAIMER as UI_DISCLAIMER,
@@ -253,21 +273,33 @@ st.markdown(
         color: #cbd5e1;
     }
     div[data-baseweb="tab-list"] {
-        gap: 0.35rem;
-        border-bottom: 1px solid var(--dc-border);
-        margin-bottom: 0.35rem;
+        gap: 0.5rem;
+        border-bottom: 2px solid var(--dc-border);
+        margin-bottom: 0.5rem;
+        flex-wrap: wrap;
+        padding-bottom: 0.15rem;
     }
     button[data-baseweb="tab"] {
-        background-color: transparent;
-        border-radius: 8px 8px 0 0;
+        background-color: rgba(20, 28, 43, 0.6);
+        border-radius: 10px 10px 0 0;
         color: #94a3b8;
         font-weight: 500;
+        font-size: 0.88rem;
+        padding: 0.55rem 0.85rem;
+        border: 1px solid transparent;
+        min-height: 2.5rem;
+    }
+    button[data-baseweb="tab"]:hover {
+        color: #e2e8f0;
+        background-color: rgba(26, 40, 64, 0.85);
     }
     button[data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(180deg, #1a2840 0%, #152238 100%);
+        background: linear-gradient(180deg, #1e3a5f 0%, #152238 100%);
         color: #f8fafc;
-        border: 1px solid var(--dc-border);
+        border: 1px solid var(--dc-accent);
         border-bottom-color: transparent;
+        font-weight: 600;
+        box-shadow: 0 -2px 12px rgba(77, 163, 255, 0.15);
     }
     [data-testid="stDataFrame"], [data-testid="stTable"] {
         border: 1px solid #2a3a52;
@@ -489,22 +521,48 @@ def _portfolio_fingerprint(tickers: list[str], weights: np.ndarray) -> str:
     return "|".join(f"{t}:{w[i]:.4f}" for i, t in enumerate(tickers))
 
 
+def get_health_cache_status(tickers: list[str], weights: np.ndarray) -> str:
+    """fresh | missing | portfolio_stale | settings_stale"""
+    if not st.session_state.get("health_result"):
+        return "missing"
+    if st.session_state.get("health_result_fingerprint") != _portfolio_fingerprint(tickers, weights):
+        return "portfolio_stale"
+    if st.session_state.get("health_settings_fingerprint") != health_settings_fingerprint():
+        return "settings_stale"
+    return "fresh"
+
+
 def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str], weights: np.ndarray) -> None:
+    fp = _portfolio_fingerprint(tickers, weights)
+    settings_fp = health_settings_fingerprint()
     st.session_state.health_summary = {
         "score": float(health.score),
         "score_label": health.score_label,
         "score_color": health.score_color,
-        "fingerprint": _portfolio_fingerprint(tickers, weights),
+        "fingerprint": fp,
+        "settings_fingerprint": settings_fp,
     }
+    st.session_state.health_result = health
+    st.session_state.health_result_fingerprint = fp
+    st.session_state.health_settings_fingerprint = settings_fp
+
+
+def get_cached_health(tickers: list[str], weights: np.ndarray) -> core.PortfolioHealthResult | None:
+    if get_health_cache_status(tickers, weights) != "fresh":
+        return None
+    return st.session_state.get("health_result")
 
 
 def get_health_badge_state(tickers: list[str], weights: np.ndarray) -> tuple[str, dict | None]:
+    status = get_health_cache_status(tickers, weights)
     summary = st.session_state.get("health_summary")
-    if not summary:
-        return "missing", None
-    if summary.get("fingerprint") != _portfolio_fingerprint(tickers, weights):
+    if status == "fresh" and summary:
+        return "ok", summary
+    if status == "settings_stale":
+        return "settings_stale", summary
+    if status == "portfolio_stale":
         return "stale", None
-    return "ok", summary
+    return "missing", None
 
 
 def render_health_header_badge(slot, tickers: list[str], weights: np.ndarray) -> None:
@@ -531,6 +589,15 @@ def render_health_header_badge(slot, tickers: list[str], weights: np.ndarray) ->
         <div class="health-header-badge health-header-badge-neutral">
             <span>🩺 <strong>Portfolio Health</strong></span>
             <span class="health-header-prompt">Portfolio changed — run Portfolio Health analysis for updated score.</span>
+            <span class="health-header-note">{disclaimer}</span>
+        </div>
+        """
+    elif state == "settings_stale" and summary:
+        html = f"""
+        <div class="health-header-badge health-header-badge-yellow">
+            <span>🩺 <strong>Portfolio Health</strong></span>
+            <span class="health-header-score">{summary['score']:.0f}<span style="font-weight:500;color:#94a3b8;"> / 100</span></span>
+            <span class="health-header-label">May be outdated — objective or macro settings changed</span>
             <span class="health-header-note">{disclaimer}</span>
         </div>
         """
@@ -608,6 +675,10 @@ def render_sidebar() -> dict:
         label_visibility="collapsed",
     )
     beginner = experience == "Beginner Mode"
+    st.session_state.experience = experience
+
+    if beginner:
+        render_beginner_sidebar_checklist()
 
     refresh_market_data_sidebar()
 
@@ -708,7 +779,18 @@ def parse_holdings(df: pd.DataFrame):
 
 
 def render_overview_health_snapshot(tickers: list[str], weights: np.ndarray) -> None:
+    status = get_health_cache_status(tickers, weights)
     state, summary = get_health_badge_state(tickers, weights)
+
+    if status == "settings_stale":
+        st.warning(
+            "⚠️ **Health analysis may be outdated.** Your objective or macro assumptions changed. "
+            "Click **Analyze Portfolio** below to refresh."
+        )
+        stale = st.session_state.get("health_result")
+        if stale:
+            st.caption(f"Previous score (earlier settings): **{stale.score:.0f}/100** — {stale.score_label}")
+
     if state == "ok" and summary:
         color_class = {
             "green": "health-card-green",
@@ -733,10 +815,11 @@ def render_overview_health_snapshot(tickers: list[str], weights: np.ndarray) -> 
             unsafe_allow_html=True,
         )
     else:
-        st.info(
-            "No health score yet. Click **Analyze Portfolio** below or open **Portfolio Health** "
-            "and click **Refresh Portfolio Health**."
-        )
+        if status != "settings_stale":
+            st.info(
+                "No health score yet. Click **Analyze Portfolio** below or open **Portfolio Health** "
+                "and click **Refresh Portfolio Health**."
+            )
 
 
 def render_overview_tab(
@@ -752,17 +835,51 @@ def render_overview_tab(
     base_risk_pack: dict,
 ) -> None:
     beginner = is_beginner_mode(settings)
+    cached_health = get_cached_health(tickers, weights)
+    health_status = get_health_cache_status(tickers, weights)
 
     if beginner:
+        if render_recommended_next_step_card():
+            st.rerun()
         coach_card(
             "Start here",
             "1) Confirm your holdings in <b>Portfolio Inputs</b> · "
             "2) Click <b>Analyze Portfolio</b> below · "
-            "3) Read your health score and suggestions · "
+            "3) Read your action plan and recommendations · "
             "4) Check again each month.",
         )
     else:
         section_header("Dashboard", f"Portfolio overview. {APP_DISCLAIMER}")
+
+    st.markdown("---")
+    section_header(
+        "Portfolio Journey / Action Plan",
+        "Simple answers: what to look at today, this month, and this year." if beginner
+        else "Decision-support timeline derived from Portfolio Health.",
+    )
+    if cached_health:
+        objective = st.session_state.get("health_objective", "balanced growth")
+        render_action_plan(
+            cached_health.action_plan,
+            score=cached_health.score,
+            objective=objective,
+            beginner=beginner,
+        )
+    elif health_status == "settings_stale":
+        stale = st.session_state.get("health_result")
+        if stale:
+            st.warning("Action plan may be outdated — macro or objective settings changed. Click **Analyze Portfolio** to refresh.")
+            objective = st.session_state.get("health_objective", "balanced growth")
+            render_action_plan(
+                stale.action_plan,
+                score=stale.score,
+                objective=objective,
+                beginner=beginner,
+            )
+        else:
+            render_action_plan_placeholder(beginner)
+    else:
+        render_action_plan_placeholder(beginner)
 
     # ── Priority 1–3: Health, status, recommendations ───────────────────────
     section_header(
@@ -793,18 +910,25 @@ def render_overview_tab(
 
     st.markdown("---")
     section_header(
-        "Suggestions for you" if beginner else "Recommendations & Insights",
-        "Ideas to consider — not instructions. You decide what fits your situation." if beginner
-        else "Automated commentary from allocation and risk metrics.",
+        "Recommendations & why" if beginner else "Recommendations with model reasoning",
+        "Every suggestion includes a Why? explanation — no black box." if beginner
+        else "Issue, trigger metrics, and tradeoffs for each model flag.",
     )
-    if beginner and explanation.suggested_improvements:
-        for item in explanation.suggested_improvements[:5]:
-            st.markdown(f'<div class="insight-card">💡 {item.replace("**", "")}</div>', unsafe_allow_html=True)
-    render_insights(insights)
-    if explanation.weaknesses and beginner:
-        st.markdown("**Areas to watch**")
-        for item in explanation.weaknesses[:3]:
-            st.markdown(f"- {item}")
+    if cached_health:
+        render_recommendations_panel(cached_health, settings)
+    elif health_status == "settings_stale" and st.session_state.get("health_result"):
+        st.warning("Recommendations may be outdated — refresh analysis to update.")
+        render_recommendations_panel(st.session_state.health_result, settings)
+    else:
+        if beginner and explanation.suggested_improvements:
+            st.caption("Run **Analyze Portfolio** above for full Why? explanations tied to your metrics.")
+            for item in explanation.suggested_improvements[:5]:
+                st.markdown(f'<div class="insight-card">💡 {item.replace("**", "")}</div>', unsafe_allow_html=True)
+        render_insights(insights)
+        if explanation.weaknesses and beginner:
+            st.markdown("**Areas to watch**")
+            for item in explanation.weaknesses[:3]:
+                st.markdown(f"- {item}")
 
     # ── Priority 4: Performance ───────────────────────────────────────────────
     st.markdown("---")
@@ -1005,21 +1129,11 @@ health_badge_slot = st.empty()
 init_holdings()
 apply_asset_preset(settings["asset_preset"])
 
-tabs = st.tabs(
-    [
-        "Getting Started Guide",
-        "Overview",
-        "Portfolio Inputs",
-        "Risk Analysis",
-        "Portfolio Health",
-        "Explain This Portfolio",
-        "Forward-Looking Macro Analysis",
-        "Monte Carlo",
-        "Optimization",
-        "Efficient Frontier",
-        "Math Problem Solving Lab",
-    ]
-)
+if beginner_mode:
+    render_next_step_banner()
+
+tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
+tabs = st.tabs(tab_labels)
 (
     tab_guide,
     tab_overview,
@@ -1125,6 +1239,8 @@ export_buttons(
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
 with tab_explain:
+    if beginner_mode:
+        st.session_state.visited_explain = True
     section_header(
         "Explain This Portfolio",
         "A plain-English summary of your portfolio — strengths, weaknesses, and ideas." if beginner_mode
@@ -1167,6 +1283,7 @@ with tab_explain:
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
 with tab_risk:
+    st.session_state.visited_risk = True
     section_header(
         "Risk Analysis",
         "See how bumpy each holding is and whether your mix is spread out enough." if beginner_mode
@@ -1253,9 +1370,17 @@ with tab_health:
             "Gives you a simple answer to 'Am I in decent shape?' without reading every chart.",
             "Click Refresh Portfolio Health below, then read What's Working and recommendations.",
         )
+        render_macro_assumptions_guide(expanded=False)
     if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         st.session_state.run_health = True
+
+    health_status = get_health_cache_status(tickers, weights)
+    if health_status == "settings_stale" and st.session_state.get("run_health"):
+        st.warning(
+            "⚠️ **Objective or macro settings changed** since the last health run. "
+            "Analysis will refresh automatically below."
+        )
 
     h1, h2, h3 = st.columns(3)
     with h1:
@@ -1300,6 +1425,26 @@ with tab_health:
             key="health_objective",
         )
 
+    if beginner_mode:
+        suggested_preset = OBJECTIVE_TO_PRESET.get(health_objective)
+        if suggested_preset:
+            st.caption(
+                f"Suggested portfolio for **{health_objective.replace('_', ' ')}**: "
+                f"**{suggested_preset}** — {PRESET_RATIONALE.get(suggested_preset, '')}"
+            )
+            if st.button(
+                f"Load {suggested_preset} portfolio for this goal",
+                key="health_load_objective_preset",
+                use_container_width=False,
+            ):
+                st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[suggested_preset])
+                st.session_state.preset_applied = suggested_preset
+                st.session_state.guide_portfolio_loaded = True
+                st.session_state.run_health = False
+                st.session_state.pop("health_result", None)
+                st.session_state.pop("health_result_fingerprint", None)
+                st.rerun()
+
     hc1, hc2 = st.columns(2)
     with hc1:
         health_bond_min = st.slider("Minimum bond/cash constraint (%)", 0, 80, 0, 5, key="health_bond_min")
@@ -1313,43 +1458,51 @@ with tab_health:
     if not st.session_state.get("run_health", False):
         st.info("Click **Refresh Portfolio Health** to run the health analysis with your current settings.")
     else:
-        health_assumptions = core.ForwardMacroAssumptions(
-            rate_environment=health_rate,
-            inflation=health_inflation,
-            recession_probability=health_recession / 100.0,
-            valuation=health_valuation,
-            economic_regime=health_regime,
-        )
-        opt_weights = None
-        if health_run_optimizer:
-            with st.spinner("Running optimizer for drift comparison…"):
-                opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
-                opt_weights = opt_pack["max_sharpe"].weights
+        health = get_cached_health(tickers, weights)
+        if health is None:
+            health_assumptions = macro_assumptions_from_session()
+            opt_weights = None
+            if health_run_optimizer:
+                with st.spinner("Running optimizer for drift comparison…"):
+                    opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
+                    opt_weights = opt_pack["max_sharpe"].weights
 
-        rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
-        with st.spinner("Evaluating portfolio health…"):
-            health = core.evaluate_portfolio_health(
-                tickers=tickers,
-                weights=weights,
-                asset_types=asset_types,
-                metrics=metrics,
-                asset_returns=returns,
-                corr=base_risk_pack["corr"],
-                risk_contrib_df=base_risk_pack["risk_contrib"],
-                assumptions=health_assumptions,
-                objective=health_objective,
-                risk_free_rate=settings["risk_free"],
-                initial_value=settings["initial_value"],
-                benchmark_returns=bench_rets,
-                optimizer_weights=opt_weights,
-                recommended_type_mix=rec.allocation,
-                bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
-            )
-        cache_health_summary(health, tickers, weights)
+            rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
+            with st.spinner("Evaluating portfolio health…"):
+                health = core.evaluate_portfolio_health(
+                    tickers=tickers,
+                    weights=weights,
+                    asset_types=asset_types,
+                    metrics=metrics,
+                    asset_returns=returns,
+                    corr=base_risk_pack["corr"],
+                    risk_contrib_df=base_risk_pack["risk_contrib"],
+                    assumptions=health_assumptions,
+                    objective=health_objective,
+                    risk_free_rate=settings["risk_free"],
+                    initial_value=settings["initial_value"],
+                    benchmark_returns=bench_rets,
+                    optimizer_weights=opt_weights,
+                    recommended_type_mix=rec.allocation,
+                    bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
+                )
+            cache_health_summary(health, tickers, weights)
 
         st.markdown(
             f'<div class="insight-card">📋 <b>Status:</b> {health.status_message}</div>',
             unsafe_allow_html=True,
+        )
+
+        section_header(
+            "Portfolio Journey / Action Plan",
+            "What to focus on today, this month, and this year." if beginner_mode
+            else "Decision-support timeline from Portfolio Health.",
+        )
+        render_action_plan(
+            health.action_plan,
+            score=health.score,
+            objective=health_objective,
+            beginner=beginner_mode,
         )
 
         section_header(
@@ -1381,26 +1534,21 @@ with tab_health:
                 st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
 
         section_header(
-            "Suggestions" if beginner_mode else "Allocation Drift / Rebalancing Suggestions",
-            "Ideas to consider — you decide whether to act." if beginner_mode
-            else "Compare current weights to objective, optimizer, and recommended mixes.",
+            "Recommendations & why" if beginner_mode else "Recommendations with model reasoning",
+            "Expand **Why am I seeing this?** on each item for full transparency." if beginner_mode
+            else "Issue, triggers, and tradeoffs for each model recommendation.",
         )
-        if not beginner_mode:
-            st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
-        drift_notes = health.rebalance_df[health.rebalance_df["Model Note"] != "Within tolerance"]["Model Note"].tolist()
-        if drift_notes:
-            for note in drift_notes[:6]:
-                st.markdown(f"- *{note}*")
-        else:
-            st.caption("No major drift detected in the model.")
+        render_recommendations_panel(health, settings)
 
         if not beginner_mode:
+            section_header("Rebalance table", "Weight drift vs objective, optimizer, and recommended mixes.")
+            st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
             section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
             for note in health.macro_fit:
                 st.markdown(f"- {note}")
-        st.markdown("**Recommendations**")
-        for note in health.recommendations:
-            st.markdown(f"- {note}")
+        elif any(health.rebalance_df["Model Note"] != "Within tolerance"):
+            with st.expander("View rebalance detail table (optional)", expanded=False):
+                st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
 
         charts_label = "Detailed charts (optional)" if beginner_mode else "Visual Portfolio Diagnostics"
         with st.expander(charts_label, expanded=not beginner_mode):
@@ -1487,40 +1635,29 @@ with tab_overview:
 
 with tab_forward:
     if beginner_mode:
-        st.info("Switch to **Advanced Mode** in the sidebar to explore macro stress tests.")
+        section_header(
+            "Macro Analysis",
+            "How economic conditions affect your portfolio — explained in plain English.",
+        )
+        render_macro_assumptions_guide(expanded=True)
+        st.info(
+            "Switch to **Advanced Mode** in the sidebar to run forward-looking macro stress tests "
+            "with numeric projections."
+        )
     else:
+        st.session_state.visited_forward = True
         if st.button("Run Forward-Looking Macro Analysis", key="run_forward_macro_btn"):
             st.session_state.run_forward_macro = True
     if not beginner_mode and st.session_state.get("run_forward_macro", False):
         section_header(
             "Forward-Looking Macro Analysis",
-            f"Set future macro assumptions and propagate them into projections, Monte Carlo, and optimization inputs. {APP_DISCLAIMER}",
+            f"Stress-test projections using shared macro settings (same as Portfolio Health, Monte Carlo, Optimizer). {APP_DISCLAIMER}",
         )
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            rate_env = st.selectbox(
-                "Interest Rate Environment",
-                ["Falling Rates", "Stable Rates", "Rising Rates", "High Rate Environment"],
-                index=1,
-            )
-            recession_prob_pct = st.slider("Recession Probability (%)", 0, 100, 25, 5)
-        with f2:
-            inflation_env = st.selectbox(
-                "Inflation Assumption",
-                ["Low Inflation", "Moderate Inflation", "High Inflation", "Deflation"],
-                index=1,
-            )
-            valuation_env = st.selectbox(
-                "Valuation Environment",
-                ["Cheap", "Fair Value", "Expensive", "Bubble-like"],
-                index=1,
-            )
-        with f3:
-            econ_regime = st.selectbox(
-                "Economic Regime",
-                ["Expansion", "Slow Growth", "Recession", "Recovery", "Stagflation", "AI / Tech Boom", "Credit Crisis"],
-                index=0,
-            )
+        st.info(
+            f"**Current macro settings:** {macro_assumption_summary()}  \n"
+            "Change inflation, rates, recession probability, and regime on the **Portfolio Health** tab."
+        )
+        recession_prob_pct = int(macro_assumptions_from_session().recession_probability * 100)
 
         st.markdown("##### Optional Forward Return Overrides")
         o1, o2, o3, o4 = st.columns(4)
@@ -1537,12 +1674,13 @@ with tab_forward:
             use_vol = st.checkbox("Override volatility", value=False)
             exp_vol = st.number_input("Expected volatility (%)", 1.0, 60.0, max(1.0, metrics.volatility * 100), 0.5) / 100.0
 
+        base_assumptions = macro_assumptions_from_session()
         assumptions = core.ForwardMacroAssumptions(
-            rate_environment=rate_env,
-            inflation=inflation_env,
-            recession_probability=recession_prob_pct / 100.0,
-            valuation=valuation_env,
-            economic_regime=econ_regime,
+            rate_environment=base_assumptions.rate_environment,
+            inflation=base_assumptions.inflation,
+            recession_probability=base_assumptions.recession_probability,
+            valuation=base_assumptions.valuation,
+            economic_regime=base_assumptions.economic_regime,
             override_equity_return=eq_ret if use_eq else None,
             override_bond_return=bond_ret if use_bond else None,
             override_inflation=exp_infl if use_infl else None,
@@ -1621,6 +1759,18 @@ with tab_mc:
         )
         st.info("Monte Carlo is available in **Advanced Mode**.")
     else:
+        st.session_state.visited_mc = True
+        st.caption(
+            "Macro settings (from Portfolio Health): "
+            + macro_assumption_summary()
+        )
+        mc_assumption_mode = st.radio(
+            "Simulation basis",
+            ["Historical returns", "Forward-looking (macro-adjusted)"],
+            horizontal=True,
+            key="mc_assumption_mode",
+            help="Forward-looking adjusts expected return and volatility based on your macro assumptions.",
+        )
         if st.button("Run Monte Carlo", key="run_mc_btn"):
             st.session_state.run_mc = True
         if st.session_state.get("run_mc", False):
@@ -1636,6 +1786,27 @@ with tab_mc:
                     value=int(settings["initial_value"] * 1.75),
                     step=5_000,
                 )
+            mc_fwd_ret = None
+            mc_fwd_vol = None
+            if mc_assumption_mode.startswith("Forward"):
+                forward_mc = get_forward_projection(
+                    metrics=metrics,
+                    mean_returns=mean_rets.copy(),
+                    cov=cov.values.copy(),
+                    tickers=tickers,
+                    weights=weights,
+                    asset_types=asset_types,
+                    initial_value=settings["initial_value"],
+                    risk_free_rate=settings["risk_free"],
+                    years=float(mc_years),
+                )
+                mc_fwd_ret = forward_mc.adjusted_return
+                mc_fwd_vol = forward_mc.adjusted_volatility
+                st.info(
+                    f"Using macro-adjusted assumptions: return **{_pct(mc_fwd_ret)}**, "
+                    f"volatility **{_pct(mc_fwd_vol)}** "
+                    f"(recession stress and inflation/rate environment applied)."
+                )
             with st.spinner("Running Monte Carlo…"):
                 mc = compute_monte_carlo(
                     returns,
@@ -1644,10 +1815,15 @@ with tab_mc:
                     mc_years,
                     mc_sims,
                     float(mc_target),
+                    expected_annual_return=mc_fwd_ret,
+                    expected_annual_volatility=mc_fwd_vol,
                 )
             st.session_state.mc_cached_summary = mc.summary
+            mode_label = "Forward macro-adjusted" if mc_fwd_ret is not None else "Historical"
             st.plotly_chart(
-                charts.monte_carlo_paths(mc.chart_df, f"Projection paths · {mc_sims:,} simulations · {mc_years}Y"),
+                charts.monte_carlo_paths(
+                    mc.chart_df, f"{mode_label} · {mc_sims:,} simulations · {mc_years}Y"
+                ),
                 use_container_width=True,
             )
             h1, h2 = st.columns([1.2, 1])
@@ -1699,9 +1875,37 @@ with tab_opt:
         return pd.DataFrame(rows)
 
     if not beginner_mode and st.session_state.get("run_optimizer", False):
-        section_header("Optimizer Results", "Long-only mean-variance optimization on historical data.")
+        st.caption("Macro settings: " + macro_assumption_summary())
+        opt_assumption_mode = st.radio(
+            "Optimization basis",
+            ["Historical returns", "Forward-looking (macro-adjusted)"],
+            horizontal=True,
+            key="opt_assumption_mode",
+        )
+        section_header(
+            "Optimizer Results",
+            "Long-only mean-variance optimization."
+            + (" Uses macro-adjusted expected returns and covariance." if opt_assumption_mode.startswith("Forward") else " Uses historical data."),
+        )
+        opt_mean = mean_rets
+        opt_cov = cov
+        if opt_assumption_mode.startswith("Forward"):
+            forward_opt = get_forward_projection(
+                metrics=metrics,
+                mean_returns=mean_rets.copy(),
+                cov=cov.values.copy(),
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                initial_value=settings["initial_value"],
+                risk_free_rate=settings["risk_free"],
+            )
+            opt_mean = forward_opt.adjusted_mean_returns
+            opt_cov = pd.DataFrame(
+                forward_opt.adjusted_cov, index=cov.index, columns=cov.columns
+            )
         with st.spinner("Optimizing portfolio…"):
-            opt = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
+            opt = compute_optimizer_pack(tuple(opt_mean.tolist()), opt_cov, settings["risk_free"])
         max_sharpe = opt["max_sharpe"]
         min_vol = opt["min_vol"]
         o1, o2 = st.columns(2)
@@ -1732,26 +1936,96 @@ with tab_frontier:
         if st.button("Build Efficient Frontier", key="run_frontier_btn"):
             st.session_state.run_frontier = True
     if not beginner_mode and st.session_state.get("run_frontier", False):
+        st.caption("Macro settings: " + macro_assumption_summary())
+        frontier_mode = st.radio(
+            "Frontier basis",
+            ["Historical Frontier", "Forward-Looking Frontier", "Compare both"],
+            horizontal=True,
+            key="frontier_assumption_mode",
+        )
         section_header("Efficient Frontier", HELP["efficient_frontier"])
-        with st.spinner("Building efficient frontier…"):
-            frontier = compute_frontier(
-                tuple(mean_rets.tolist()),
-                cov,
-                settings["risk_free"],
-                settings["frontier_points"],
-            )
-            opt = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
+        forward_frontier = get_forward_projection(
+            metrics=metrics,
+            mean_returns=mean_rets.copy(),
+            cov=cov.values.copy(),
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            initial_value=settings["initial_value"],
+            risk_free_rate=settings["risk_free"],
+        )
+        adj_cov = pd.DataFrame(
+            forward_frontier.adjusted_cov, index=cov.index, columns=cov.columns
+        )
+
+        def _build_frontier_pack(mr, cv, label_prefix: str):
+            with st.spinner(f"Building {label_prefix} frontier…"):
+                fr = compute_frontier(
+                    tuple(mr.tolist()) if hasattr(mr, "tolist") else tuple(mr),
+                    cv,
+                    settings["risk_free"],
+                    settings["frontier_points"],
+                )
+                op = compute_optimizer_pack(
+                    tuple(mr.tolist()) if hasattr(mr, "tolist") else tuple(mr),
+                    cv,
+                    settings["risk_free"],
+                )
+            return fr, op
+
+        if frontier_mode == "Compare both":
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                st.markdown("**Historical Frontier**")
+                hist_fr, hist_opt = _build_frontier_pack(mean_rets, cov, "historical")
+                ms, mv = hist_opt["max_sharpe"], hist_opt["min_vol"]
+                st.plotly_chart(
+                    charts.efficient_frontier_chart(
+                        hist_fr,
+                        (metrics.volatility, metrics.annual_return, metrics.sharpe_ratio),
+                        (ms.volatility, ms.annual_return, ms.sharpe_ratio, ms.label),
+                        (mv.volatility, mv.annual_return, mv.sharpe_ratio, mv.label),
+                    ),
+                    use_container_width=True,
+                )
+            with fc2:
+                st.markdown("**Forward-Looking Frontier**")
+                fwd_fr, fwd_opt = _build_frontier_pack(forward_frontier.adjusted_mean_returns, adj_cov, "forward")
+                ms, mv = fwd_opt["max_sharpe"], fwd_opt["min_vol"]
+                st.plotly_chart(
+                    charts.efficient_frontier_chart(
+                        fwd_fr,
+                        (forward_frontier.adjusted_volatility, forward_frontier.adjusted_return, forward_frontier.adjusted_sharpe),
+                        (ms.volatility, ms.annual_return, ms.sharpe_ratio, ms.label),
+                        (mv.volatility, mv.annual_return, mv.sharpe_ratio, mv.label),
+                    ),
+                    use_container_width=True,
+                )
+        else:
+            use_forward = frontier_mode.startswith("Forward")
+            mr = forward_frontier.adjusted_mean_returns if use_forward else mean_rets
+            cv = adj_cov if use_forward else cov
+            label = "forward-looking" if use_forward else "historical"
+            frontier, opt = _build_frontier_pack(mr, cv, label)
             max_sharpe = opt["max_sharpe"]
             min_vol = opt["min_vol"]
-        st.plotly_chart(
-            charts.efficient_frontier_chart(
-                frontier,
-                (metrics.volatility, metrics.annual_return, metrics.sharpe_ratio),
-                (max_sharpe.volatility, max_sharpe.annual_return, max_sharpe.sharpe_ratio, max_sharpe.label),
-                (min_vol.volatility, min_vol.annual_return, min_vol.sharpe_ratio, min_vol.label),
-            ),
-            use_container_width=True,
-        )
+            if use_forward:
+                current_pt = (
+                    forward_frontier.adjusted_volatility,
+                    forward_frontier.adjusted_return,
+                    forward_frontier.adjusted_sharpe,
+                )
+            else:
+                current_pt = (metrics.volatility, metrics.annual_return, metrics.sharpe_ratio)
+            st.plotly_chart(
+                charts.efficient_frontier_chart(
+                    frontier,
+                    current_pt,
+                    (max_sharpe.volatility, max_sharpe.annual_return, max_sharpe.sharpe_ratio, max_sharpe.label),
+                    (min_vol.volatility, min_vol.annual_return, min_vol.sharpe_ratio, min_vol.label),
+                ),
+                use_container_width=True,
+            )
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
