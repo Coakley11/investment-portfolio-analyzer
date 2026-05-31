@@ -839,7 +839,16 @@ def render_overview_health_snapshot(tickers: list[str], weights: np.ndarray) -> 
             )
 
 
-def _render_recommendation_engine(*, beginner: bool, initial_value: float) -> None:
+def _render_recommendation_engine(
+    beginner: bool = False,
+    initial_value: float | None = None,
+    key_prefix: str = "recommendation",
+) -> None:
+    if initial_value is None:
+        initial_value = float(
+            st.session_state.get("sidebar_portfolio_value", st.session_state.get("initial_value", 100_000))
+        )
+
     section_header(
         "Get a suggested portfolio" if beginner else "Portfolio Recommendation Engine",
         "Answer a few questions for a starting mix you can apply with one click." if beginner
@@ -847,11 +856,19 @@ def _render_recommendation_engine(*, beginner: bool, initial_value: float) -> No
     )
     r1, r2, r3 = st.columns(3)
     with r1:
-        rec_age = st.number_input("Age", min_value=18, max_value=100, value=35, key="rec_age_input")
-        rec_horizon = st.slider("Years until you need the money", 1, 40, 15, key="rec_horizon_slider")
+        rec_age = st.number_input(
+            "Age", min_value=18, max_value=100, value=35, key=f"{key_prefix}_age_input"
+        )
+        rec_horizon = st.slider(
+            "Years until you need the money", 1, 40, 15, key=f"{key_prefix}_horizon_slider"
+        )
     with r2:
-        rec_risk = st.selectbox("Comfort with ups and downs", ["Low", "Medium", "High"], index=1, key="rec_risk_sel")
-        rec_liq = st.selectbox("Need cash soon?", ["Low", "Medium", "High"], index=1, key="rec_liq_sel")
+        rec_risk = st.selectbox(
+            "Comfort with ups and downs", ["Low", "Medium", "High"], index=1, key=f"{key_prefix}_risk_sel"
+        )
+        rec_liq = st.selectbox(
+            "Need cash soon?", ["Low", "Medium", "High"], index=1, key=f"{key_prefix}_liq_sel"
+        )
     with r3:
         rec_obj = st.selectbox(
             "Main goal",
@@ -864,7 +881,7 @@ def _render_recommendation_engine(*, beginner: bool, initial_value: float) -> No
                 "short-term cash management",
             ],
             index=1,
-            key="rec_obj_sel",
+            key=f"{key_prefix}_obj_sel",
         )
     rec = core.recommend_portfolio(rec_age, rec_horizon, rec_risk, rec_liq, rec_obj)
     for reason in rec.rationale:
@@ -874,7 +891,11 @@ def _render_recommendation_engine(*, beginner: bool, initial_value: float) -> No
     rec_display = rec_df.copy()
     rec_display["Value ($)"] = rec_display["Value ($)"].map(_money)
     st.dataframe(rec_display, use_container_width=True, hide_index=True)
-    if st.button("Use this suggested portfolio", use_container_width=False, key="overview_apply_rec"):
+    if st.button(
+        "Use this suggested portfolio",
+        use_container_width=False,
+        key=f"{key_prefix}_apply_rec",
+    ):
         st.session_state.holdings_df = rec_df
         st.session_state.pop("health_summary", None)
         st.success("Applied to Portfolio Inputs.")
@@ -984,7 +1005,11 @@ def render_overview_tab(
             st.caption("Implementation steps: **💼 Portfolio Inputs** → **Implementation Guide** tab.")
 
         with st.expander("Get a suggested portfolio (optional)", expanded=False):
-            _render_recommendation_engine(beginner=True)
+            _render_recommendation_engine(
+                beginner=True,
+                initial_value=settings["initial_value"],
+                key_prefix="overview_rec_beginner",
+            )
         return
 
     section_header("Dashboard", f"Portfolio overview. {APP_DISCLAIMER}")
@@ -1151,7 +1176,11 @@ def render_overview_tab(
 
     # ── Recommendation engine ───────────────────────────────────────────
     st.markdown("---")
-    _render_recommendation_engine(beginner=beginner, initial_value=settings["initial_value"])
+    _render_recommendation_engine(
+        beginner=beginner,
+        initial_value=settings["initial_value"],
+        key_prefix="overview_rec_advanced",
+    )
 
     # ── Advanced sections ─────────────────────────────────────────
     advanced_label = "Optional: benchmarks & advanced charts" if beginner else "Benchmarks & advanced analytics"
