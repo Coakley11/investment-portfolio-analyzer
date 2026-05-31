@@ -39,24 +39,32 @@ GOAL_CHOICES = {
 
 PRESET_RATIONALE: dict[str, str] = {
     "Conservative": (
-        "Mostly bonds and cash-like funds (BND, BIL). This mix limits big swings — "
-        "a common starting point when protecting money or planning to spend within a few years."
+        "Designed for users who want lower volatility and more stability — "
+        "mostly bonds and cash-like funds (BND, BIL)."
     ),
     "Balanced": (
-        "A mix of US stocks (VTI), international stocks (VXUS), bonds (BND), and real estate (VNQ). "
-        "Widely used as a long-term default when you want growth with some stability."
+        "Designed for users who want a mix of growth and stability — "
+        "US stocks, international stocks, bonds, and real estate."
     ),
     "Aggressive": (
-        "Heavy stock exposure including growth (QQQ). Higher long-term growth potential, "
-        "but expect larger ups and downs along the way."
+        "Designed for users who want higher long-term growth and can tolerate larger swings — "
+        "heavy stock exposure including growth (QQQ)."
     ),
     "Dividend Income": (
-        "Focus on dividend ETFs (SCHD, VYM), REITs, and bonds. Built for investors who "
-        "want regular income payments rather than maximum price growth."
+        "Designed for users who want dividends and income-oriented holdings — "
+        "dividend ETFs, REITs, and bonds."
+    ),
+    "Tech Growth": (
+        "Designed for users comfortable with technology concentration — "
+        "growth-oriented equity ETFs with a small bond buffer."
     ),
     "Retirement": (
-        "More bonds than a balanced portfolio, plus dividend exposure. Designed for "
-        "long-term savers who want growth with extra stability as they approach retirement."
+        "Designed for long-term investing with a diversified mix of growth and stability — "
+        "more bonds than balanced, plus dividend exposure."
+    ),
+    "All Weather": (
+        "Designed to perform across different economic environments — "
+        "stocks, long-term bonds, gold, and commodities."
     ),
 }
 
@@ -284,3 +292,6 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
         ]
         for term, plain in terms:
             st.markdown(f"**{term}** — {plain}")
+
+
+__all__ = ["PRESET_RATIONALE", "render_getting_started_guide", "GOAL_CHOICES", "SAMPLE_PORTFOLIOS"]
