@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -199,9 +200,9 @@ def _compute_investment_plan_safe(
 
 def render_how_much_to_invest(
     settings: dict,
-    *,
     tickers: list[str] | None = None,
     weights: np.ndarray | None = None,
+    key_prefix: str = "invest_plan",
 ) -> core.InvestmentPlanResult | None:
     """Beginner-friendly section: how much cash to keep vs. invest."""
     beginner = is_beginner_mode(settings)
@@ -223,7 +224,7 @@ def render_how_much_to_invest(
                 max_value=50_000_000,
                 value=int(st.session_state.get("plan_total_cash", settings["initial_value"])),
                 step=5_000,
-                key="plan_total_cash",
+                key=f"{key_prefix}_plan_total_cash",
             )
             emergency = st.number_input(
                 "Emergency fund needed ($)",
@@ -231,7 +232,7 @@ def render_how_much_to_invest(
                 max_value=10_000_000,
                 value=int(st.session_state.get("plan_emergency", 20_000)),
                 step=1_000,
-                key="plan_emergency",
+                key=f"{key_prefix}_plan_emergency",
             )
             near_term = st.number_input(
                 "Money needed in the next 1–2 years ($)",
@@ -239,7 +240,7 @@ def render_how_much_to_invest(
                 max_value=10_000_000,
                 value=int(st.session_state.get("plan_near_term", 0)),
                 step=1_000,
-                key="plan_near_term",
+                key=f"{key_prefix}_plan_near_term",
             )
         with c2:
             debt = st.number_input(
@@ -248,7 +249,7 @@ def render_how_much_to_invest(
                 max_value=10_000_000,
                 value=int(st.session_state.get("plan_debt", 0)),
                 step=1_000,
-                key="plan_debt",
+                key=f"{key_prefix}_plan_debt",
             )
             expenses = st.number_input(
                 "Planned large expenses ($)",
@@ -256,7 +257,7 @@ def render_how_much_to_invest(
                 max_value=10_000_000,
                 value=int(st.session_state.get("plan_expenses", 0)),
                 step=1_000,
-                key="plan_expenses",
+                key=f"{key_prefix}_plan_expenses",
             )
             monthly = st.number_input(
                 "Monthly contribution (optional) ($)",
@@ -264,7 +265,7 @@ def render_how_much_to_invest(
                 max_value=500_000,
                 value=int(st.session_state.get("plan_monthly", 0)),
                 step=100,
-                key="plan_monthly",
+                key=f"{key_prefix}_plan_monthly",
             )
         r1, r2 = st.columns(2)
         with r1:
@@ -273,14 +274,14 @@ def render_how_much_to_invest(
                 1,
                 40,
                 int(st.session_state.get("plan_horizon", 15)),
-                key="plan_horizon",
+                key=f"{key_prefix}_plan_horizon",
             )
         with r2:
             risk = st.selectbox(
                 "Risk tolerance",
                 ["Low", "Medium", "High"],
                 index=1,
-                key="plan_risk",
+                key=f"{key_prefix}_plan_risk",
             )
 
     plan = _compute_investment_plan_safe(
@@ -294,6 +295,8 @@ def render_how_much_to_invest(
         monthly_contribution=float(monthly),
     )
     st.session_state.investment_plan = plan
+    st.session_state.plan_total_cash = int(total_cash)
+    st.session_state.plan_emergency = int(emergency)
 
     long_term_suggested = float(_plan_field(plan, "long_term_suggested", 0.0))
     amount_investable = float(_plan_field(plan, "amount_potentially_investable", 0.0))
@@ -305,24 +308,40 @@ def render_how_much_to_invest(
         m2.metric("Suggested Emergency Reserve", _money(float(emergency)))
         m3.metric("Suggested Investable Amount", _money(amount_investable))
 
-        if tickers and weights is not None and amount_investable > 0:
+        if tickers and weights is not None and len(tickers) > 0 and amount_investable > 0:
             st.markdown("##### Suggested allocation dollars")
             st.caption(f"Based on **{_money(amount_investable)}** investable and your current mix.")
-            w = core.normalize_weights(weights)
-            alloc_rows = []
-            for i, t in enumerate(tickers):
-                dollars = amount_investable * w[i]
-                alloc_rows.append({"Investment": t, "Suggested amount": _money(dollars), "Weight": f"{w[i]*100:.1f}%"})
-            st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
+            try:
+                w = core.normalize_weights(np.asarray(weights, dtype=float))
+                n = min(len(tickers), len(w))
+                alloc_rows = []
+                for i in range(n):
+                    t = tickers[i]
+                    dollars = amount_investable * w[i]
+                    alloc_rows.append(
+                        {"Investment": t, "Suggested amount": _money(dollars), "Weight": f"{w[i]*100:.1f}%"}
+                    )
+                st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
+            except Exception:
+                st.caption("Allocation dollars unavailable until portfolio weights are valid.")
 
         b1, b2 = st.columns(2)
         with b1:
-            if st.button("Use investable amount as portfolio value", use_container_width=True, key="apply_investable"):
+            if st.button(
+                "Use investable amount as portfolio value",
+                use_container_width=True,
+                key=f"{key_prefix}_apply_investable",
+            ):
                 st.session_state.sidebar_portfolio_value = int(amount_investable)
+                st.session_state.plan_total_cash = int(total_cash)
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
                 st.rerun()
         with b2:
-            if st.button("Use long-term sleeve only", use_container_width=True, key="apply_long_term"):
+            if st.button(
+                "Use long-term sleeve only",
+                use_container_width=True,
+                key=f"{key_prefix}_apply_long_term",
+            ):
                 st.session_state.sidebar_portfolio_value = int(long_term_suggested)
                 st.success(f"Portfolio value set to {_money(long_term_suggested)}.")
                 st.rerun()
@@ -333,12 +352,20 @@ def render_how_much_to_invest(
             st.markdown(f"- {line}")
         b1, b2 = st.columns(2)
         with b1:
-            if st.button("Use long-term amount as portfolio value", use_container_width=True, key="apply_long_term"):
+            if st.button(
+                "Use long-term amount as portfolio value",
+                use_container_width=True,
+                key=f"{key_prefix}_apply_long_term_adv",
+            ):
                 st.session_state.sidebar_portfolio_value = int(long_term_suggested)
                 st.success(f"Portfolio value set to {_money(long_term_suggested)} for analysis.")
                 st.rerun()
         with b2:
-            if st.button("Use full investable amount", use_container_width=True, key="apply_investable"):
+            if st.button(
+                "Use full investable amount",
+                use_container_width=True,
+                key=f"{key_prefix}_apply_investable_adv",
+            ):
                 st.session_state.sidebar_portfolio_value = int(amount_investable)
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
                 st.rerun()
@@ -348,7 +375,7 @@ def render_how_much_to_invest(
                 "Amounts to compare ($)",
                 options=[25_000, 50_000, 100_000, 150_000, 200_000, 500_000],
                 default=[50_000, 100_000, 200_000],
-                key="plan_compare_amounts",
+                key=f"{key_prefix}_plan_compare_amounts",
             )
             if compare_amounts and st.session_state.get("plan_compare_return") is not None:
                 ann_ret = float(st.session_state["plan_compare_return"])

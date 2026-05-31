@@ -1386,7 +1386,9 @@ with tab_inputs:
     if beginner_mode:
         input_tabs = st.tabs(["💰 How Much to Invest", "💼 Dollar Amounts", "📘 Implementation Guide"])
         with input_tabs[0]:
-            render_how_much_to_invest(settings, tickers=tickers, weights=weights)
+            render_how_much_to_invest(
+                settings, tickers=tickers, weights=weights, key_prefix="invest_plan_beginner"
+            )
         with input_tabs[1]:
             alloc_preview = st.session_state.holdings_df.copy()
             alloc_preview["Value ($)"] = (alloc_preview["Weight (%)"].fillna(0) / 100.0 * pv).map(_money)
@@ -1402,7 +1404,9 @@ with tab_inputs:
                 key_prefix="inputs_impl",
             )
     else:
-        render_how_much_to_invest(settings, tickers=tickers, weights=weights)
+        render_how_much_to_invest(
+            settings, tickers=tickers, weights=weights, key_prefix="invest_plan_advanced"
+        )
         st.markdown("#### Dollar amounts (based on portfolio value)")
         alloc_preview = st.session_state.holdings_df.copy()
         alloc_preview["Value ($)"] = (alloc_preview["Weight (%)"].fillna(0) / 100.0 * pv).map(_money)
