@@ -16,8 +16,16 @@ import dashboard_charts as charts
 import portfolio_core as core
 from components.getting_started_guide import render_getting_started_guide
 from components.problem_solving import render_problem_solving_lab
+from components.ui_helpers import (
+    APP_DISCLAIMER as UI_DISCLAIMER,
+    coach_card,
+    is_beginner_mode,
+    metric_help,
+    refresh_market_data_sidebar,
+    what_why_do,
+)
 
-APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
+APP_DISCLAIMER = UI_DISCLAIMER
 
 # ── Page config & styling ─────────────────────────────────────────────────────
 
@@ -276,7 +284,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-HELP = {
+HELP_BEGINNER = {
+    "sharpe": "Whether your return is worth the risk you're taking. Higher is generally better.",
+    "sortino": "Risk/reward score that cares more about bad drops than normal ups and downs.",
+    "volatility": "How much your portfolio tends to move up and down.",
+    "correlation": "Whether investments move together. Spreading out helps smooth the ride.",
+    "monte_carlo": "Many random 'what if' future paths — a range of possibilities, not a prediction.",
+    "efficient_frontier": "Chart of best risk vs. return mixes the model can find.",
+    "drawdown": "The biggest drop from a previous high — your worst historical dip.",
+    "beta": "How much you move compared to the broad market. About 1.0 = similar to the market.",
+}
+
+HELP_ADVANCED = {
     "sharpe": "Return per unit of total risk. Above ~1.0 is strong.",
     "sortino": "Like Sharpe, but penalizes only downside volatility.",
     "volatility": "Annualized standard deviation of daily returns.",
@@ -296,31 +315,54 @@ def _money(x: float) -> str:
     return f"${x:,.0f}"
 
 
-def render_branded_header():
-    st.markdown(
-        """
-        <div class="hero-header">
-          <div class="hero-inner">
-            <p class="hero-eyebrow">📈 Institutional Portfolio Analytics</p>
-            <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
-            <p class="hero-subtitle">
-              Quantitative Portfolio Analytics • Risk Analysis • Monte Carlo Simulation • Optimization
-            </p>
-            <p style="color:#64748b;font-size:0.78rem;margin:0 0 0.85rem 0;">Educational model-based analysis, not financial advice.</p>
-            <div class="hero-badges">
-              <span class="hero-badge">📘 Getting Started Guide</span>
-              <span class="hero-badge">📊 Real market data</span>
-              <span class="hero-badge">⚖️ Risk metrics</span>
-              <span class="hero-badge">🩺 Portfolio Health</span>
-              <span class="hero-badge">🎲 Monte Carlo</span>
-              <span class="hero-badge">📐 Efficient frontier</span>
-              <span class="hero-badge">🌐 Macro stress testing</span>
+def render_branded_header(beginner: bool = True):
+    if beginner:
+        st.markdown(
+            """
+            <div class="hero-header">
+              <div class="hero-inner">
+                <p class="hero-eyebrow">🧭 Your Portfolio Coach</p>
+                <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
+                <p class="hero-subtitle">
+                  Tell you what to do, explain why, and help you check if your portfolio is on track.
+                </p>
+                <p style="color:#64748b;font-size:0.78rem;margin:0 0 0.85rem 0;">Educational model-based analysis, not financial advice.</p>
+                <div class="hero-badges">
+                  <span class="hero-badge">📘 Start with the Guide</span>
+                  <span class="hero-badge">📊 Auto market data</span>
+                  <span class="hero-badge">🩺 Health score</span>
+                  <span class="hero-badge">💡 Plain-English tips</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="hero-header">
+              <div class="hero-inner">
+                <p class="hero-eyebrow">📈 Institutional Portfolio Analytics</p>
+                <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
+                <p class="hero-subtitle">
+                  Quantitative Portfolio Analytics • Risk Analysis • Monte Carlo Simulation • Optimization
+                </p>
+                <p style="color:#64748b;font-size:0.78rem;margin:0 0 0.85rem 0;">Educational model-based analysis, not financial advice.</p>
+                <div class="hero-badges">
+                  <span class="hero-badge">📘 Getting Started Guide</span>
+                  <span class="hero-badge">📊 Real market data</span>
+                  <span class="hero-badge">⚖️ Risk metrics</span>
+                  <span class="hero-badge">🩺 Portfolio Health</span>
+                  <span class="hero-badge">🎲 Monte Carlo</span>
+                  <span class="hero-badge">📐 Efficient frontier</span>
+                  <span class="hero-badge">🌐 Macro stress testing</span>
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def section_header(title: str, lead: str = ""):
@@ -503,35 +545,82 @@ def render_health_header_badge(slot, tickers: list[str], weights: np.ndarray) ->
     slot.markdown(html, unsafe_allow_html=True)
 
 
-def metrics_row_primary(m: core.ExtendedPortfolioMetrics, initial: float):
+def metrics_row_primary(m: core.ExtendedPortfolioMetrics, initial: float, settings: dict):
+    h = metric_help(settings)
+    beginner = is_beginner_mode(settings)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Annual Return", _pct(m.annual_return))
-    c2.metric("Volatility", _pct(m.volatility), help=HELP["volatility"])
-    c3.metric("Sharpe Ratio", f"{m.sharpe_ratio:.2f}", help=HELP["sharpe"])
+    c1.metric(
+        "Average Yearly Return" if beginner else "Annual Return",
+        _pct(m.annual_return),
+        help=h["annual_return"],
+    )
+    c2.metric(
+        "How Bumpy (Volatility)" if beginner else "Volatility",
+        _pct(m.volatility),
+        help=h["volatility"],
+    )
+    c3.metric(
+        "Risk/Reward Score" if beginner else "Sharpe Ratio",
+        f"{m.sharpe_ratio:.2f}",
+        help=h["sharpe"],
+    )
     c4.metric(
-        "Projected Value (1Y)",
+        "Estimated Value (1 Year)" if beginner else "Projected Value (1Y)",
         _money(m.projected_value),
         delta=_money(m.projected_value - initial),
+        help=h["projected"],
     )
 
 
-def metrics_row_extended(m: core.ExtendedPortfolioMetrics):
+def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
+    h = metric_help(settings)
+    beginner = is_beginner_mode(settings)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Max Drawdown", _pct(m.max_drawdown), help=HELP["drawdown"])
-    c2.metric("Sortino Ratio", f"{m.sortino_ratio:.2f}", help=HELP["sortino"])
-    c3.metric("CAGR", _pct(m.cagr))
-    c4.metric("Beta vs SPY", f"{m.beta_spy:.2f}", help=HELP["beta"])
+    c1.metric(
+        "Worst Drop" if beginner else "Max Drawdown",
+        _pct(m.max_drawdown),
+        help=h["drawdown"],
+    )
+    c2.metric(
+        "Downside Risk Score" if beginner else "Sortino Ratio",
+        f"{m.sortino_ratio:.2f}",
+        help=h["sortino"],
+    )
+    c3.metric(
+        "Steady Growth Rate" if beginner else "CAGR",
+        _pct(m.cagr),
+        help=h["cagr"],
+    )
+    c4.metric(
+        "Vs. Market Move" if beginner else "Beta vs SPY",
+        f"{m.beta_spy:.2f}",
+        help=h["beta"],
+    )
 
 
 def render_sidebar() -> dict:
+    st.sidebar.markdown("### Experience")
+    experience = st.sidebar.radio(
+        "Experience level",
+        ["Beginner Mode", "Advanced Mode"],
+        index=0,
+        help="Beginner: simpler language and fewer charts. Advanced: full analytics.",
+        label_visibility="collapsed",
+    )
+    beginner = experience == "Beginner Mode"
+
+    refresh_market_data_sidebar()
+
+    st.sidebar.divider()
     st.sidebar.markdown("### Portfolio Presets")
-    st.sidebar.caption("Load a model allocation into the holdings table.")
+    st.sidebar.caption("Load a ready-made mix into your portfolio.")
     preset_names = ["— custom —", *core.PORTFOLIO_PRESETS.keys()]
     portfolio_preset = st.sidebar.selectbox("Strategy", preset_names, label_visibility="collapsed")
     if st.sidebar.button("Apply preset", use_container_width=True, type="primary"):
         if portfolio_preset in core.PORTFOLIO_PRESETS:
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
             st.session_state.preset_applied = portfolio_preset
+            st.session_state.pop("health_summary", None)
             st.rerun()
 
     st.sidebar.divider()
@@ -540,12 +629,19 @@ def render_sidebar() -> dict:
     start_default = end_default - dt.timedelta(days=365 * 5)
     ca, cb = st.sidebar.columns(2)
     with ca:
-        start_date = st.date_input("Start", value=start_default)
+        start_date = st.date_input("Start", value=start_default, help="How far back to pull prices.")
     with cb:
-        end_date = st.date_input("End", value=end_default)
+        end_date = st.date_input("End", value=end_default, help="Usually today — prices download automatically.")
 
-    initial_value = st.sidebar.number_input("Portfolio value ($)", 1_000, 100_000, 100_000, 5_000)
-    risk_free = st.sidebar.slider("Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25) / 100.0
+    initial_value = st.sidebar.number_input(
+        "Portfolio value ($)", 1_000, 100_000, 100_000, 5_000,
+        help="Used for dollar estimates in charts and projections.",
+    )
+    risk_free = st.sidebar.slider(
+        "Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25,
+        help="Return on very safe assets like T-Bills. Used in risk/reward scores." if beginner
+        else "Risk-free rate for Sharpe/Sortino.",
+    ) / 100.0
 
     st.sidebar.divider()
     st.sidebar.markdown("### Quick-add asset")
@@ -557,15 +653,17 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.caption(APP_DISCLAIMER)
-    st.sidebar.divider()
-    st.sidebar.markdown("### Performance")
-    mode = st.sidebar.radio("Analysis mode", ["Fast mode", "Full analysis mode"], index=0)
-    frontier_points = st.sidebar.select_slider(
-        "Frontier granularity",
-        options=[200, 500, 1000, 2000],
-        value=2000,
-        help="Lower values run faster. 2,000 is default institutional setting.",
-    )
+
+    frontier_points = 2000
+    if not beginner:
+        st.sidebar.divider()
+        st.sidebar.markdown("### Performance")
+        frontier_points = st.sidebar.select_slider(
+            "Frontier granularity",
+            options=[200, 500, 1000, 2000],
+            value=2000,
+            help="Lower values run faster. 2,000 is default institutional setting.",
+        )
 
     return {
         "start": start_date.isoformat(),
@@ -574,7 +672,7 @@ def render_sidebar() -> dict:
         "risk_free": float(risk_free),
         "portfolio_preset": portfolio_preset,
         "asset_preset": asset_preset,
-        "mode": mode,
+        "experience": experience,
         "frontier_points": int(frontier_points),
     }
 
@@ -608,6 +706,254 @@ def parse_holdings(df: pd.DataFrame):
     types = clean.get("Asset Type", pd.Series(["Equity"] * len(clean))).fillna("Equity").tolist()
     return clean["Ticker"].tolist(), weights, types
 
+
+def render_overview_health_snapshot(tickers: list[str], weights: np.ndarray) -> None:
+    state, summary = get_health_badge_state(tickers, weights)
+    if state == "ok" and summary:
+        color_class = {
+            "green": "health-card-green",
+            "yellow": "health-card-yellow",
+            "orange": "health-card-orange",
+            "red": "health-card-red",
+        }.get(summary["score_color"], "health-card-yellow")
+        st.markdown(
+            f"""
+            <div class="health-card {color_class}">
+                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;">
+                    Portfolio Health Score
+                </div>
+                <div style="font-size:2.4rem;font-weight:700;color:#f1f5f9;line-height:1.1;">
+                    {summary['score']:.0f}<span style="font-size:1rem;color:#94a3b8;"> / 100</span>
+                </div>
+                <div style="font-size:1rem;font-weight:600;color:#e2e8f0;margin-top:0.25rem;">
+                    {summary['score_label']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info(
+            "No health score yet. Click **Analyze Portfolio** below or open **Portfolio Health** "
+            "and click **Refresh Portfolio Health**."
+        )
+
+
+def render_overview_tab(
+    settings: dict,
+    metrics: core.ExtendedPortfolioMetrics,
+    holdings_df: pd.DataFrame,
+    growth: pd.Series,
+    insights: list[str],
+    explanation: core.PortfolioExplanation,
+    returns: pd.DataFrame,
+    weights: np.ndarray,
+    tickers: list[str],
+    base_risk_pack: dict,
+) -> None:
+    beginner = is_beginner_mode(settings)
+
+    if beginner:
+        coach_card(
+            "Start here",
+            "1) Confirm your holdings in <b>Portfolio Inputs</b> · "
+            "2) Click <b>Analyze Portfolio</b> below · "
+            "3) Read your health score and suggestions · "
+            "4) Check again each month.",
+        )
+    else:
+        section_header("Dashboard", f"Portfolio overview. {APP_DISCLAIMER}")
+
+    # ── Priority 1–3: Health, status, recommendations ───────────────────────
+    section_header(
+        "Portfolio Health" if beginner else "Portfolio Health Snapshot",
+        "Your portfolio checkup — higher is generally better in this model." if beginner
+        else "Cached health score from Portfolio Health analysis.",
+    )
+    if beginner:
+        what_why_do(
+            "Portfolio Health Score",
+            "A 0–100 summary of how your mix looks on return, risk, diversification, and goal fit.",
+            "It helps you see at a glance whether your portfolio may need attention.",
+            "Click Analyze Portfolio, then read What's Working and suggestions on the Portfolio Health tab.",
+        )
+    col_a, col_b = st.columns([1, 1.2])
+    with col_a:
+        render_overview_health_snapshot(tickers, weights)
+    with col_b:
+        if explanation.portfolio_overview:
+            st.markdown("**Status summary**")
+            for item in explanation.portfolio_overview[:3]:
+                st.markdown(f"- {item}")
+
+    if st.button("Analyze Portfolio", type="primary", key="overview_analyze_btn"):
+        st.session_state.run_health = True
+        st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
+        st.rerun()
+
+    st.markdown("---")
+    section_header(
+        "Suggestions for you" if beginner else "Recommendations & Insights",
+        "Ideas to consider — not instructions. You decide what fits your situation." if beginner
+        else "Automated commentary from allocation and risk metrics.",
+    )
+    if beginner and explanation.suggested_improvements:
+        for item in explanation.suggested_improvements[:5]:
+            st.markdown(f'<div class="insight-card">💡 {item.replace("**", "")}</div>', unsafe_allow_html=True)
+    render_insights(insights)
+    if explanation.weaknesses and beginner:
+        st.markdown("**Areas to watch**")
+        for item in explanation.weaknesses[:3]:
+            st.markdown(f"- {item}")
+
+    # ── Priority 4: Performance ───────────────────────────────────────────────
+    st.markdown("---")
+    section_header(
+        "How your portfolio has performed" if beginner else "Portfolio Summary",
+        "Based on past market data for your current mix — not a forecast." if beginner
+        else f"Historical risk/return based on daily returns. {APP_DISCLAIMER}",
+    )
+    if beginner:
+        what_why_do(
+            "Performance numbers",
+            "These describe how your mix behaved in the past over the dates in the sidebar.",
+            "They help you compare options and set expectations about risk.",
+            "Focus on return vs. how bumpy the ride was. Use Refresh Market Data monthly.",
+        )
+    metrics_row_primary(metrics, settings["initial_value"], settings)
+    if not beginner:
+        metrics_row_extended(metrics, settings)
+    elif st.toggle("Show more detail numbers", value=False, key="overview_show_extended_metrics"):
+        metrics_row_extended(metrics, settings)
+
+    c1, c2 = st.columns([1.2, 1])
+    with c1:
+        section_header("Growth over time" if beginner else "Growth Over Time")
+        gdf = growth.reset_index()
+        gdf.columns = ["Date", "Portfolio Value"]
+        st.plotly_chart(charts.growth_chart(gdf), use_container_width=True)
+    with c2:
+        section_header("Your mix" if beginner else "Allocation")
+        st.plotly_chart(charts.allocation_chart(holdings_df), use_container_width=True)
+
+    st.markdown("---")
+    section_header("Your holdings")
+    disp = holdings_df.copy()
+    disp["Weight (%)"] = disp["Weight (%)"].map(lambda x: f"{x:.1f}%")
+    disp["Value ($)"] = disp["Value ($)"].map(_money)
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    # ── Recommendation engine (beginner-friendly) ───────────────────────────
+    st.markdown("---")
+    section_header(
+        "Get a suggested portfolio" if beginner else "Portfolio Recommendation Engine",
+        "Answer a few questions for a starting mix you can apply with one click." if beginner
+        else "Generate a suggested allocation from age, horizon, risk, liquidity, and objective.",
+    )
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        rec_age = st.number_input("Age", min_value=18, max_value=100, value=35)
+        rec_horizon = st.slider("Years until you need the money", 1, 40, 15)
+    with r2:
+        rec_risk = st.selectbox("Comfort with ups and downs", ["Low", "Medium", "High"], index=1)
+        rec_liq = st.selectbox("Need cash soon?", ["Low", "Medium", "High"], index=1)
+    with r3:
+        rec_obj = st.selectbox(
+            "Main goal",
+            [
+                "capital preservation",
+                "balanced growth",
+                "aggressive growth",
+                "income",
+                "retirement",
+                "short-term cash management",
+            ],
+            index=1,
+        )
+    rec = core.recommend_portfolio(rec_age, rec_horizon, rec_risk, rec_liq, rec_obj)
+    for reason in rec.rationale:
+        st.markdown(f"- {reason}")
+    rec_df = pd.DataFrame(rec.suggested_holdings)
+    st.dataframe(rec_df, use_container_width=True, hide_index=True)
+    if st.button("Use this suggested portfolio", use_container_width=False, key="overview_apply_rec"):
+        st.session_state.holdings_df = rec_df
+        st.session_state.pop("health_summary", None)
+        st.success("Applied to Portfolio Inputs.")
+        st.rerun()
+
+    # ── Advanced sections (collapsed for beginners) ─────────────────────────
+    advanced_label = "Optional: benchmarks & advanced charts" if beginner else "Benchmarks & advanced analytics"
+
+    with st.expander(advanced_label, expanded=not beginner):
+        if beginner:
+            st.caption("These tools are useful once you're comfortable with the basics.")
+
+        section_header(
+            "Compare to simple alternatives",
+            "See how your mix stacks up against SPY, QQQ, 60/40, and cash-like T-Bills.",
+        )
+        if st.button("Run Benchmark Comparison", key="run_benchmark_btn"):
+            st.session_state.run_benchmark = True
+        show_benchmark = st.session_state.get("run_benchmark", False)
+        if show_benchmark:
+            with st.spinner("Loading benchmark comparison…"):
+                comp_prices = load_comparison_prices(settings["start"], settings["end"])
+                comp_returns_raw = compute_daily_returns(comp_prices)
+                port_rets = core.portfolio_daily_returns(returns, weights)
+                synth_6040 = comp_returns_raw["SPY"] * 0.60 + comp_returns_raw["AGG"] * 0.40
+                benchmark_returns = pd.DataFrame(
+                    {
+                        "Current Portfolio": port_rets,
+                        "SPY": comp_returns_raw["SPY"],
+                        "QQQ": comp_returns_raw["QQQ"],
+                        "60/40": synth_6040,
+                        "T-Bills": comp_returns_raw["BIL"],
+                    }
+                ).dropna()
+                benchmark_table, benchmark_growth = core.benchmark_comparison(
+                    benchmark_returns,
+                    settings["initial_value"],
+                    settings["risk_free"],
+                )
+            btab = benchmark_table.copy()
+            for col in ["Annual Return", "Volatility", "Sharpe Ratio", "Max Drawdown", "CAGR"]:
+                if col != "Sharpe Ratio":
+                    btab[col] = btab[col].map(_pct)
+                else:
+                    btab[col] = btab[col].map(lambda x: f"{x:.2f}")
+            btab["Growth of $100,000"] = btab["Growth of $100,000"].map(_money)
+            st.dataframe(btab, use_container_width=True, hide_index=True)
+            gcmp = benchmark_growth.reset_index().rename(columns={"index": "Date"})
+            if "Date" not in gcmp.columns:
+                gcmp["Date"] = benchmark_growth.index
+            st.plotly_chart(charts.benchmark_growth_chart(gcmp), use_container_width=True)
+        else:
+            st.caption("Click **Run Benchmark Comparison** to load.")
+
+        if not beginner:
+            section_header("Rolling Analytics", f"{core.ROLLING_WINDOW}-trading-day window (~3 months).")
+            if st.button("Run Rolling Analytics", key="run_rolling_btn"):
+                st.session_state.run_rolling = True
+            if st.session_state.get("run_rolling", False):
+                r1, r2 = st.columns(2)
+                with r1:
+                    st.plotly_chart(
+                        charts.rolling_chart(
+                            base_risk_pack["roll_ret"].to_frame("Rolling Return"),
+                            "Rolling Annualized Return",
+                            "Return",
+                        ),
+                        use_container_width=True,
+                    )
+                with r2:
+                    st.plotly_chart(
+                        charts.rolling_chart(
+                            base_risk_pack["roll_vol"].to_frame("Rolling Volatility"),
+                            "Rolling Volatility",
+                            "Volatility",
+                        ),
+                        use_container_width=True,
+                    )
 
 def export_buttons(
     holdings_df: pd.DataFrame,
@@ -651,10 +997,11 @@ def export_buttons(
 
 # ── Header ──────────────────────────────────────────────────────────────────────
 
-render_branded_header()
-health_badge_slot = st.empty()
-
 settings = render_sidebar()
+beginner_mode = is_beginner_mode(settings)
+HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
+render_branded_header(beginner_mode)
+health_badge_slot = st.empty()
 init_holdings()
 apply_asset_preset(settings["asset_preset"])
 
@@ -690,12 +1037,24 @@ tabs = st.tabs(
 with tab_guide:
     section_header(
         "Getting Started Guide",
-        f"Step-by-step tutorial for building, analyzing, and monitoring your portfolio. {APP_DISCLAIMER}",
+        "Your step-by-step coach — no finance background needed." if beginner_mode
+        else f"Step-by-step tutorial. {APP_DISCLAIMER}",
     )
-    render_getting_started_guide()
+    render_getting_started_guide(beginner_mode=beginner_mode)
 
 with tab_inputs:
-    section_header("Portfolio Inputs", "Tickers and target weights. Normalized to 100% if needed.")
+    section_header(
+        "Portfolio Inputs",
+        "Enter fund tickers (like SPY) and what percent of your portfolio each one is." if beginner_mode
+        else "Tickers and target weights. Normalized to 100% if needed.",
+    )
+    if beginner_mode:
+        what_why_do(
+            "Portfolio Inputs",
+            "The list of investments in your mix and how much of each you hold.",
+            "The app downloads prices for these tickers automatically — no upload needed.",
+            "Pick a preset in the sidebar or use the Guide, then make sure weights add to 100%.",
+        )
     edited = st.data_editor(
         st.session_state.holdings_df,
         num_rows="dynamic",
@@ -763,149 +1122,13 @@ export_buttons(
     report_text,
 )
 
-# ── Overview ──────────────────────────────────────────────────────────────────
-
-with tab_overview:
-    section_header("Portfolio Summary", f"Historical risk/return based on daily returns. {APP_DISCLAIMER}")
-    metrics_row_primary(metrics, settings["initial_value"])
-    metrics_row_extended(metrics)
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Fast mode is active: advanced analytics are deferred until you switch to Full analysis mode.")
-
-    st.markdown("---")
-    if not fast_mode:
-        section_header("Portfolio Insights", "Automated commentary from your allocation and risk metrics.")
-        render_insights(insights)
-
-    if not fast_mode:
-        st.markdown("---")
-        section_header(
-            "Benchmark Comparison",
-            "Compare your portfolio against SPY, QQQ, a 60/40 blend, and a T-bill portfolio.",
-        )
-        if st.button("Run Benchmark Comparison", key="run_benchmark_btn"):
-            st.session_state.run_benchmark = True
-        if st.session_state.get("run_benchmark", False):
-            with st.spinner("Loading benchmark comparison…"):
-                comp_prices = load_comparison_prices(settings["start"], settings["end"])
-                comp_returns_raw = compute_daily_returns(comp_prices)
-                port_rets = core.portfolio_daily_returns(returns, weights)
-                synth_6040 = comp_returns_raw["SPY"] * 0.60 + comp_returns_raw["AGG"] * 0.40
-                benchmark_returns = pd.DataFrame(
-                    {
-                        "Current Portfolio": port_rets,
-                        "SPY": comp_returns_raw["SPY"],
-                        "QQQ": comp_returns_raw["QQQ"],
-                        "60/40": synth_6040,
-                        "T-Bills": comp_returns_raw["BIL"],
-                    }
-                ).dropna()
-                benchmark_table, benchmark_growth = core.benchmark_comparison(
-                    benchmark_returns,
-                    settings["initial_value"],
-                    settings["risk_free"],
-                )
-            btab = benchmark_table.copy()
-            for col in ["Annual Return", "Volatility", "Sharpe Ratio", "Max Drawdown", "CAGR"]:
-                if col != "Sharpe Ratio":
-                    btab[col] = btab[col].map(_pct)
-                else:
-                    btab[col] = btab[col].map(lambda x: f"{x:.2f}")
-            btab["Growth of $100,000"] = btab["Growth of $100,000"].map(_money)
-            st.dataframe(btab, use_container_width=True, hide_index=True)
-            gcmp = benchmark_growth.reset_index().rename(columns={"index": "Date"})
-            if "Date" not in gcmp.columns:
-                gcmp["Date"] = benchmark_growth.index
-            st.plotly_chart(charts.benchmark_growth_chart(gcmp), use_container_width=True)
-        else:
-            st.caption("Benchmark analytics are on-demand to speed initial app load.")
-
-    st.markdown("---")
-    section_header(
-        "Portfolio Recommendation Engine",
-        "Generate a suggested allocation from age, horizon, risk, liquidity, and objective.",
-    )
-    r1, r2, r3 = st.columns(3)
-    with r1:
-        rec_age = st.number_input("Age", min_value=18, max_value=100, value=35)
-        rec_horizon = st.slider("Investment horizon (years)", 1, 40, 15)
-    with r2:
-        rec_risk = st.selectbox("Risk tolerance", ["Low", "Medium", "High"], index=1)
-        rec_liq = st.selectbox("Need for liquidity", ["Low", "Medium", "High"], index=1)
-    with r3:
-        rec_obj = st.selectbox(
-            "Objective",
-            [
-                "capital preservation",
-                "balanced growth",
-                "aggressive growth",
-                "income",
-                "retirement",
-                "short-term cash management",
-            ],
-            index=1,
-        )
-    rec = core.recommend_portfolio(rec_age, rec_horizon, rec_risk, rec_liq, rec_obj)
-    alloc_text = " · ".join([f"{k}: {v*100:.1f}%" for k, v in rec.allocation.items()])
-    st.caption(f"Suggested mix: {alloc_text}")
-    for reason in rec.rationale:
-        st.markdown(f"- {reason}")
-    rec_df = pd.DataFrame(rec.suggested_holdings)
-    st.dataframe(rec_df, use_container_width=True, hide_index=True)
-    if st.button("Apply Recommendation", use_container_width=False):
-        st.session_state.holdings_df = rec_df
-        st.success("Recommended allocation applied to Portfolio Inputs.")
-        st.rerun()
-
-    st.markdown("---")
-    section_header("Holdings")
-    disp = holdings_df.copy()
-    disp["Weight (%)"] = disp["Weight (%)"].map(lambda x: f"{x:.1f}%")
-    disp["Value ($)"] = disp["Value ($)"].map(_money)
-    st.dataframe(disp, use_container_width=True, hide_index=True)
-
-    c1, c2 = st.columns([1.2, 1])
-    with c1:
-        section_header("Growth Over Time")
-        gdf = growth.reset_index()
-        gdf.columns = ["Date", "Portfolio Value"]
-        st.plotly_chart(charts.growth_chart(gdf), use_container_width=True)
-    with c2:
-        section_header("Allocation")
-        st.plotly_chart(charts.allocation_chart(holdings_df), use_container_width=True)
-
-    if not fast_mode:
-        section_header("Rolling Analytics", f"{core.ROLLING_WINDOW}-trading-day window (~3 months).")
-        if st.button("Run Rolling Analytics", key="run_rolling_btn"):
-            st.session_state.run_rolling = True
-        if st.session_state.get("run_rolling", False):
-            r1, r2 = st.columns(2)
-            with r1:
-                st.plotly_chart(
-                    charts.rolling_chart(
-                        base_risk_pack["roll_ret"].to_frame("Rolling Return"),
-                        "Rolling Annualized Return",
-                        "Return",
-                    ),
-                    use_container_width=True,
-                )
-            with r2:
-                st.plotly_chart(
-                    charts.rolling_chart(
-                        base_risk_pack["roll_vol"].to_frame("Rolling Volatility"),
-                        "Rolling Volatility",
-                        "Volatility",
-                    ),
-                    use_container_width=True,
-                )
-
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
 with tab_explain:
     section_header(
         "Explain This Portfolio",
-        f"AI-style memo synthesized from allocation, risk metrics, and macro sensitivity. {APP_DISCLAIMER}",
+        "A plain-English summary of your portfolio — strengths, weaknesses, and ideas." if beginner_mode
+        else f"AI-style memo synthesized from allocation, risk metrics, and macro sensitivity. {APP_DISCLAIMER}",
     )
     st.markdown("##### Portfolio Overview")
     for item in explanation.portfolio_overview:
@@ -944,9 +1167,21 @@ with tab_explain:
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
 with tab_risk:
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Risk Analysis is disabled in Fast mode. Switch to Full analysis mode to run advanced risk sections.")
+    section_header(
+        "Risk Analysis",
+        "See how bumpy each holding is and whether your mix is spread out enough." if beginner_mode
+        else "Correlation, concentration, scenarios, and macro regimes.",
+    )
+    if beginner_mode:
+        what_why_do(
+            "Risk Analysis",
+            "Tools that show how much investments move and whether one fund dominates your risk.",
+            "Helps you avoid putting too many eggs in one basket.",
+            "Switch to Advanced Mode when ready, or read suggestions on Overview and Portfolio Health.",
+        )
+        st.info(
+            "Detailed risk charts are in **Advanced Mode**. Your Overview tab already highlights key suggestions."
+        )
     else:
         if st.button("Run Risk & Macro Analysis", key="run_risk_macro_btn"):
             st.session_state.run_risk_macro = True
@@ -1007,9 +1242,17 @@ with tab_risk:
 
 with tab_health:
     section_header(
-        "Portfolio Health Monitor",
-        f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
+        "Portfolio Health",
+        "Your portfolio checkup — what's working, what to watch, and ideas to consider." if beginner_mode
+        else f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
     )
+    if beginner_mode:
+        what_why_do(
+            "Portfolio Health",
+            "A score and summary of how well your mix fits your goal in this model.",
+            "Gives you a simple answer to 'Am I in decent shape?' without reading every chart.",
+            "Click Refresh Portfolio Health below, then read What's Working and recommendations.",
+        )
     if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         st.session_state.run_health = True
@@ -1063,7 +1306,7 @@ with tab_health:
     with hc2:
         health_run_optimizer = st.checkbox(
             "Include optimizer allocation in drift analysis",
-            value=not (settings["mode"] == "Fast mode"),
+            value=not beginner_mode,
             key="health_run_optimizer",
         )
 
@@ -1109,17 +1352,24 @@ with tab_health:
             unsafe_allow_html=True,
         )
 
-        section_header("Portfolio Health Score", "Composite score from return, risk, diversification, objective, and macro fit.")
+        section_header(
+            "Portfolio Health Score",
+            "Higher is generally better — a simple checkup score, not a grade on you." if beginner_mode
+            else "Composite score from return, risk, diversification, objective, and macro fit.",
+        )
         sc1, sc2 = st.columns([1, 2])
         with sc1:
             render_health_score_card(health)
         with sc2:
-            breakdown_df = pd.DataFrame(
-                {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
-            )
-            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+            if not beginner_mode:
+                breakdown_df = pd.DataFrame(
+                    {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
+                )
+                st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("Switch to Advanced Mode to see the detailed score breakdown.")
 
-        section_header("What's Working / What's Not", "Model-identified positives and areas to monitor.")
+        section_header("What's Working / What's Not", "Plain summary of strengths and things to watch.")
         wn1, wn2 = st.columns(2)
         with wn1:
             st.markdown("**What's Working**")
@@ -1130,93 +1380,118 @@ with tab_health:
             for item in health.whats_not_working:
                 st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
 
-        section_header("Allocation Drift / Rebalancing Suggestions", "Compare current weights to objective, optimizer, and recommended mixes.")
-        st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
+        section_header(
+            "Suggestions" if beginner_mode else "Allocation Drift / Rebalancing Suggestions",
+            "Ideas to consider — you decide whether to act." if beginner_mode
+            else "Compare current weights to objective, optimizer, and recommended mixes.",
+        )
+        if not beginner_mode:
+            st.dataframe(health.rebalance_df, use_container_width=True, hide_index=True)
         drift_notes = health.rebalance_df[health.rebalance_df["Model Note"] != "Within tolerance"]["Model Note"].tolist()
         if drift_notes:
             for note in drift_notes[:6]:
-                st.markdown(f"- *{note}* (for educational purposes)")
+                st.markdown(f"- *{note}*")
         else:
-            st.caption("No material drift detected vs objective/optimizer in the model.")
+            st.caption("No major drift detected in the model.")
 
-        section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
-        for note in health.macro_fit:
-            st.markdown(f"- {note}")
-        st.markdown("**Model-based considerations**")
+        if not beginner_mode:
+            section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
+            for note in health.macro_fit:
+                st.markdown(f"- {note}")
+        st.markdown("**Recommendations**")
         for note in health.recommendations:
             st.markdown(f"- {note}")
 
-        section_header("Visual Portfolio Diagnostics", "Return/risk contributions, allocation comparison, macro sensitivity, and benchmark view.")
-        d1, d2 = st.columns(2)
-        with d1:
-            st.plotly_chart(
-                charts.contribution_bar_chart(
-                    health.return_contrib_df,
-                    "Return Contribution (%)",
-                    "Contribution to Return by Asset",
-                ),
-                use_container_width=True,
-            )
-        with d2:
-            st.plotly_chart(
-                charts.contribution_bar_chart(
-                    health.risk_contrib_df,
-                    "Risk Contribution (%)",
-                    "Contribution to Risk by Asset",
-                ),
-                use_container_width=True,
-            )
-        d3, d4 = st.columns(2)
-        with d3:
-            st.plotly_chart(
-                charts.contribution_bar_chart(
-                    health.drawdown_contrib_df,
-                    "Drawdown Contribution (%)",
-                    "Drawdown Contribution by Asset",
-                ),
-                use_container_width=True,
-            )
-        with d4:
-            st.plotly_chart(
-                charts.allocation_comparison_chart(health.allocation_compare_df),
-                use_container_width=True,
-            )
-        d5, d6 = st.columns(2)
-        with d5:
-            st.plotly_chart(
-                charts.macro_sensitivity_heatmap(health.macro_heatmap_df),
-                use_container_width=True,
-            )
-        with d6:
-            try:
-                cmp_prices = load_comparison_prices(settings["start"], settings["end"])
-                cmp_rets = compute_daily_returns(cmp_prices)
-                port_rets = base_risk_pack["port_rets"]
-                mini = pd.DataFrame({"Date": port_rets.index})
-                mini["Portfolio"] = settings["initial_value"] * (1 + port_rets).cumprod()
-                for bc in cmp_rets.columns:
-                    if bc.upper() in ("SPY", "QQQ"):
-                        mini[bc.upper()] = settings["initial_value"] * (1 + cmp_rets[bc]).cumprod()
-                st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
-            except Exception:
-                mini = pd.DataFrame({"Date": growth.index, "Portfolio": growth.values})
-                st.plotly_chart(charts.benchmark_mini_chart(mini, title="Portfolio Growth"), use_container_width=True)
+        charts_label = "Detailed charts (optional)" if beginner_mode else "Visual Portfolio Diagnostics"
+        with st.expander(charts_label, expanded=not beginner_mode):
+            if beginner_mode:
+                st.caption("These charts are optional — the summary above is enough for most checkups.")
+            d1, d2 = st.columns(2)
+            with d1:
+                st.plotly_chart(
+                    charts.contribution_bar_chart(
+                        health.return_contrib_df,
+                        "Return Contribution (%)",
+                        "Contribution to Return by Asset",
+                    ),
+                    use_container_width=True,
+                )
+            with d2:
+                st.plotly_chart(
+                    charts.contribution_bar_chart(
+                        health.risk_contrib_df,
+                        "Risk Contribution (%)",
+                        "Contribution to Risk by Asset",
+                    ),
+                    use_container_width=True,
+                )
+            if not beginner_mode:
+                d3, d4 = st.columns(2)
+                with d3:
+                    st.plotly_chart(
+                        charts.contribution_bar_chart(
+                            health.drawdown_contrib_df,
+                            "Drawdown Contribution (%)",
+                            "Drawdown Contribution by Asset",
+                        ),
+                        use_container_width=True,
+                    )
+                with d4:
+                    st.plotly_chart(
+                        charts.allocation_comparison_chart(health.allocation_compare_df),
+                        use_container_width=True,
+                    )
+                d5, d6 = st.columns(2)
+                with d5:
+                    st.plotly_chart(
+                        charts.macro_sensitivity_heatmap(health.macro_heatmap_df),
+                        use_container_width=True,
+                    )
+                with d6:
+                    try:
+                        cmp_prices = load_comparison_prices(settings["start"], settings["end"])
+                        cmp_rets = compute_daily_returns(cmp_prices)
+                        port_rets = base_risk_pack["port_rets"]
+                        mini = pd.DataFrame({"Date": port_rets.index})
+                        mini["Portfolio"] = settings["initial_value"] * (1 + port_rets).cumprod()
+                        for bc in cmp_rets.columns:
+                            if bc.upper() in ("SPY", "QQQ"):
+                                mini[bc.upper()] = settings["initial_value"] * (1 + cmp_rets[bc]).cumprod()
+                        st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
+                    except Exception:
+                        mini = pd.DataFrame({"Date": growth.index, "Portfolio": growth.values})
+                        st.plotly_chart(charts.benchmark_mini_chart(mini, title="Portfolio Growth"), use_container_width=True)
 
         st.caption(
             f"Portfolio Health outputs are rule-based and model-driven. {APP_DISCLAIMER} "
             "Refresh after changing tickers, weights, or macro settings."
         )
 
+# ── Overview ──────────────────────────────────────────────────────────────────
+
+with tab_overview:
+    render_overview_tab(
+        settings,
+        metrics,
+        holdings_df,
+        growth,
+        insights,
+        explanation,
+        returns,
+        weights,
+        tickers,
+        base_risk_pack,
+    )
+
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
 
 with tab_forward:
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Forward-Looking Macro Analysis is disabled in Fast mode.")
+    if beginner_mode:
+        st.info("Switch to **Advanced Mode** in the sidebar to explore macro stress tests.")
     else:
         if st.button("Run Forward-Looking Macro Analysis", key="run_forward_macro_btn"):
             st.session_state.run_forward_macro = True
-    if not fast_mode and st.session_state.get("run_forward_macro", False):
+    if not beginner_mode and st.session_state.get("run_forward_macro", False):
         section_header(
             "Forward-Looking Macro Analysis",
             f"Set future macro assumptions and propagate them into projections, Monte Carlo, and optimization inputs. {APP_DISCLAIMER}",
@@ -1330,16 +1605,21 @@ with tab_forward:
             st.metric("Forward Min Vol Return", _pct(f_min_vol.annual_return))
             st.metric("Forward Min Volatility", _pct(f_min_vol.volatility))
             st.metric("Forward Min Vol Sharpe", f"{f_min_vol.sharpe_ratio:.2f}")
-    elif not fast_mode:
+    elif not beginner_mode:
         st.caption("Forward macro analysis is on-demand for faster initial load.")
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
 with tab_mc:
     section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Monte Carlo is disabled in Fast mode.")
+    if beginner_mode:
+        what_why_do(
+            "Monte Carlo",
+            "The app runs many random 'what if' futures to show a range of possible outcomes.",
+            "Helps you think about best-case, typical, and worst-case scenarios — not a prediction.",
+            "Switch to Advanced Mode when you want to explore this tool.",
+        )
+        st.info("Monte Carlo is available in **Advanced Mode**.")
     else:
         if st.button("Run Monte Carlo", key="run_mc_btn"):
             st.session_state.run_mc = True
@@ -1401,9 +1681,8 @@ with tab_mc:
 # ── Optimization ──────────────────────────────────────────────────────────────
 
 with tab_opt:
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Optimization is disabled in Fast mode.")
+    if beginner_mode:
+        st.info("Portfolio optimization is available in **Advanced Mode**.")
     else:
         if st.button("Run Portfolio Optimizer", key="run_optimizer_btn"):
             st.session_state.run_optimizer = True
@@ -1419,7 +1698,7 @@ with tab_opt:
             rows.append({"Metric": t, "Value": _pct(w)})
         return pd.DataFrame(rows)
 
-    if not fast_mode and st.session_state.get("run_optimizer", False):
+    if not beginner_mode and st.session_state.get("run_optimizer", False):
         section_header("Optimizer Results", "Long-only mean-variance optimization on historical data.")
         with st.spinner("Optimizing portfolio…"):
             opt = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
@@ -1441,19 +1720,18 @@ with tab_opt:
             }
         )
         st.dataframe(compare, use_container_width=True, hide_index=True)
-    elif not fast_mode:
+    elif not beginner_mode:
         st.caption("Optimizer runs on demand.")
 
 # ── Efficient Frontier ────────────────────────────────────────────────────────
 
 with tab_frontier:
-    fast_mode = settings["mode"] == "Fast mode"
-    if fast_mode:
-        st.info("Efficient frontier is disabled in Fast mode.")
+    if beginner_mode:
+        st.info("The efficient frontier chart is available in **Advanced Mode**.")
     else:
         if st.button("Build Efficient Frontier", key="run_frontier_btn"):
             st.session_state.run_frontier = True
-    if not fast_mode and st.session_state.get("run_frontier", False):
+    if not beginner_mode and st.session_state.get("run_frontier", False):
         section_header("Efficient Frontier", HELP["efficient_frontier"])
         with st.spinner("Building efficient frontier…"):
             frontier = compute_frontier(
@@ -1475,7 +1753,7 @@ with tab_frontier:
             use_container_width=True,
         )
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
-    elif not fast_mode:
+    elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
 
 # ── Math Problem Solving Lab ──────────────────────────────────────────────────
