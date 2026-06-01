@@ -130,16 +130,16 @@ def render_implementation_guide(
 
     st.caption(DISCLAIMER)
 
-    guide_tabs = st.tabs(
-        [
-            "Open Account",
-            "Fund Account",
-            "Buy Investments",
-            "Maintain Portfolio",
-            "Rebalance Portfolio",
-            "Popular Brokers",
-        ]
-    )
+    tab_names = [
+        "Open Account",
+        "Fund Account",
+        "Buy Investments",
+        "Maintain Portfolio",
+        "Rebalance Portfolio",
+    ]
+    if not beginner:
+        tab_names.append("Popular Brokers")
+    guide_tabs = st.tabs(tab_names)
 
     with guide_tabs[0]:
         st.markdown("#### Open an investment account")
@@ -203,11 +203,19 @@ def render_implementation_guide(
                 "appears here after analysis."
             )
 
-    with guide_tabs[5]:
-        st.markdown("#### Popular brokerage websites")
-        st.caption("Educational reference — not a recommendation of any single broker.")
-        for broker in BROKER_INFO:
-            with st.container(border=True):
-                st.markdown(f"**[{broker['name']}]({broker['url']})**")
-                st.markdown(broker["description"])
-                st.caption(f"Commonly used by: {broker['audience']}")
+    if not beginner:
+        with guide_tabs[5]:
+            st.markdown("#### Popular brokerage websites")
+            st.caption("Educational reference — not a recommendation of any single broker.")
+            for broker in BROKER_INFO:
+                with st.container(border=True):
+                    st.markdown(f"**[{broker['name']}]({broker['url']})**")
+                    st.markdown(broker["description"])
+                    st.caption(f"Commonly used by: {broker['audience']}")
+    else:
+        st.markdown("##### Broker resources (educational)")
+        st.caption("Official websites for research — not endorsements.")
+        bcols = st.columns(2)
+        for i, broker in enumerate(BROKER_INFO[:4]):
+            with bcols[i % 2]:
+                st.markdown(f"**[{broker['name']}]({broker['url']})** — {broker['description'][:80]}…")

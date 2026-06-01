@@ -50,6 +50,10 @@ def _top_rebalance_moves(
     return moves[:max_items]
 
 
+def _is_pre_investment() -> bool:
+    return not bool(st.session_state.get("capital_deployed"))
+
+
 def render_rebalancing_panel(
     health: core.PortfolioHealthResult,
     *,
@@ -59,14 +63,22 @@ def render_rebalancing_panel(
 ) -> None:
     """Show current vs suggested dollars, why, where money might go, and review timing."""
     beginner = is_beginner_mode(settings)
+    pre_invest = _is_pre_investment()
     pv = float(initial_value if initial_value is not None else settings["initial_value"])
     reb = health.rebalance_df
     if "Current ($)" not in reb.columns and not reb.empty:
         reb = core.enrich_rebalance_with_dollars(reb, pv)
 
     moves = _top_rebalance_moves(reb, pv)
-    st.markdown("#### 🔄 Rebalancing guidance")
-    st.caption(f"Dollar amounts use portfolio value **{_money(pv)}**. {APP_DISCLAIMER}")
+    if pre_invest:
+        st.markdown("#### 📐 Suggested allocation adjustment")
+        st.caption(
+            "You have not marked capital as deployed yet — this compares your **planned mix** to the "
+            f"**objective mix** for your goal (portfolio value **{_money(pv)}** for illustration). {APP_DISCLAIMER}"
+        )
+    else:
+        st.markdown("#### 🔄 Rebalancing guidance")
+        st.caption(f"Dollar amounts use portfolio value **{_money(pv)}**. {APP_DISCLAIMER}")
 
     if not moves:
         st.success(
@@ -120,10 +132,16 @@ def render_rebalancing_panel(
             st.markdown(f"**Why it may matter:** {d0.why_it_matters}")
             st.markdown(f"**Possible benefit:** {d0.possible_benefit}")
         else:
-            st.markdown(
-                "Your current mix may have drifted from the objective the model uses for comparison. "
-                "Rebalancing is about moving closer to a target mix — not a requirement to trade today."
-            )
+            if pre_invest:
+                st.markdown(
+                    "Your planned mix may differ from the objective allocation for your selected goal. "
+                    "This is a suggested starting allocation — not a requirement to trade today."
+                )
+            else:
+                st.markdown(
+                    "Your current mix may have drifted from the objective the model uses for comparison. "
+                    "Rebalancing is about moving closer to a target mix — not a requirement to trade today."
+                )
         if increases and decreases:
             dec_names = ", ".join(m["ticker"] for m in decreases[:3])
             inc_names = ", ".join(m["ticker"] for m in increases[:3])

@@ -63,26 +63,49 @@ def render_recommendation_detail(
     *,
     beginner: bool = True,
 ) -> None:
-    st.markdown(f"**Recommendation {index + 1}**")
     display_text = translate_for_beginner(detail.text) if beginner else detail.text
-    st.markdown(display_text)
+    issue = translate_for_beginner(detail.issue) if beginner else detail.issue
+    why = translate_for_beginner(detail.why_it_matters) if beginner else detail.why_it_matters
+    dollars = detail.evidence.get("Approx. dollar amount") or detail.evidence.get("About how much money is involved")
 
-    why_label = "Why am I seeing this?" if beginner else "Why? — model reasoning"
-    with st.expander(why_label, expanded=False):
-        issue = translate_for_beginner(detail.issue) if beginner else detail.issue
-        why = translate_for_beginner(detail.why_it_matters) if beginner else detail.why_it_matters
+    if beginner:
+        st.markdown(
+            f"""
+            <div style="background:#141c2b;border:1px solid #334155;border-left:4px solid #4da3ff;
+            border-radius:12px;padding:1rem 1.1rem;margin-bottom:0.65rem;">
+            <div style="font-size:0.72rem;text-transform:uppercase;color:#4da3ff;font-weight:600;">
+            Suggestion {index + 1}</div>
+            <div style="color:#f1f5f9;font-weight:600;margin:0.45rem 0 0.65rem 0;line-height:1.45;">
+            {display_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown(f"**What is the issue?** {issue}")
         st.markdown(f"**Why does it matter?** {why}")
-        st.markdown(f"**What might you consider?** {detail.possible_benefit}")
-        st.markdown(f"**Triggered by:** {detail.triggered_by}")
-        if detail.evidence:
-            st.markdown("**Supporting details**")
+        st.markdown(f"**What might I consider doing?** {detail.possible_benefit}")
+        if dollars:
+            st.markdown(f"**How many dollars are involved?** About `{dollars}` (model estimate).")
+        with st.expander("More detail", expanded=False):
+            st.markdown(f"**Triggered by:** {detail.triggered_by}")
             for key, val in detail.evidence.items():
-                label = key
-                if beginner and key == "Approx. dollar amount":
-                    label = "About how much money is involved"
-                st.markdown(f"- {label}: `{val}`")
-        st.caption(DISCLAIMER)
+                if key in ("Approx. dollar amount",):
+                    continue
+                st.markdown(f"- {key}: `{val}`")
+            st.caption(DISCLAIMER)
+    else:
+        st.markdown(f"**Recommendation {index + 1}**")
+        st.markdown(display_text)
+        with st.expander("Why? — model reasoning", expanded=False):
+            st.markdown(f"**What is the issue?** {issue}")
+            st.markdown(f"**Why does it matter?** {why}")
+            st.markdown(f"**What might you consider?** {detail.possible_benefit}")
+            st.markdown(f"**Triggered by:** {detail.triggered_by}")
+            if detail.evidence:
+                st.markdown("**Supporting details**")
+                for key, val in detail.evidence.items():
+                    st.markdown(f"- {key}: `{val}`")
+            st.caption(DISCLAIMER)
 
 
 def render_recommendations_panel(
@@ -90,14 +113,15 @@ def render_recommendations_panel(
     settings: dict,
 ) -> None:
     beginner = is_beginner_mode(settings)
-    title = "What the model suggests — and why" if beginner else "Recommendations with model reasoning"
+    title = "Your portfolio coach — suggestions" if beginner else "Recommendations with model reasoning"
     lead = (
-        "Each item includes a **Why?** explanation so nothing is a black box."
+        "Each card answers: what is the issue, why it matters, what you might consider, and how much money is involved."
         if beginner
         else "Expand each recommendation for issue, trigger metrics, and tradeoffs."
     )
     st.markdown(f"#### {title}")
     st.caption(lead)
+    st.session_state.recommendations_displayed = True
 
     details = health.recommendation_details or [
         core.RecommendationDetail(

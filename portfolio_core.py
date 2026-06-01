@@ -213,6 +213,8 @@ class PortfolioHealthResult:
     allocation_compare_df: pd.DataFrame
     macro_heatmap_df: pd.DataFrame
     score_breakdown: dict[str, float]
+    avg_drift: float
+    objective: str
 
 
 OBJECTIVE_ALLOCATIONS: dict[str, dict[str, float]] = {
@@ -2246,6 +2248,8 @@ def evaluate_portfolio_health(
         allocation_compare_df=alloc_compare,
         macro_heatmap_df=macro_heatmap,
         score_breakdown=breakdown,
+        avg_drift=float(avg_drift),
+        objective=objective,
     )
 
 

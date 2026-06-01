@@ -284,6 +284,16 @@ def render_how_much_to_invest(
                 key=f"{key_prefix}_plan_risk",
             )
 
+    st.session_state.plan_total_cash = int(total_cash)
+    st.session_state.plan_emergency = int(emergency)
+
+    generate_label = "Generate investment plan" if beginner else "Generate plan"
+    if st.button(generate_label, type="primary", key=f"{key_prefix}_generate_plan"):
+        st.session_state.investment_plan_generated = True
+    if not st.session_state.get("investment_plan_generated"):
+        st.caption("Enter your numbers above, then click **Generate investment plan** to see results.")
+        return None
+
     plan = _compute_investment_plan_safe(
         total_available=float(total_cash),
         emergency_fund_needed=float(emergency),
@@ -295,36 +305,22 @@ def render_how_much_to_invest(
         monthly_contribution=float(monthly),
     )
     st.session_state.investment_plan = plan
-    st.session_state.plan_total_cash = int(total_cash)
-    st.session_state.plan_emergency = int(emergency)
 
     long_term_suggested = float(_plan_field(plan, "long_term_suggested", 0.0))
     amount_investable = float(_plan_field(plan, "amount_potentially_investable", 0.0))
 
     if beginner:
-        st.markdown("##### Your numbers at a glance")
         m1, m2, m3 = st.columns(3)
         m1.metric("Available Cash", _money(float(total_cash)))
-        m2.metric("Suggested Emergency Reserve", _money(float(emergency)))
-        m3.metric("Suggested Investable Amount", _money(amount_investable))
-
-        if tickers and weights is not None and len(tickers) > 0 and amount_investable > 0:
-            st.markdown("##### Suggested allocation dollars")
-            st.caption(f"Based on **{_money(amount_investable)}** investable and your current mix.")
-            try:
-                w = core.normalize_weights(np.asarray(weights, dtype=float))
-                n = min(len(tickers), len(w))
-                alloc_rows = []
-                for i in range(n):
-                    t = tickers[i]
-                    dollars = amount_investable * w[i]
-                    alloc_rows.append(
-                        {"Investment": t, "Suggested amount": _money(dollars), "Weight": f"{w[i]*100:.1f}%"}
-                    )
-                st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
-            except Exception:
-                st.caption("Allocation dollars unavailable until portfolio weights are valid.")
-
+        m2.metric("Emergency Reserve", _money(float(emergency)))
+        m3.metric("Investable Amount", _money(amount_investable))
+        st.markdown(
+            f"Based on your inputs, the model suggests approximately **{_money(long_term_suggested)}** "
+            f"may be available for **long-term investing** "
+            f"(from **{_money(amount_investable)}** potentially investable after reserves)."
+        )
+        with st.expander("Adjust planning details", expanded=False):
+            st.caption("Optional: apply this amount as your portfolio value for dollar estimates.")
         b1, b2 = st.columns(2)
         with b1:
             if st.button(
@@ -334,6 +330,7 @@ def render_how_much_to_invest(
             ):
                 st.session_state.sidebar_portfolio_value = int(amount_investable)
                 st.session_state.plan_total_cash = int(total_cash)
+                st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
                 st.rerun()
         with b2:
@@ -343,6 +340,7 @@ def render_how_much_to_invest(
                 key=f"{key_prefix}_apply_long_term",
             ):
                 st.session_state.sidebar_portfolio_value = int(long_term_suggested)
+                st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(long_term_suggested)}.")
                 st.rerun()
     else:
@@ -358,6 +356,7 @@ def render_how_much_to_invest(
                 key=f"{key_prefix}_apply_long_term_adv",
             ):
                 st.session_state.sidebar_portfolio_value = int(long_term_suggested)
+                st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(long_term_suggested)} for analysis.")
                 st.rerun()
         with b2:
@@ -367,6 +366,7 @@ def render_how_much_to_invest(
                 key=f"{key_prefix}_apply_investable_adv",
             ):
                 st.session_state.sidebar_portfolio_value = int(amount_investable)
+                st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
                 st.rerun()
 

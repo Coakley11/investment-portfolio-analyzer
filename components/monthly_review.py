@@ -7,36 +7,44 @@ import streamlit as st
 from components.ui_helpers import APP_DISCLAIMER
 
 MONTHLY_CHECKLIST = [
-    ("Refresh Market Data", "Use **Refresh Market Data** in the sidebar to pull the latest prices."),
-    ("Review Portfolio Health", "Open **❤️ Portfolio Health** and click **Refresh Portfolio Health**."),
-    ("Read Recommendations", "On **🏠 Overview** or Portfolio Health, expand **Why am I seeing this?** on each suggestion."),
-    ("Check Rebalancing Suggestions", "Review dollar-based rebalance cards — no need to act immediately."),
-    ("Review Macro Environment", "Skim macro assumptions on Portfolio Health — defaults are fine to start."),
-    ("Decide If Changes Are Needed", "Only consider changes if drift, score, or your goal changed. Educational model only."),
+    ("Refresh Market Data", "In the sidebar, click **Refresh Market Data** to update prices."),
+    ("Run Analyze Portfolio", "Open **④ Analyze Portfolio** and click **Analyze Portfolio**."),
+    ("Review Health Score", "Check your score and status summary on the same tab."),
+    ("Read Recommendations", "Open **⑤ Recommendations** and review each coaching card."),
+    ("Decide If Changes Are Worth Reviewing", "You do not need to trade every month — only act if something meaningful changed."),
 ]
 
 REVIEW_SCHEDULE = [
-    ("Monthly", "Refresh data, skim health score, read top recommendations (~10 minutes)."),
-    ("Quarterly", "Review rebalancing suggestions and allocation drift in dollar terms."),
-    ("Annually", "Revisit your goal, time horizon, and whether your objective still fits."),
+    ("Monthly", "About 10 minutes — refresh, analyze, skim recommendations."),
+    ("Quarterly", "Review allocation adjustments if several holdings drifted from your goal."),
+    ("Annually", "Revisit your goal and whether your objective still fits your life."),
 ]
 
 
-def render_monthly_review_workflow(*, expanded: bool = False) -> None:
-    """What Should I Do Each Month? — step card checklist."""
+def render_monthly_review_workflow(*, expanded: bool = False, standalone: bool = False) -> None:
+    """What Should I Do Each Month? — simple checklist."""
+    if standalone:
+        st.markdown("### What should I do each month?")
+        st.caption(f"Simple routine to stay on track. {APP_DISCLAIMER}")
+        _render_checklist_body()
+        return
     with st.expander("📅 What Should I Do Each Month?", expanded=expanded):
         st.caption(f"Simple routine to stay on track. {APP_DISCLAIMER}")
-        for i, (title, detail) in enumerate(MONTHLY_CHECKLIST, start=1):
-            st.markdown(
-                f"""
-                <div style="background:rgba(20,28,43,0.85);border:1px solid #334155;border-left:3px solid #4da3ff;
-                border-radius:8px;padding:0.65rem 0.85rem;margin-bottom:0.45rem;">
-                <span style="font-weight:600;color:#f1f5f9;">{i}. {title}</span>
-                <div style="color:#94a3b8;font-size:0.88rem;margin-top:0.25rem;line-height:1.45;">{detail}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        st.markdown("**Review cadence**")
+        _render_checklist_body()
+
+
+def _render_checklist_body() -> None:
+    for i, (title, detail) in enumerate(MONTHLY_CHECKLIST, start=1):
+        st.markdown(
+            f"""
+            <div style="background:rgba(20,28,43,0.85);border:1px solid #334155;border-left:3px solid #4da3ff;
+            border-radius:8px;padding:0.65rem 0.85rem;margin-bottom:0.45rem;">
+            <span style="font-weight:600;color:#f1f5f9;">{i}. {title}</span>
+            <div style="color:#94a3b8;font-size:0.88rem;margin-top:0.25rem;line-height:1.45;">{detail}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with st.expander("How often should I do more?", expanded=False):
         for period, action in REVIEW_SCHEDULE:
             st.markdown(f"- **{period}:** {action}")

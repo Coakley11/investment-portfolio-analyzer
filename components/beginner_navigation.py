@@ -2,29 +2,29 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
+import portfolio_core as core
+
 BEGINNER_TAB_LABELS = [
-    "🧭 Getting Started",
-    "🏠 Overview",
-    "💼 Portfolio Inputs",
-    "⚠️ Risk Analysis",
-    "❤️ Portfolio Health",
-    "📄 Explain Portfolio",
-    "🌎 Macro Analysis",
-    "🎲 Monte Carlo",
-    "⚙️ Optimizer",
-    "📊 Efficient Frontier",
+    "① Choose Goal",
+    "② How Much to Invest",
+    "③ Build Portfolio",
+    "④ Analyze Portfolio",
+    "⑤ Recommendations",
+    "⑥ Implementation",
+    "⑦ Monthly Review",
 ]
 
 ADVANCED_TAB_LABELS = [
     "Getting Started Guide",
     "Overview",
     "Portfolio Inputs",
-    "Risk Analysis",
+    "Portfolio Analytics",
     "Portfolio Health",
     "Explain This Portfolio",
-    "Forward-Looking Macro Analysis",
+    "Forward Macro Analysis",
     "Monte Carlo",
     "Optimization",
     "Efficient Frontier",
@@ -35,7 +35,7 @@ CHECKLIST_STEPS = [
     ("invest", "Step 2 — Determine How Much To Invest"),
     ("portfolio", "Step 3 — Build Portfolio"),
     ("analyze", "Step 4 — Analyze Portfolio"),
-    ("health", "Step 5 — Review Health Score"),
+    ("health", "Step 5 — Review Portfolio Health"),
     ("recommendations", "Step 6 — Review Recommendations"),
     ("implement", "Step 7 — Learn How To Implement"),
 ]
@@ -78,19 +78,43 @@ PRESET_DISPLAY: dict[str, dict[str, str]] = {
 }
 
 
+def _holdings_fingerprint(df: pd.DataFrame) -> str:
+    """Stable string for comparing holdings tables (tickers + weights + types)."""
+    if df is None or df.empty:
+        return ""
+    rows = []
+    for _, row in df.iterrows():
+        ticker = str(row.get("Ticker", "")).strip().upper()
+        weight = float(row.get("Weight (%)", 0) or 0)
+        atype = str(row.get("Asset Type", "")).strip()
+        rows.append((ticker, round(weight, 2), atype))
+    rows.sort(key=lambda x: x[0])
+    return "|".join(f"{t}:{w}:{a}" for t, w, a in rows)
+
+
+def _portfolio_built() -> bool:
+    if st.session_state.get("preset_applied") or st.session_state.get("guide_portfolio_loaded"):
+        return True
+    df = st.session_state.get("holdings_df")
+    if df is None or df.empty:
+        return False
+    default_fp = _holdings_fingerprint(pd.DataFrame(core.DEFAULT_HOLDINGS))
+    return _holdings_fingerprint(df) != default_fp
+
+
+def mark_portfolio_built() -> None:
+    st.session_state.portfolio_built = True
+
+
 def _checklist_state() -> dict[str, bool]:
-    goal_done = bool(st.session_state.get("guide_goal_choice"))
-    invest_done = bool(st.session_state.get("investment_plan")) or bool(
-        st.session_state.get("plan_total_cash")
+    goal_done = bool(st.session_state.get("guide_goal_choice")) or bool(
+        st.session_state.get("beginner_goal_card")
     )
-    portfolio_done = bool(st.session_state.get("preset_applied")) or st.session_state.get(
-        "guide_portfolio_loaded", False
-    )
-    analyze_done = bool(st.session_state.get("run_health"))
-    health_done = bool(st.session_state.get("health_result"))
-    rec_done = health_done and bool(
-        st.session_state.get("health_result") and st.session_state.get("run_health")
-    )
+    invest_done = bool(st.session_state.get("investment_plan_generated"))
+    portfolio_done = _portfolio_built() or bool(st.session_state.get("portfolio_built"))
+    analyze_done = bool(st.session_state.get("portfolio_analyzed"))
+    health_done = bool(st.session_state.get("portfolio_health_reviewed"))
+    rec_done = bool(st.session_state.get("recommendations_displayed"))
     implement_done = bool(st.session_state.get("visited_implement"))
     return {
         "goal": goal_done,
@@ -116,42 +140,42 @@ def get_recommended_next_step() -> tuple[str, str, str]:
     state = _checklist_state()
     total = len(CHECKLIST_STEPS)
     if not state["goal"]:
-        return (f"Step 1 of {total}", "Getting Started", "Open **🧭 Getting Started** and pick your goal.")
+        return (f"Step 1 of {total}", "Choose Goal", "Open **① Choose Goal** and tap a goal card.")
     if not state["invest"]:
         return (
             f"Step 2 of {total}",
-            "Portfolio Inputs",
-            "Open **💼 Portfolio Inputs** → **How Much to Invest** and set your cash amounts.",
+            "How Much to Invest",
+            "Open **② How Much to Invest**, enter cash amounts, and click **Generate investment plan**.",
         )
     if not state["portfolio"]:
         return (
             f"Step 3 of {total}",
-            "Portfolio Inputs",
-            "Confirm your portfolio mix in **💼 Portfolio Inputs** or load a preset in Getting Started.",
+            "Build Portfolio",
+            "Open **③ Build Portfolio** to confirm your mix or load a preset from Step 1.",
         )
     if not state["analyze"]:
         return (
             f"Step 4 of {total}",
-            "Overview",
-            "Open **🏠 Overview** and click **Analyze Portfolio**.",
+            "Analyze Portfolio",
+            "Open **④ Analyze Portfolio** and click **Analyze Portfolio**.",
         )
     if not state["health"]:
         return (
             f"Step 5 of {total}",
-            "Portfolio Health",
-            "Open **❤️ Portfolio Health** and review your health score.",
+            "Analyze Portfolio",
+            "Review your health score on **④ Analyze Portfolio** after running analysis.",
         )
     if not state["recommendations"]:
         return (
             f"Step 6 of {total}",
-            "Overview",
-            "Read **Recommendations & why** on Overview or Portfolio Health.",
+            "Recommendations",
+            "Open **⑤ Recommendations** and read each coaching suggestion.",
         )
     if not state["implement"]:
         return (
             f"Step 7 of {total}",
-            "Portfolio Inputs",
-            "Open **💼 Portfolio Inputs** → **Implementation Guide** for how to invest in practice.",
+            "Implementation",
+            "Open **⑥ Implementation** for step-by-step account and buying guidance.",
         )
     return ("All done", "Overview", "You're set! Follow the monthly review checklist on Overview.")
 
@@ -241,6 +265,7 @@ def render_recommended_next_step_card() -> bool:
             if st.button("📋 Analyze Portfolio Now", type="primary", use_container_width=True, key="cta_analyze"):
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
+                st.session_state.request_portfolio_analyze = True
                 clicked = True
         elif not state["health"]:
             if st.button("❤️ Open Portfolio Health", type="primary", use_container_width=True, key="cta_health"):

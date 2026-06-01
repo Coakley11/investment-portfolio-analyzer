@@ -181,7 +181,7 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
             "3. The app downloads prices and prepares your health score."
         )
         if st.button("Analyze Portfolio Now", type="primary", key="guide_analyze_cta"):
-            st.session_state.run_health = True
+            st.session_state.request_portfolio_analyze = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             st.rerun()
 
