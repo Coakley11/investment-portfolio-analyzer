@@ -1,5 +1,9 @@
 """
 Portable client for Daniel AI suite persistence.
+
+Sibling Streamlit apps import this module (via path resolution) to write shared
+activity history + current state. Falls back to a local JSON file when the shared
+SQLite store is unavailable (e.g. isolated Streamlit Cloud containers).
 """
 
 from __future__ import annotations
@@ -33,9 +37,13 @@ def _load_storage_module():
     return None
 
 
-def _fallback_append(app: str, event: str, page: str, metrics: dict[str, Any], summary: str) -> None:
+def _fallback_path(app: str) -> Path:
     LOCAL_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
-    path = LOCAL_FALLBACK_DIR / f"{app}_activity_fallback.json"
+    return LOCAL_FALLBACK_DIR / f"{app}_activity_fallback.json"
+
+
+def _fallback_append(app: str, event: str, page: str, metrics: dict[str, Any], summary: str) -> None:
+    path = _fallback_path(app)
     rows: list[dict[str, Any]] = []
     if path.is_file():
         try:
@@ -58,6 +66,17 @@ def _fallback_append(app: str, event: str, page: str, metrics: dict[str, Any], s
 
 
 def save_local_app_state(app: str, state: dict[str, Any]) -> None:
+    """Per-app JSON snapshot for reload persistence within a single deployment."""
+    try:
+        from suite_user_persistence import save_user_state
+
+        if isinstance(state, dict) and "core" in state:
+            save_user_state(app, state)
+        else:
+            save_user_state(app, {"core": state, "session": {}})
+        return
+    except Exception:
+        pass
     LOCAL_FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
     path = LOCAL_FALLBACK_DIR / "app_state.json"
     payload: dict[str, Any] = {}
@@ -68,8 +87,36 @@ def save_local_app_state(app: str, state: dict[str, Any]) -> None:
                 payload = raw
         except (OSError, json.JSONDecodeError):
             payload = {}
-    payload[app] = {**state, "updated_at": datetime.now().isoformat(timespec="seconds")}
+    payload[app] = {
+        **state,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_local_app_state(app: str) -> dict[str, Any]:
+    try:
+        from suite_user_persistence import load_user_state
+
+        loaded, _warn = load_user_state(app)
+        if loaded:
+            core = loaded.get("core")
+            if isinstance(core, dict):
+                return core
+            return loaded
+    except Exception:
+        pass
+    path = LOCAL_FALLBACK_DIR / "app_state.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    block = raw.get(app)
+    return block if isinstance(block, dict) else {}
 
 
 def record_activity(
@@ -104,9 +151,19 @@ def record_activity(
             _fallback_append(app, event, page, metrics, summary)
     else:
         _fallback_append(app, event, page, metrics, summary)
+
     if local_state is not None:
         save_local_app_state(app, local_state)
 
 
 def log_event(app: str, event: str, *, page: str = "", metrics: dict[str, Any] | None = None) -> None:
     record_activity(app, event, page=page, metrics=metrics)
+
+
+def invalidate_resume_item(app: str, item_key: str) -> None:
+    storage = _load_storage_module()
+    if storage is not None:
+        try:
+            storage.invalidate_resume_item(app, item_key)
+        except OSError:
+            pass

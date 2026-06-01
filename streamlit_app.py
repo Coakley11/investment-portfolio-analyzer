@@ -61,6 +61,25 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+try:
+    from investment_persistent_state import (
+        autosave_investment_state,
+        default_reset_investment_session,
+        restore_investment_disk_state_once,
+    )
+    from suite_user_persistence import render_reset_controls, show_persistence_messages
+
+    restore_investment_disk_state_once(st)
+    show_persistence_messages(st)
+    render_reset_controls(
+        st,
+        "investment",
+        on_reset=default_reset_investment_session,
+        help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
+    )
+except Exception:
+    pass
+
 st.markdown(
     """
     <style>
@@ -2341,3 +2360,8 @@ with tab_frontier:
 # ── Header health badge (cached; no heavy health calc on load) ─────────────────
 
 render_health_header_badge(health_badge_slot, tickers, weights)
+
+try:
+    autosave_investment_state(st)
+except Exception:
+    pass
