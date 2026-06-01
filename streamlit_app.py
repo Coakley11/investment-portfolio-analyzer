@@ -552,6 +552,26 @@ def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str],
     st.session_state.health_result = health
     st.session_state.health_result_fingerprint = fp
     st.session_state.health_settings_fingerprint = settings_fp
+    try:
+        from suite_activity_client import record_activity
+
+        record_activity(
+            "investment",
+            "portfolio_check",
+            page="Portfolio Health",
+            metrics={
+                "review_type": health.score_label,
+                "score": float(health.score),
+                "tickers": list(tickers),
+            },
+            summary=f"Portfolio health: {health.score_label}",
+            resume_key="portfolio:health",
+            resume_title="Continue portfolio review",
+            resume_subtitle=health.score_label,
+            local_state={"review_type": health.score_label, "page": "Portfolio Health"},
+        )
+    except Exception:
+        pass
 
 
 def get_cached_health(tickers: list[str], weights: np.ndarray) -> core.PortfolioHealthResult | None:
