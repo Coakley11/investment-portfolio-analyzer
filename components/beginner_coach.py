@@ -7,7 +7,22 @@ import streamlit as st
 
 import portfolio_core as core
 from components.beginner_navigation import mark_portfolio_built
-from components.calculation_transparency import objective_alignment_plain_english
+try:
+    from components.calculation_transparency import objective_alignment_plain_english
+except ImportError:  # pragma: no cover - stale deploy fallback
+
+    def objective_alignment_plain_english(avg_drift: float, objective: str = "") -> str:
+        obj = (objective or "your selected goal").replace("_", " ").strip()
+        if avg_drift < 0.03:
+            closeness = "close to"
+        elif avg_drift < 0.06:
+            closeness = "somewhat different from"
+        else:
+            closeness = "significantly different from"
+        return (
+            f"Your portfolio is **{closeness}** the allocation associated with "
+            f"**{obj}**."
+        )
 from components.ui_helpers import APP_DISCLAIMER, format_money
 
 DISCLAIMER = f"Educational model only. {APP_DISCLAIMER}"

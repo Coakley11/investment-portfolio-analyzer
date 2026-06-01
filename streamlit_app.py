@@ -6,6 +6,7 @@ Core calculations: portfolio_core.py | Charts: dashboard_charts.py
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import io
 
 import numpy as np
@@ -29,12 +30,21 @@ from components.beginner_navigation import (
     render_next_step_banner,
     render_recommended_next_step_card,
 )
-from components.calculation_transparency import (
-    render_future_model_improvements,
-    render_how_calculated_section,
-    render_macro_why_it_matters,
-    render_objective_alignment_summary,
-    render_optimizer_confidence,
+_calc_transparency = importlib.import_module("components.calculation_transparency")
+render_how_calculated_section = _calc_transparency.render_how_calculated_section
+render_future_model_improvements = getattr(
+    _calc_transparency,
+    "render_future_model_improvements",
+    getattr(_calc_transparency, "render_methodology_footer", lambda **_kw: None),
+)
+render_macro_why_it_matters = getattr(
+    _calc_transparency, "render_macro_why_it_matters", lambda: None
+)
+render_objective_alignment_summary = getattr(
+    _calc_transparency, "render_objective_alignment_summary", lambda *_a, **_k: None
+)
+render_optimizer_confidence = getattr(
+    _calc_transparency, "render_optimizer_confidence", lambda: None
 )
 from components.beginner_coach import (
     render_beginner_analyze_results,

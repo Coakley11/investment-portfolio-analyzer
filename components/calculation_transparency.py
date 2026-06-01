@@ -297,3 +297,14 @@ def render_objective_alignment_summary(
             f"**{health_avg_drift * 100:.1f}** percentage points."
         )
         render_how_calculated_section("drift")
+
+
+__all__ = [
+    "objective_alignment_plain_english",
+    "render_future_model_improvements",
+    "render_how_calculated_section",
+    "render_macro_why_it_matters",
+    "render_methodology_footer",
+    "render_objective_alignment_summary",
+    "render_optimizer_confidence",
+]
