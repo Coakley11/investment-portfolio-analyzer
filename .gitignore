@@ -4,3 +4,11 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+**/__pycache__/
+*.pyo
+data/app_state.json
+data/*activity_fallback.json
+data/*_activity_fallback.json
+*.db
+*.sqlite
+*.sqlite3
