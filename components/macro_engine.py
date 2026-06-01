@@ -41,8 +41,36 @@ def macro_assumptions_fingerprint(assumptions: core.ForwardMacroAssumptions) -> 
     )
 
 
+def historical_window_fingerprint(start: str, end: str) -> str:
+    return f"{start}|{end}"
+
+
+def forward_projection_cache_fingerprint(
+    start: str,
+    end: str,
+    assumptions: core.ForwardMacroAssumptions,
+    *,
+    years: float,
+    n_assets: int,
+) -> str:
+    """Cache key: historical window + macro settings (+ horizon and asset count)."""
+    return (
+        f"{historical_window_fingerprint(start, end)}|"
+        f"{macro_assumptions_fingerprint(assumptions)}|y{years:.4f}|n{n_assets}"
+    )
+
+
+def clear_forward_projection_cache() -> None:
+    """Drop cached forward projections (e.g. after date or macro changes)."""
+    for key in list(st.session_state.keys()):
+        if key == "forward_projection" or key == "forward_projection_fp" or key.startswith("forward_proj_"):
+            st.session_state.pop(key, None)
+
+
 def get_forward_projection(
     *,
+    start: str,
+    end: str,
     metrics: core.ExtendedPortfolioMetrics,
     mean_returns,
     cov,
@@ -55,8 +83,10 @@ def get_forward_projection(
 ) -> core.ForwardProjectionResult:
     """Compute (or reuse cached) forward macro projection for the current session assumptions."""
     assumptions = macro_assumptions_from_session()
-    fp = macro_assumptions_fingerprint(assumptions)
-    cache_key = f"forward_proj_{fp}_{len(tickers)}"
+    fp = forward_projection_cache_fingerprint(
+        start, end, assumptions, years=years, n_assets=len(tickers)
+    )
+    cache_key = f"forward_proj_{fp}"
     if st.session_state.get("forward_projection_fp") == fp and cache_key in st.session_state:
         return st.session_state[cache_key]
 

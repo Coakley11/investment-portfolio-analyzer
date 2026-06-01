@@ -47,6 +47,7 @@ render_optimizer_confidence = getattr(
     _calc_transparency, "render_optimizer_confidence", lambda: None
 )
 from components.beginner_coach import (
+    render_beginner_analysis_pipeline,
     render_beginner_analyze_results,
     render_beginner_rebalance_cards,
     render_goal_cards,
@@ -68,10 +69,14 @@ from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
     APP_DISCLAIMER as UI_DISCLAIMER,
+    HISTORICAL_PERIOD_DATE_INPUT_HELP,
+    HISTORICAL_PERIOD_HELP_ADVANCED,
+    HISTORICAL_PERIOD_HELP_BEGINNER,
     coach_card,
     is_beginner_mode,
     metric_help,
     refresh_market_data_sidebar,
+    render_historical_period_sidebar_help,
     what_why_do,
 )
 
@@ -830,13 +835,22 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.markdown("### Analysis Settings")
+    if beginner:
+        st.sidebar.caption("Historical analysis period (sidebar Start / End)")
     end_default = dt.date.today()
     start_default = end_default - dt.timedelta(days=365 * 5)
+    date_help = (
+        HISTORICAL_PERIOD_HELP_BEGINNER
+        if beginner
+        else HISTORICAL_PERIOD_HELP_ADVANCED
+    )
+    date_input_help = HISTORICAL_PERIOD_DATE_INPUT_HELP if beginner else date_help
     ca, cb = st.sidebar.columns(2)
     with ca:
-        start_date = st.date_input("Start", value=start_default, help="How far back to pull prices.")
+        start_date = st.date_input("Start", value=start_default, help=date_input_help)
     with cb:
-        end_date = st.date_input("End", value=end_default, help="Usually today — prices download automatically.")
+        end_date = st.date_input("End", value=end_default, help=date_input_help)
+    render_historical_period_sidebar_help(beginner=beginner)
 
     risk_free = st.sidebar.slider(
         "Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25,
@@ -1481,6 +1495,7 @@ if beginner_mode:
             f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
             unsafe_allow_html=True,
         )
+        render_beginner_analysis_pipeline()
         render_goal_cards()
     with tab_portfolio:
         section_header("Build Portfolio", "Confirm tickers and weights — or load a goal from Step 1.")
@@ -2109,6 +2124,8 @@ if not beginner_mode:
             mc_fwd_vol = None
             if mc_assumption_mode.startswith("Forward"):
                 forward_mc = get_forward_projection(
+                    start=settings["start"],
+                    end=settings["end"],
                     metrics=metrics,
                     mean_returns=mean_rets.copy(),
                     cov=cov.values.copy(),
@@ -2209,6 +2226,8 @@ if not beginner_mode:
             opt_cov = cov
             if opt_assumption_mode.startswith("Forward"):
                 forward_opt = get_forward_projection(
+                    start=settings["start"],
+                    end=settings["end"],
                     metrics=metrics,
                     mean_returns=mean_rets.copy(),
                     cov=cov.values.copy(),
@@ -2263,6 +2282,8 @@ if not beginner_mode:
                 key="frontier_assumption_mode",
             )
             forward_frontier = get_forward_projection(
+                start=settings["start"],
+                end=settings["end"],
                 metrics=metrics,
                 mean_returns=mean_rets.copy(),
                 cov=cov.values.copy(),

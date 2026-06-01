@@ -8,6 +8,49 @@ Advanced Mode shows formulas, methodology expanders, and this document.
 
 ---
 
+## Historical analysis window (Start / End dates)
+
+Sidebar **Start** and **End** define which daily prices are downloaded (yfinance) and converted to `returns`.
+Almost all analytics share this single baseline computed at app load:
+
+```text
+Start / End
+    → prices → daily returns
+    → mean_rets (μ), cov (Σ), metrics (portfolio stats)
+    → Portfolio Health, recommendations, risk pack
+    → Forward macro (historical + adjustments)
+    → Monte Carlo / Optimizer / Frontier
+```
+
+### Uses the selected window consistently
+
+| Component | Uses Start/End baseline? | Notes |
+|-----------|-------------------------|--------|
+| Portfolio Analytics (return, vol, Sharpe, Sortino, beta, drawdown, CAGR) | **Yes** | From `returns` / `metrics` |
+| Correlation & covariance displays | **Yes** | `returns.corr()` / `returns.cov()` × 252 |
+| Portfolio Health & recommendations | **Yes** | Same `metrics`, `mean_rets`, `cov` |
+| Forward Macro (on **Run**) | **Yes** → macro | `metrics` + `mean_rets` + `cov`, then adjustments |
+| Monte Carlo — **Historical** | **Yes** (μ, σ only) | Portfolio-level GBM from window; **not** full Σ in paths |
+| Monte Carlo — **Forward** | **Yes** indirectly | Macro-adjusted μ, σ from window-based forward projection |
+| Optimizer — **Historical** | **Yes** | `mean_rets`, `cov` from window |
+| Optimizer — **Forward** | **Yes** → macro | `adjusted_mean_returns`, `adjusted_cov` |
+| Efficient Frontier | Same as optimizer | Historical or forward μ, Σ |
+| Beginner Analyze / coach | **Yes** | Same pipeline; advanced tabs hidden |
+
+### Exceptions / caveats
+
+1. **Monte Carlo paths** — Uses portfolio-level expected return and volatility (historical or forward-adjusted). Does **not** simulate correlated multi-asset paths from Σ today. See *Multi-asset Monte Carlo* under Future Model Improvements.
+
+2. **Forward projection cache** — `get_forward_projection()` caches by **Start**, **End**, macro assumptions, projection **years**, and asset count. Changing only holdings with the same ticker count still recomputes when metrics change on rerun; cache invalidates when dates or macro change.
+
+3. **Forward Macro tab (Run button)** — Calls `compute_forward_projection_with_profile` directly each run (always uses current `metrics` from the active window).
+
+4. **Risk-free rate** — Sidebar slider; not tied to Start/End.
+
+5. **Portfolio value ($)** — Dollar amounts only; does not change historical return estimation.
+
+---
+
 ## Portfolio Health — Objective Alignment
 
 ### Category drift
@@ -139,9 +182,11 @@ For each target return on a grid: minimize `σ_p` subject to `w·μ = target`, `
 
 ## Monte Carlo (separate from single-scenario projection)
 
-Simulates many random paths using historical or forward-adjusted return/volatility.
+Simulates many random paths using historical or forward-adjusted **portfolio-level** return and volatility.
 
 Reports percentiles, P(loss), P(reach target), etc. — **not** the same as the deterministic forward projection.
+
+Historical mode: μ and σ from the selected Start/End window. Forward mode: macro-adjusted μ and σ from the same window-based baseline.
 
 ---
 
@@ -154,8 +199,16 @@ Reports percentiles, P(loss), P(reach target), etc. — **not** the same as the 
 - Scalar correlation stress
 - No taxes, fees, or transaction costs
 - Point-estimate optimization without confidence bands
+- Monte Carlo: single portfolio process (not multi-asset correlated simulation)
 
-### Possible enhancements
+### Multi-asset Monte Carlo (future enhancement)
+
+- Simulate holdings separately (e.g. SPY, QQQ, AGG, BIL)
+- Use the full covariance matrix
+- Preserve asset correlations across paths
+- Aggregate to portfolio-level paths
+
+### Other possible enhancements
 
 - Regime-switching Monte Carlo
 - Macro-driven multi-scenario simulations

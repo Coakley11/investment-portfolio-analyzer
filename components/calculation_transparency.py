@@ -177,6 +177,16 @@ FUTURE_IMPROVEMENTS = """
 - No taxes, account types, or transaction costs in allocation guidance
 - Optimizer uses point estimates of μ and Σ without estimation error or robust optimization
 - Single-scenario forward projection is separate from Monte Carlo percentiles
+- Monte Carlo uses portfolio-level return and volatility (not multi-asset correlated paths)
+
+### Multi-asset Monte Carlo (future enhancement)
+
+Potential future enhancement:
+
+- Simulate holdings separately (e.g. SPY, QQQ, AGG, BIL)
+- Use the full covariance matrix
+- Preserve asset correlations across paths
+- Aggregate to portfolio-level paths for more realistic joint behavior
 
 ### Future model improvements (possibilities)
 

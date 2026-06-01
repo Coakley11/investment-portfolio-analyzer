@@ -6,6 +6,34 @@ import streamlit as st
 
 APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
 
+HISTORICAL_PERIOD_HELP_BEGINNER = """
+**Historical analysis period**
+
+These dates determine which historical market data is used to estimate:
+
+- Returns
+- Volatility
+- Risk
+- Correlations
+- Monte Carlo assumptions
+- Optimization inputs
+
+They do **not** determine when you invest.
+
+They only determine which historical period is used as the baseline for analysis.
+""".strip()
+
+HISTORICAL_PERIOD_HELP_ADVANCED = (
+    "Start and end of the price download window. Returns, risk, correlations, "
+    "Portfolio Health, forward macro, Monte Carlo, optimizer, and frontier all "
+    "use daily returns from this range as the historical baseline."
+)
+
+HISTORICAL_PERIOD_DATE_INPUT_HELP = (
+    "Historical analysis period — which past market data feeds returns, risk, "
+    "correlations, health, and forward tools. Not your investment date."
+)
+
 BEGINNER_METRIC_HELP = {
     "annual_return": "How much your portfolio grew per year on average over the period you selected.",
     "volatility": "How much your portfolio tends to move up and down. Higher = a bumpier ride.",
@@ -51,6 +79,18 @@ def coach_card(title: str, body: str) -> None:
     )
 
 
+def render_historical_period_sidebar_help(*, beginner: bool) -> None:
+    """Sidebar help for Start/End dates — tooltip text lives on the date inputs."""
+    if beginner:
+        with st.sidebar.expander("Historical analysis period — what do these dates mean?", expanded=False):
+            st.markdown(HISTORICAL_PERIOD_HELP_BEGINNER)
+    else:
+        st.sidebar.caption(
+            "Start/End define the historical baseline for analytics, health, forward macro, "
+            "Monte Carlo, optimizer, and frontier."
+        )
+
+
 def what_why_do(title: str, what: str, why: str, action: str) -> None:
     """Beginner framing: what / why / what to do."""
     with st.expander(f"❓ What does “{title}” mean?", expanded=False):
@@ -72,8 +112,13 @@ def refresh_market_data_sidebar() -> bool:
         help="Download the latest prices and refresh charts and metrics.",
     )
     if clicked:
-        clear_market_data_cache()
+        st.cache_data.clear()
+        from components.macro_engine import clear_forward_projection_cache
+
+        clear_forward_projection_cache()
         for key in (
+            "forward_projection",
+            "forward_projection_fp",
             "run_benchmark",
             "run_rolling",
             "run_risk_macro",

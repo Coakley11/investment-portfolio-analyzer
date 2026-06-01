@@ -89,6 +89,53 @@ def _money(x: float) -> str:
     return format_money(x)
 
 
+def render_beginner_analysis_pipeline() -> None:
+    """Simple visual explanation of how historical data flows through the app."""
+    st.markdown("#### How the analysis works")
+    steps = [
+        ("1", "Select a historical analysis period", "Use **Start** and **End** in the sidebar."),
+        (
+            "2",
+            "The app studies how your investments behaved",
+            "It downloads prices for that period and learns from daily moves.",
+        ),
+        (
+            "3",
+            "The app estimates returns, volatility, and risk",
+            "These power health scores, dollar guidance, and advanced tools.",
+        ),
+        (
+            "4",
+            "The app evaluates portfolio health",
+            "Run **Analyze Portfolio** to see your score and coach suggestions.",
+        ),
+        (
+            "5",
+            "Advanced tools add forward-looking scenarios",
+            "In **Advanced Mode**, macro assumptions can adjust returns and risk for projections.",
+        ),
+    ]
+    for num, title, detail in steps:
+        st.markdown(
+            f"""
+            <div style="display:flex;gap:0.75rem;align-items:flex-start;background:#141c2b;
+            border:1px solid #334155;border-radius:10px;padding:0.75rem 0.9rem;margin-bottom:0.5rem;">
+            <div style="flex:0 0 2rem;height:2rem;border-radius:999px;background:rgba(77,163,255,0.2);
+            color:#4da3ff;font-weight:700;display:flex;align-items:center;justify-content:center;">
+            {num}</div>
+            <div>
+            <div style="font-weight:600;color:#f1f5f9;">{title}</div>
+            <div style="color:#94a3b8;font-size:0.88rem;line-height:1.45;margin-top:0.2rem;">{detail}</div>
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.caption(
+        "Your investment dates are separate from this historical window — see sidebar **Start** / **End** help."
+    )
+
+
 def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
     """Step 1 — large goal cards; one click loads the recommended portfolio."""
     st.markdown("#### Step 1 — Choose your goal")
