@@ -198,10 +198,13 @@ def render_implementation_guide(
         if health is not None:
             render_rebalancing_panel(health, settings=settings, initial_value=initial_value, key_prefix=key_prefix)
         else:
-            st.info(
-                "Run **Analyze Portfolio** on Overview first — rebalance guidance with dollar amounts "
+            hint = (
+                "Run **Analyze Portfolio** on tab ④ first — allocation guidance appears here after analysis."
+                if beginner
+                else "Run **Analyze Portfolio** on Overview first — rebalance guidance with dollar amounts "
                 "appears here after analysis."
             )
+            st.info(hint)
 
     if not beginner:
         with guide_tabs[5]:

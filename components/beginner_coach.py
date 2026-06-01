@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 import portfolio_core as core
+from components.beginner_navigation import mark_portfolio_built
 from components.ui_helpers import APP_DISCLAIMER, format_money
 
 DISCLAIMER = f"Educational model only. {APP_DISCLAIMER}"
@@ -108,6 +109,7 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                     st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[card["preset"]])
                     st.session_state.preset_applied = card["preset"]
                     st.session_state.guide_portfolio_loaded = True
+                    mark_portfolio_built()
                 st.session_state.run_health = False
                 st.session_state.pop("health_result", None)
                 st.session_state.pop("health_result_fingerprint", None)

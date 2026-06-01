@@ -584,6 +584,7 @@ def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str],
     st.session_state.health_result_fingerprint = fp
     st.session_state.health_settings_fingerprint = settings_fp
     st.session_state.portfolio_analyzed = True
+    st.session_state.portfolio_analyze_just_completed = True
     try:
         from suite_activity_client import record_activity
 
@@ -1253,7 +1254,7 @@ def render_overview_tab(
     metrics_row_primary(metrics, settings["initial_value"], settings)
     if not beginner:
         metrics_row_extended(metrics, settings)
-    elif st.toggle("Show more detail numbers", value=False, key="overview_show_extended_metrics"):
+    elif st.toggle("Show more detail numbers", value=False, key="overview_show_extended_metrics_adv"):
         metrics_row_extended(metrics, settings)
 
     c1, c2 = st.columns([1.2, 1])
@@ -1543,14 +1544,25 @@ explanation = core.generate_portfolio_explanation(
 report_text = core.build_summary_report(
     tickers, weights, metrics, mc_summary, insights, settings
 )
-export_buttons(
-    holdings_df,
-    metrics,
-    base_risk_pack["scenarios"],
-    base_risk_pack["vol_rank"],
-    base_risk_pack["risk_contrib"],
-    report_text,
-)
+if beginner_mode:
+    with st.expander("Export data (optional)", expanded=False):
+        export_buttons(
+            holdings_df,
+            metrics,
+            base_risk_pack["scenarios"],
+            base_risk_pack["vol_rank"],
+            base_risk_pack["risk_contrib"],
+            report_text,
+        )
+else:
+    export_buttons(
+        holdings_df,
+        metrics,
+        base_risk_pack["scenarios"],
+        base_risk_pack["vol_rank"],
+        base_risk_pack["risk_contrib"],
+        report_text,
+    )
 
 if beginner_mode:
     pv = float(settings["initial_value"])
@@ -1569,7 +1581,8 @@ if beginner_mode:
             st.session_state.request_portfolio_analyze = True
             st.rerun()
         if cached_b:
-            st.session_state.portfolio_health_reviewed = True
+            if not st.session_state.pop("portfolio_analyze_just_completed", False):
+                st.session_state.portfolio_health_reviewed = True
             render_beginner_analyze_results(cached_b, objective=health_obj)
         else:
             st.info("Click **Analyze Portfolio** above to see your health score and summary.")
