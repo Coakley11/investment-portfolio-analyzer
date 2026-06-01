@@ -30,8 +30,11 @@ from components.beginner_navigation import (
     render_recommended_next_step_card,
 )
 from components.calculation_transparency import (
+    render_future_model_improvements,
     render_how_calculated_section,
-    render_methodology_footer,
+    render_macro_why_it_matters,
+    render_objective_alignment_summary,
+    render_optimizer_confidence,
 )
 from components.beginner_coach import (
     render_beginner_analyze_results,
@@ -1751,6 +1754,7 @@ if not beginner_mode:
             f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
         )
         render_macro_assumptions_guide(expanded=False)
+        render_macro_why_it_matters()
         if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             st.session_state.request_portfolio_analyze = True
@@ -1859,7 +1863,8 @@ if not beginner_mode:
                         {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
                     )
                     st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
-                render_how_calculated_section("drift")
+                st.markdown("##### Objective alignment")
+                render_objective_alignment_summary(health.avg_drift, health_objective, show_formula=True)
             with adv_tabs[2]:
                 render_recommendations_panel(health, settings)
             with adv_tabs[3]:
@@ -1899,7 +1904,7 @@ if not beginner_mode:
                     charts.allocation_comparison_chart(health.allocation_compare_df),
                     use_container_width=True,
                 )
-            render_methodology_footer()
+            render_future_model_improvements()
             st.caption(
                 f"Portfolio Health outputs are rule-based and model-driven. {APP_DISCLAIMER} "
                 "Refresh after changing tickers, weights, or macro settings."
@@ -1930,9 +1935,12 @@ if not beginner_mode:
         st.session_state.visited_forward = True
         section_header(
             "Forward Macro Analysis",
-            f"Return/volatility adjustments, drawdown assumptions, and macro formulas. {APP_DISCLAIMER}",
+            f"Macro-adjusted return, volatility, and stress estimates. {APP_DISCLAIMER}",
         )
-        render_how_calculated_section("macro_all")
+        st.info(
+            "**Two different tools:** **Single-Scenario Projection** below is one deterministic path. "
+            "**Monte Carlo** (separate tab) simulates many paths and shows ranges and probabilities."
+        )
         if st.button("Run Forward-Looking Macro Analysis", key="run_forward_macro_btn"):
             st.session_state.run_forward_macro = True
         if st.session_state.get("run_forward_macro", False):
@@ -1988,18 +1996,32 @@ if not beginner_mode:
             m1.metric("Forward Return", _pct(forward.adjusted_return))
             m2.metric("Forward Volatility", _pct(forward.adjusted_volatility))
             m3.metric("Forward Sharpe", f"{forward.adjusted_sharpe:.2f}")
-            m4.metric("Forward Projected Value", _money(forward.projected_value))
+            m4.metric(
+                "Single-Scenario Projection",
+                _money(forward.projected_value),
+                help=f"Deterministic: initial × (1 + adjusted return)^{fwd_years} — not Monte Carlo.",
+            )
             m5, m6 = st.columns(2)
-            m5.metric("Forward Max Drawdown", _pct(forward.adjusted_max_drawdown))
+            m5.metric(
+                "Stress-Adjusted Historical Drawdown Estimate",
+                _pct(forward.adjusted_max_drawdown),
+                help="Historical max drawdown scaled by recession probability — not a forward simulation.",
+            )
             m6.metric("Recession Probability", f"{recession_prob_pct}%")
+            st.caption(
+                f"**Single-Scenario Projection** compounds one macro-adjusted return over **{fwd_years}** year(s). "
+                "For percentile ranges and P(loss), use the **Monte Carlo** tab."
+            )
 
             with st.expander("How these numbers are calculated", expanded=False):
+                render_how_calculated_section("macro_all")
                 render_how_calculated_section("forward_return")
                 render_how_calculated_section("inflation")
                 render_how_calculated_section("forward_volatility")
                 render_how_calculated_section("forward_projected")
                 render_how_calculated_section("forward_drawdown")
                 render_how_calculated_section("forward_sharpe")
+            render_future_model_improvements()
 
             with st.expander("Forward-Looking Insights", expanded=False):
                 for note in forward.forward_insights:
@@ -2043,6 +2065,10 @@ if not beginner_mode:
     with tab_mc:
         section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
         st.session_state.visited_mc = True
+        st.info(
+            "**Monte Carlo** runs many random paths and reports ranges (e.g. 90% interval, P(loss)). "
+            "This is separate from the **Single-Scenario Projection** on Forward Macro, which uses one deterministic return."
+        )
         st.caption(
             "Macro settings (from Portfolio Health): "
             + macro_assumption_summary()
@@ -2207,7 +2233,8 @@ if not beginner_mode:
             )
             st.dataframe(compare, use_container_width=True, hide_index=True)
             render_how_calculated_section("optimizer")
-            render_methodology_footer()
+            render_optimizer_confidence()
+            render_future_model_improvements()
         else:
             st.caption("Optimizer runs on demand.")
 
@@ -2306,7 +2333,8 @@ if not beginner_mode:
                 )
             st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility")
             render_how_calculated_section("frontier")
-            render_methodology_footer()
+            render_optimizer_confidence()
+            render_future_model_improvements()
         else:
             st.caption("Frontier construction is on demand.")
 

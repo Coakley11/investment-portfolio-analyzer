@@ -7,6 +7,7 @@ import streamlit as st
 
 import portfolio_core as core
 from components.beginner_navigation import mark_portfolio_built
+from components.calculation_transparency import objective_alignment_plain_english
 from components.ui_helpers import APP_DISCLAIMER, format_money
 
 DISCLAIMER = f"Educational model only. {APP_DISCLAIMER}"
@@ -175,6 +176,8 @@ def render_beginner_analyze_results(health: core.PortfolioHealthResult, *, objec
         f'<div class="insight-card" style="margin-top:0.75rem;">📋 <b>Status:</b> {health.status_message}</div>',
         unsafe_allow_html=True,
     )
+    st.markdown("**Goal alignment**")
+    st.markdown(objective_alignment_plain_english(health.avg_drift, objective))
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Top strengths**")
@@ -201,11 +204,17 @@ def render_beginner_analyze_results(health: core.PortfolioHealthResult, *, objec
             unsafe_allow_html=True,
         )
     with st.expander("Why? — more detail", expanded=False):
-        st.caption(f"Objective: {objective.replace('_', ' ').title()}")
-        breakdown = health.score_breakdown
-        for name, pts in list(breakdown.items())[:6]:
-            st.markdown(f"- **{name}:** {pts:.1f} pts")
-        st.caption("Switch to **Advanced Mode** for formulas, charts, and optimization.")
+        st.markdown("**Goal alignment**")
+        st.markdown(objective_alignment_plain_english(health.avg_drift, objective))
+        st.markdown(
+            "**What the coach also considers:** diversification, risk level, and how your mix "
+            "fits the current economic assumptions — without requiring you to read formulas."
+        )
+        if health.recommendation_details:
+            d0 = health.recommendation_details[0]
+            st.markdown(f"**Top note:** {d0.issue}")
+            st.markdown(f"**Why it may matter:** {d0.why_it_matters}")
+        st.caption("Switch to **Advanced Mode** for score breakdowns, charts, and full methodology.")
 
 
 def render_beginner_rebalance_cards(

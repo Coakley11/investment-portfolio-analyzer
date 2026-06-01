@@ -71,13 +71,13 @@ def render_rebalancing_panel(
 
     moves = _top_rebalance_moves(reb, pv)
     if pre_invest:
-        st.markdown("#### 📐 Suggested allocation adjustment")
+        st.markdown("#### Suggested allocation adjustment")
         st.caption(
             "You have not marked capital as deployed yet — this compares your **planned mix** to the "
             f"**objective mix** for your goal (portfolio value **{_money(pv)}** for illustration). {APP_DISCLAIMER}"
         )
     else:
-        st.markdown("#### 🔄 Rebalancing guidance")
+        st.markdown("#### Rebalancing guidance")
         st.caption(f"Dollar amounts use portfolio value **{_money(pv)}**. {APP_DISCLAIMER}")
 
     if not moves:
