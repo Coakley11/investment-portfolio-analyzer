@@ -487,7 +487,7 @@ def apply_assumptions_to_session(
     st.session_state["macro_scenario_id"] = scenario_id
     st.session_state["macro_scenario_mode"] = "current" if scenario_id == "current" else "custom"
     st.session_state["macro_auto_initialized"] = True
-    _invalidate_health_cache(st)
+    _invalidate_health_cache()
 
 
 def _invalidate_health_cache() -> None:
