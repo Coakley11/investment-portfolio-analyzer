@@ -111,8 +111,8 @@ def render_beginner_analysis_pipeline() -> None:
         ),
         (
             "5",
-            "Advanced tools add forward-looking scenarios",
-            "In **Advanced Mode**, macro assumptions can adjust returns and risk for projections.",
+            "Macro assumptions use current economic data",
+            "Beginner Mode loads public inflation, rates, and jobs data — no guessing required.",
         ),
     ]
     for num, title, detail in steps:

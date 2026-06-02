@@ -59,7 +59,9 @@ from components.getting_started_guide import PRESET_RATIONALE, render_getting_st
 from components.guided_adjustment import render_guided_portfolio_adjustment
 from components.implementation_guide import render_implementation_guide
 from components.investment_planning import render_how_much_to_invest
+from components.beginner_macro import render_beginner_macro_panel
 from components.macro_assumptions_guide import render_macro_assumptions_guide
+from components.macro_data import ensure_beginner_macro_defaults
 from components.macro_engine import (
     get_forward_projection,
     health_settings_fingerprint,
@@ -1431,6 +1433,8 @@ def export_buttons(
 
 settings = render_sidebar()
 beginner_mode = is_beginner_mode(settings)
+if beginner_mode:
+    ensure_beginner_macro_defaults()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 health_badge_slot = st.empty()
@@ -1499,6 +1503,7 @@ if beginner_mode:
             f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
             unsafe_allow_html=True,
         )
+        render_beginner_macro_panel()
         render_beginner_analysis_pipeline()
         render_goal_cards()
     with tab_portfolio:

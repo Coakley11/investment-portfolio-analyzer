@@ -106,10 +106,8 @@ def render_macro_assumptions_guide(*, expanded: bool = False) -> None:
         )
 
         st.markdown("---")
-        st.markdown("#### Future enhancement (coming idea)")
         st.caption(
-            "Eventually this app may suggest macro settings automatically from live data "
-            "(current inflation, Fed Funds Rate, unemployment, Treasury yields). "
-            "Example: *“Based on current data, Moderate Inflation / High Rate Environment may be appropriate.”* "
-            "For now, use the defaults or pick what matches recent news."
+            "In **Beginner Mode**, the app loads current U.S. economic data automatically on the "
+            "**Choose Your Goal** tab. Advanced users can still override every assumption on "
+            "**Portfolio Health**."
         )

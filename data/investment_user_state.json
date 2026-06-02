@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "app": "investment",
+  "saved_at": "2026-06-01T19:27:28+00:00",
+  "state": {
+    "experience": "Beginner Mode",
+    "sidebar_portfolio_value": 100000,
+    "holdings_df": [
+      {
+        "Ticker": "VTI",
+        "Weight (%)": 40.0,
+        "Asset Type": "Equity"
+      },
+      {
+        "Ticker": "VXUS",
+        "Weight (%)": 20.0,
+        "Asset Type": "Equity"
+      },
+      {
+        "Ticker": "BND",
+        "Weight (%)": 30.0,
+        "Asset Type": "Bonds"
+      },
+      {
+        "Ticker": "VNQ",
+        "Weight (%)": 10.0,
+        "Asset Type": "REIT"
+      }
+    ]
+  }
+}
