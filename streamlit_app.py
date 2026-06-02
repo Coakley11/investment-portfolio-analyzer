@@ -46,12 +46,13 @@ render_objective_alignment_summary = getattr(
 render_optimizer_confidence = getattr(
     _calc_transparency, "render_optimizer_confidence", lambda: None
 )
-from components.beginner_coach import (
-    render_beginner_analysis_pipeline,
-    render_beginner_analyze_results,
-    render_beginner_rebalance_cards,
-    render_goal_cards,
-    render_portfolio_visual_table,
+_beginner_coach = importlib.import_module("components.beginner_coach")
+render_goal_cards = _beginner_coach.render_goal_cards
+render_portfolio_visual_table = _beginner_coach.render_portfolio_visual_table
+render_beginner_analyze_results = _beginner_coach.render_beginner_analyze_results
+render_beginner_rebalance_cards = _beginner_coach.render_beginner_rebalance_cards
+render_beginner_analysis_pipeline = getattr(
+    _beginner_coach, "render_beginner_analysis_pipeline", lambda: None
 )
 from components.beginner_copy import translate_for_beginner
 from components.getting_started_guide import PRESET_RATIONALE, render_getting_started_guide

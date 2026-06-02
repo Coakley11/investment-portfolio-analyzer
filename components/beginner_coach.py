@@ -318,3 +318,13 @@ def render_beginner_rebalance_cards(
             """,
             unsafe_allow_html=True,
         )
+
+
+__all__ = [
+    "GOAL_CARDS",
+    "render_beginner_analysis_pipeline",
+    "render_beginner_analyze_results",
+    "render_beginner_rebalance_cards",
+    "render_goal_cards",
+    "render_portfolio_visual_table",
+]
