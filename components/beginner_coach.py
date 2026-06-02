@@ -173,6 +173,21 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                     st.session_state.preset_applied = card["preset"]
                     st.session_state.guide_portfolio_loaded = True
                     mark_portfolio_built()
+                    try:
+                        from investment_activity import log_goal_selected, log_portfolio_created
+
+                        log_goal_selected(
+                            st,
+                            goal_title=card["title"],
+                            objective=card["objective"],
+                        )
+                        log_portfolio_created(
+                            st,
+                            preset=card["preset"],
+                            holdings_count=len(st.session_state.holdings_df),
+                        )
+                    except Exception:
+                        pass
                 st.session_state.run_health = False
                 st.session_state.pop("health_result", None)
                 st.session_state.pop("health_result_fingerprint", None)

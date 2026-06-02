@@ -83,6 +83,16 @@ def _apply_preset(name: str, *, sync_objective: str | None = None) -> None:
         st.session_state.pop("health_result_fingerprint", None)
         if sync_objective:
             st.session_state.health_objective = sync_objective
+        try:
+            from investment_activity import log_portfolio_created
+
+            log_portfolio_created(
+                st,
+                preset=name,
+                holdings_count=len(st.session_state.holdings_df),
+            )
+        except Exception:
+            pass
         st.rerun()
 
 
@@ -95,6 +105,13 @@ def _auto_apply_for_goal(goal: str) -> None:
     st.session_state.guide_last_applied_goal = goal
     st.session_state.guide_suggested_preset = preset
     st.session_state.health_objective = objective
+    if is_goal_change:
+        try:
+            from investment_activity import log_goal_selected
+
+            log_goal_selected(st, goal_title=goal, objective=objective)
+        except Exception:
+            pass
     should_load = is_goal_change or not st.session_state.get("preset_applied")
     if should_load and preset in core.PORTFOLIO_PRESETS:
         st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[preset])
@@ -104,6 +121,18 @@ def _auto_apply_for_goal(goal: str) -> None:
         st.session_state.run_health = False
         st.session_state.pop("health_result", None)
         st.session_state.pop("health_result_fingerprint", None)
+        if not is_goal_change:
+            try:
+                from investment_activity import log_goal_selected, log_portfolio_created
+
+                log_goal_selected(st, goal_title=goal, objective=objective)
+                log_portfolio_created(
+                    st,
+                    preset=preset,
+                    holdings_count=len(st.session_state.holdings_df),
+                )
+            except Exception:
+                pass
 
 
 def _render_preset_tab(preset_key: str, tab_label: str, objective: str, suggested: str) -> None:

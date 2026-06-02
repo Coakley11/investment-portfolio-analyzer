@@ -108,6 +108,15 @@ def render_rebalancing_panel(
             unsafe_allow_html=True,
         )
 
+    if not st.session_state.get(f"{key_prefix}_rebal_logged"):
+        try:
+            from investment_activity import log_rebalance_reviewed
+
+            log_rebalance_reviewed(st)
+            st.session_state[f"{key_prefix}_rebal_logged"] = True
+        except Exception:
+            pass
+
     for m in increases:
         st.markdown(
             f"""
