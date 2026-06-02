@@ -67,6 +67,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+try:
+    from suite_resume_launch import apply_suite_resume_launch
+
+    apply_suite_resume_launch(st, "investment")
+except Exception:
+    pass
+
 st.markdown(
     """
     <style>
