@@ -6,6 +6,7 @@ Core calculations: portfolio_core.py | Charts: dashboard_charts.py
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import io
 
 import numpy as np
@@ -19,10 +20,6 @@ from components.decision_coach import (
     render_action_plan_placeholder,
     render_recommendations_panel,
 )
-from components.beginner_coach import (
-    render_beginner_analyze_results,
-    render_goal_cards,
-)
 from components.beginner_navigation import (
     ADVANCED_TAB_LABELS,
     BEGINNER_TAB_LABELS,
@@ -33,12 +30,40 @@ from components.beginner_navigation import (
     render_next_step_banner,
     render_recommended_next_step_card,
 )
+_calc_transparency = importlib.import_module("components.calculation_transparency")
+render_how_calculated_section = getattr(
+    _calc_transparency, "render_how_calculated_section", lambda *_a, **_k: None
+)
+render_future_model_improvements = getattr(
+    _calc_transparency,
+    "render_future_model_improvements",
+    getattr(_calc_transparency, "render_methodology_footer", lambda **_kw: None),
+)
+render_macro_why_it_matters = getattr(
+    _calc_transparency, "render_macro_why_it_matters", lambda: None
+)
+render_objective_alignment_summary = getattr(
+    _calc_transparency, "render_objective_alignment_summary", lambda *_a, **_k: None
+)
+render_optimizer_confidence = getattr(
+    _calc_transparency, "render_optimizer_confidence", lambda: None
+)
+_beginner_coach = importlib.import_module("components.beginner_coach")
+render_goal_cards = _beginner_coach.render_goal_cards
+render_portfolio_visual_table = getattr(_beginner_coach, "render_portfolio_visual_table", lambda *_a, **_k: None)
+render_beginner_analyze_results = _beginner_coach.render_beginner_analyze_results
+render_beginner_rebalance_cards = getattr(_beginner_coach, "render_beginner_rebalance_cards", lambda *_a, **_k: None)
+render_beginner_analysis_pipeline = getattr(
+    _beginner_coach, "render_beginner_analysis_pipeline", lambda: None
+)
 from components.beginner_copy import translate_for_beginner
 from components.getting_started_guide import PRESET_RATIONALE, render_getting_started_guide
 from components.guided_adjustment import render_guided_portfolio_adjustment
 from components.implementation_guide import render_implementation_guide
 from components.investment_planning import render_how_much_to_invest
+from components.beginner_macro import render_beginner_macro_panel
 from components.macro_assumptions_guide import render_macro_assumptions_guide
+from components.macro_data import ensure_beginner_macro_defaults
 from components.macro_engine import (
     get_forward_projection,
     health_settings_fingerprint,
@@ -49,10 +74,15 @@ from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
     APP_DISCLAIMER as UI_DISCLAIMER,
+    HISTORICAL_PERIOD_DATE_INPUT_HELP,
+    HISTORICAL_PERIOD_HELP_ADVANCED,
+    HISTORICAL_PERIOD_HELP_BEGINNER,
+    apply_pending_sidebar_portfolio_value,
     coach_card,
     is_beginner_mode,
     metric_help,
     refresh_market_data_sidebar,
+    render_historical_period_sidebar_help,
     what_why_do,
 )
 
@@ -66,6 +96,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+try:
+    from investment_persistent_state import (
+        autosave_investment_state,
+        default_reset_investment_session,
+        restore_investment_disk_state_once,
+    )
+    from suite_user_persistence import render_reset_controls, show_persistence_messages
+
+    restore_investment_disk_state_once(st)
+    apply_pending_sidebar_portfolio_value()
+    show_persistence_messages(st)
+    render_reset_controls(
+        st,
+        "investment",
+        on_reset=default_reset_investment_session,
+        help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
+    )
+except Exception:
+    pass
 
 try:
     from suite_resume_launch import apply_suite_resume_launch
@@ -697,6 +747,7 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 
 def render_sidebar() -> dict:
+    apply_pending_sidebar_portfolio_value()
     st.sidebar.markdown("### Experience")
     experience = st.sidebar.radio(
         "Experience level",
@@ -743,11 +794,26 @@ def render_sidebar() -> dict:
     st.sidebar.markdown("### Analysis Settings")
     end_default = dt.date.today()
     start_default = end_default - dt.timedelta(days=365 * 5)
+    date_help = (
+        HISTORICAL_PERIOD_HELP_BEGINNER
+        if beginner
+        else HISTORICAL_PERIOD_HELP_ADVANCED
+    )
+    date_input_help = HISTORICAL_PERIOD_DATE_INPUT_HELP if beginner else date_help
     ca, cb = st.sidebar.columns(2)
     with ca:
-        start_date = st.date_input("Start", value=start_default, help="How far back to pull prices.")
+        start_date = st.date_input(
+            "Start",
+            value=start_default,
+            help=date_input_help,
+        )
     with cb:
-        end_date = st.date_input("End", value=end_default, help="Usually today — prices download automatically.")
+        end_date = st.date_input(
+            "End",
+            value=end_default,
+            help=date_input_help,
+        )
+    render_historical_period_sidebar_help(beginner=beginner)
 
     risk_free = st.sidebar.slider(
         "Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25,
@@ -1330,6 +1396,8 @@ def export_buttons(
 
 settings = render_sidebar()
 beginner_mode = is_beginner_mode(settings)
+if beginner_mode:
+    ensure_beginner_macro_defaults()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 health_badge_slot = st.empty()
@@ -1358,6 +1426,8 @@ with tab_guide:
             f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
             unsafe_allow_html=True,
         )
+        render_beginner_macro_panel()
+        render_beginner_analysis_pipeline()
         render_goal_cards()
     else:
         section_header(
