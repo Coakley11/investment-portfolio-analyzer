@@ -1328,8 +1328,12 @@ apply_asset_preset(settings["asset_preset"])
 if beginner_mode:
     render_next_step_banner()
 
-tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
-tabs = st.tabs(tab_labels)
+_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
+if len(_tab_labels) != len(ADVANCED_TAB_LABELS):
+    raise ValueError(
+        f"Tab label count mismatch: {len(_tab_labels)} labels vs "
+        f"{len(ADVANCED_TAB_LABELS)} expected — fix BEGINNER_TAB_LABELS / ADVANCED_TAB_LABELS"
+    )
 (
     tab_guide,
     tab_overview,
@@ -1341,7 +1345,7 @@ tabs = st.tabs(tab_labels)
     tab_mc,
     tab_opt,
     tab_frontier,
-) = tabs
+) = st.tabs(_tab_labels)
 
 with tab_guide:
     section_header(

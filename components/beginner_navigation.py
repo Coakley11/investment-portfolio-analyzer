@@ -7,14 +7,18 @@ import streamlit as st
 
 import portfolio_core as core
 
+# Must match ADVANCED_TAB_LABELS count — streamlit_app unpacks 10 tab variables.
 BEGINNER_TAB_LABELS = [
-    "① Choose Goal",
-    "② How Much to Invest",
-    "③ Build Portfolio",
-    "④ Analyze Portfolio",
-    "⑤ Recommendations",
-    "⑥ Implementation",
-    "⑦ Monthly Review",
+    "① Getting Started",
+    "② Overview",
+    "③ Portfolio Inputs",
+    "④ Risk & Mix",
+    "⑤ Health Checkup",
+    "⑥ Explain Portfolio",
+    "⑦ Macro (Intro)",
+    "⑧ Scenarios",
+    "⑨ Optimizer",
+    "⑩ Frontier",
 ]
 
 ADVANCED_TAB_LABELS = [
@@ -29,6 +33,12 @@ ADVANCED_TAB_LABELS = [
     "Optimization",
     "Efficient Frontier",
 ]
+
+if len(BEGINNER_TAB_LABELS) != len(ADVANCED_TAB_LABELS):
+    raise ValueError(
+        "BEGINNER_TAB_LABELS and ADVANCED_TAB_LABELS must have the same length "
+        f"({len(BEGINNER_TAB_LABELS)} vs {len(ADVANCED_TAB_LABELS)})"
+    )
 
 CHECKLIST_STEPS = [
     ("goal", "Step 1 — Choose Goal"),
