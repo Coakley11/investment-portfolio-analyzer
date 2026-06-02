@@ -57,6 +57,22 @@ TECHNICAL_METRIC_HELP = {
 }
 
 
+PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY = "pending_sidebar_portfolio_value"
+
+
+def apply_pending_sidebar_portfolio_value() -> None:
+    """Apply a deferred portfolio value update before the sidebar number_input is drawn."""
+    if PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY in st.session_state:
+        st.session_state["sidebar_portfolio_value"] = st.session_state.pop(
+            PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY
+        )
+
+
+def request_sidebar_portfolio_value(value: int | float) -> None:
+    """Queue portfolio value change for the next run (avoids Streamlit widget key conflict)."""
+    st.session_state[PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY] = int(value)
+
+
 def is_beginner_mode(settings: dict) -> bool:
     return settings.get("experience", "Beginner Mode") == "Beginner Mode"
 

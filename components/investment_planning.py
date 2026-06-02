@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 import portfolio_core as core
-from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode
+from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode, request_sidebar_portfolio_value
 
 DISCLAIMER = f"Educational estimate only. {APP_DISCLAIMER}"
 
@@ -328,7 +328,7 @@ def render_how_much_to_invest(
                 use_container_width=True,
                 key=f"{key_prefix}_apply_investable",
             ):
-                st.session_state.sidebar_portfolio_value = int(amount_investable)
+                request_sidebar_portfolio_value(amount_investable)
                 st.session_state.plan_total_cash = int(total_cash)
                 st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
@@ -339,7 +339,7 @@ def render_how_much_to_invest(
                 use_container_width=True,
                 key=f"{key_prefix}_apply_long_term",
             ):
-                st.session_state.sidebar_portfolio_value = int(long_term_suggested)
+                request_sidebar_portfolio_value(long_term_suggested)
                 st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(long_term_suggested)}.")
                 st.rerun()
@@ -355,7 +355,7 @@ def render_how_much_to_invest(
                 use_container_width=True,
                 key=f"{key_prefix}_apply_long_term_adv",
             ):
-                st.session_state.sidebar_portfolio_value = int(long_term_suggested)
+                request_sidebar_portfolio_value(long_term_suggested)
                 st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(long_term_suggested)} for analysis.")
                 st.rerun()
@@ -365,7 +365,7 @@ def render_how_much_to_invest(
                 use_container_width=True,
                 key=f"{key_prefix}_apply_investable_adv",
             ):
-                st.session_state.sidebar_portfolio_value = int(amount_investable)
+                request_sidebar_portfolio_value(amount_investable)
                 st.session_state.capital_deployed = True
                 st.success(f"Portfolio value set to {_money(amount_investable)}.")
                 st.rerun()

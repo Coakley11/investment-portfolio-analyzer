@@ -76,6 +76,7 @@ from components.ui_helpers import (
     coach_card,
     is_beginner_mode,
     metric_help,
+    apply_pending_sidebar_portfolio_value,
     refresh_market_data_sidebar,
     render_historical_period_sidebar_help,
     what_why_do,
@@ -101,6 +102,7 @@ try:
     from suite_user_persistence import render_reset_controls, show_persistence_messages
 
     restore_investment_disk_state_once(st)
+    apply_pending_sidebar_portfolio_value()
     show_persistence_messages(st)
     render_reset_controls(
         st,
@@ -791,6 +793,7 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 
 def render_sidebar() -> dict:
+    apply_pending_sidebar_portfolio_value()
     st.sidebar.markdown("### Experience")
     experience = st.sidebar.radio(
         "Experience level",
