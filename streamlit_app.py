@@ -98,6 +98,13 @@ st.set_page_config(
 )
 
 try:
+    from suite_resume_launch import apply_suite_resume_launch
+
+    apply_suite_resume_launch(st, "investment")
+except Exception:
+    pass
+
+try:
     from investment_persistent_state import (
         autosave_investment_state,
         default_reset_investment_session,
@@ -114,13 +121,6 @@ try:
         on_reset=default_reset_investment_session,
         help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
     )
-except Exception:
-    pass
-
-try:
-    from suite_resume_launch import apply_suite_resume_launch
-
-    apply_suite_resume_launch(st, "investment")
 except Exception:
     pass
 
@@ -2481,3 +2481,11 @@ with tab_frontier:
 # ── Header health badge (cached; no heavy health calc on load) ─────────────────
 
 render_health_header_badge(health_badge_slot, tickers, weights)
+
+try:
+    from investment_persistent_state import autosave_investment_state
+
+    autosave_investment_state(st)
+except Exception:
+    pass
+
