@@ -122,9 +122,9 @@ def render_recommendations_panel(
     st.markdown(f"#### {title}")
     st.caption(lead)
     try:
-        from investment_workflow import mark_recommendations_viewed
+        from investment_workflow import mark_recommendations_if_current
 
-        mark_recommendations_viewed(st)
+        mark_recommendations_if_current(st)
     except ImportError:
         st.session_state.recommendations_displayed = True
 

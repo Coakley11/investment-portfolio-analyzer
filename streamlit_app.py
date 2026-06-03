@@ -659,6 +659,60 @@ def get_cached_health(tickers: list[str], weights: np.ndarray) -> core.Portfolio
     return st.session_state.get("health_result")
 
 
+def evaluate_portfolio_health_if_needed(
+    *,
+    settings: dict,
+    tickers: list[str],
+    weights: np.ndarray,
+    asset_types: list[str],
+    metrics: core.ExtendedMetrics,
+    returns: pd.DataFrame,
+    mean_rets: np.ndarray,
+    cov: np.ndarray,
+    base_risk_pack: dict,
+    bench_rets: pd.Series | None,
+) -> core.PortfolioHealthResult | None:
+    """Run portfolio health when ``run_health`` is set; return cached result when fresh."""
+    if not st.session_state.get("run_health", False):
+        return get_cached_health(tickers, weights)
+
+    cached = get_cached_health(tickers, weights)
+    if cached is not None:
+        return cached
+
+    health_objective = st.session_state.get("health_objective", "balanced growth")
+    health_run_optimizer = bool(st.session_state.get("health_run_optimizer", False))
+    health_bond_min = float(st.session_state.get("health_bond_min", 0) or 0)
+    health_assumptions = macro_assumptions_from_session()
+    opt_weights = None
+    if health_run_optimizer:
+        with st.spinner("Running optimizer for drift comparison…"):
+            opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
+            opt_weights = opt_pack["max_sharpe"].weights
+
+    rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
+    with st.spinner("Evaluating portfolio health…"):
+        health = core.evaluate_portfolio_health(
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            metrics=metrics,
+            asset_returns=returns,
+            corr=base_risk_pack["corr"],
+            risk_contrib_df=base_risk_pack["risk_contrib"],
+            assumptions=health_assumptions,
+            objective=health_objective,
+            risk_free_rate=settings["risk_free"],
+            initial_value=settings["initial_value"],
+            benchmark_returns=bench_rets,
+            optimizer_weights=opt_weights,
+            recommended_type_mix=rec.allocation,
+            bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
+        )
+    cache_health_summary(health, tickers, weights)
+    return health
+
+
 def get_health_badge_state(tickers: list[str], weights: np.ndarray) -> tuple[str, dict | None]:
     status = get_health_cache_status(tickers, weights)
     summary = st.session_state.get("health_summary")
@@ -1116,6 +1170,12 @@ def render_overview_tab(
             if st.button("Analyze Portfolio", type="primary", key="overview_analyze_btn"):
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
+                try:
+                    from investment_workflow import navigate_workflow_tab
+
+                    navigate_workflow_tab("analyze", beginner=True)
+                except ImportError:
+                    pass
                 st.rerun()
 
         if _ov_active == _ov_subtab_labels[1]:
@@ -1483,13 +1543,12 @@ if beginner_mode:
     render_next_step_banner()
 
 _main_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
-if beginner_mode:
-    try:
-        from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
+try:
+    from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
 
-        sync_beginner_goal_keys_from_portfolio(st)
-    except Exception:
-        pass
+    sync_beginner_goal_keys_from_portfolio(st)
+except Exception:
+    pass
 ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
 st.radio(
     "Section",
@@ -1567,10 +1626,15 @@ if _active_tab == _main_tab_labels[2]:
 try:
     tickers, weights, asset_types = parse_holdings(st.session_state.holdings_df)
     try:
-        from investment_workflow import reconcile_workflow_health, track_holdings_dataframe
+        from investment_workflow import (
+            record_workflow_health_status,
+            reconcile_workflow_health,
+            track_holdings_dataframe,
+        )
 
         track_holdings_dataframe(st.session_state.holdings_df, st)
         reconcile_workflow_health(tickers, weights, st)
+        record_workflow_health_status(get_health_cache_status(tickers, weights), st)
     except ImportError:
         pass
 except ValueError as e:
@@ -1625,7 +1689,21 @@ export_buttons(
     report_text,
 )
 
+try:
+    from investment_workflow import render_plan_context_banner
+
+    render_plan_context_banner(st, beginner=beginner_mode)
+except ImportError:
+    pass
+
 if _active_tab == _main_tab_labels[2]:
+    try:
+        from investment_workflow import render_rebuild_portfolio_panel
+
+        if render_rebuild_portfolio_panel(st, beginner=beginner_mode):
+            st.rerun()
+    except ImportError:
+        pass
     st.markdown("---")
     pv = float(settings["initial_value"])
     if beginner_mode:
@@ -1717,28 +1795,53 @@ if _active_tab == _main_tab_labels[3]:
     if beginner_mode:
         section_header(
             "Analyze Portfolio",
-            "Run a one-click checkup — then continue on **⑤ Portfolio Health**.",
+            "Run a one-click checkup on this tab. Results stay tied to your current holdings in both modes.",
         )
         if st.button("Analyze Portfolio", type="primary", key="beg_analyze", use_container_width=True):
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
-            st.rerun()
-        _beg_health = get_cached_health(tickers, weights)
-        if _beg_health:
             try:
-                from investment_workflow import mark_analysis_complete, mark_health_reviewed
+                from investment_workflow import navigate_workflow_tab
 
-                mark_analysis_complete(st)
-                mark_health_reviewed(st)
+                navigate_workflow_tab("analyze", beginner=True)
             except ImportError:
-                st.session_state.portfolio_analyzed = True
-                st.session_state.portfolio_health_reviewed = True
+                pass
+            st.rerun()
+        _beg_health = evaluate_portfolio_health_if_needed(
+            settings=settings,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            metrics=metrics,
+            returns=returns,
+            mean_rets=mean_rets,
+            cov=cov,
+            base_risk_pack=base_risk_pack,
+            bench_rets=bench_rets,
+        )
+        if _beg_health is None and st.session_state.get("run_health"):
+            st.warning("Analysis did not complete. Check holdings and try again.")
+        elif _beg_health is not None:
             render_beginner_analyze_results(
                 _beg_health,
                 objective=st.session_state.get("health_objective", "balanced growth"),
             )
+            try:
+                from investment_workflow import record_workflow_health_status
+
+                record_workflow_health_status(get_health_cache_status(tickers, weights), st)
+            except ImportError:
+                pass
+            st.success("Analysis complete for your current portfolio. Open **⑤ Portfolio Health** for the full score and recommendations.")
         else:
-            st.info("Click **Analyze Portfolio** above.")
+            st.info("Click **Analyze Portfolio** above to run the checkup.")
+        try:
+            from investment_workflow import render_rebuild_portfolio_panel
+
+            if render_rebuild_portfolio_panel(st, beginner=True):
+                st.rerun()
+        except ImportError:
+            pass
         st.caption("Tabs **⑦–⑩** are optional. Advanced Mode has full risk charts.")
     else:
         section_header(
@@ -1917,54 +2020,54 @@ if _active_tab == _main_tab_labels[4]:
                     pass
                 st.rerun()
 
+    health_objective = str(st.session_state.get("health_objective", "balanced growth"))
+    _prev_obj = st.session_state.get("_activity_health_objective")
+    if _prev_obj and _prev_obj != health_objective:
+        try:
+            from investment_workflow import invalidate_workflow_from
+
+            invalidate_workflow_from("goal")
+        except ImportError:
+            pass
+        try:
+            from investment_activity import log_risk_profile_changed
+
+            log_risk_profile_changed(st, profile=health_objective)
+        except Exception:
+            pass
+    st.session_state["_activity_health_objective"] = health_objective
+
+    health: core.PortfolioHealthResult | None = get_cached_health(tickers, weights)
     if not st.session_state.get("run_health", False):
-        st.info("Click **Refresh Portfolio Health** to run the health analysis with your current settings.")
-    else:
-        health = get_cached_health(tickers, weights)
         if health is None:
-            health_assumptions = macro_assumptions_from_session()
-            opt_weights = None
-            if health_run_optimizer:
-                with st.spinner("Running optimizer for drift comparison…"):
-                    opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
-                    opt_weights = opt_pack["max_sharpe"].weights
+            st.info("Click **Refresh Portfolio Health** to run the health analysis with your current settings.")
+    else:
+        health = evaluate_portfolio_health_if_needed(
+            settings=settings,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            metrics=metrics,
+            returns=returns,
+            mean_rets=mean_rets,
+            cov=cov,
+            base_risk_pack=base_risk_pack,
+            bench_rets=bench_rets,
+        )
+        try:
+            from investment_workflow import record_workflow_health_status
 
-            rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
-            with st.spinner("Evaluating portfolio health…"):
-                health = core.evaluate_portfolio_health(
-                    tickers=tickers,
-                    weights=weights,
-                    asset_types=asset_types,
-                    metrics=metrics,
-                    asset_returns=returns,
-                    corr=base_risk_pack["corr"],
-                    risk_contrib_df=base_risk_pack["risk_contrib"],
-                    assumptions=health_assumptions,
-                    objective=health_objective,
-                    risk_free_rate=settings["risk_free"],
-                    initial_value=settings["initial_value"],
-                    benchmark_returns=bench_rets,
-                    optimizer_weights=opt_weights,
-                    recommended_type_mix=rec.allocation,
-                    bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
-                )
-            cache_health_summary(health, tickers, weights)
+            record_workflow_health_status(get_health_cache_status(tickers, weights), st)
+        except ImportError:
+            pass
 
-        _prev_obj = st.session_state.get("_activity_health_objective")
-        if _prev_obj and _prev_obj != health_objective:
-            try:
-                from investment_workflow import invalidate_workflow_from
+    if health is not None:
+        try:
+            from investment_workflow import mark_health_reviewed_for_portfolio
 
-                invalidate_workflow_from("goal")
-            except ImportError:
-                pass
-            try:
-                from investment_activity import log_risk_profile_changed
-
-                log_risk_profile_changed(st, profile=health_objective)
-            except Exception:
-                pass
-        st.session_state["_activity_health_objective"] = health_objective
+            mark_health_reviewed_for_portfolio(tickers, weights, st)
+        except ImportError:
+            st.session_state.portfolio_health_reviewed = True
 
         st.markdown(
             f'<div class="insight-card">📋 <b>Status:</b> {health.status_message}</div>',

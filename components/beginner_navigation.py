@@ -213,19 +213,21 @@ def mark_portfolio_built(st_obj: Any | None = None) -> None:
 
 
 def _checklist_state(st_obj: Any | None = None) -> dict[str, bool]:
-    ss = _sess(st_obj)
-    goal_done = _goal_step_complete(st_obj)
-    portfolio_done = _portfolio_built(st_obj) or bool(ss.get("portfolio_built"))
-    analyze_done = bool(ss.get("portfolio_analyzed"))
-    health_done = bool(ss.get("portfolio_health_reviewed"))
-    rec_done = bool(ss.get("recommendations_displayed"))
-    return {
-        "goal": goal_done,
-        "portfolio": portfolio_done,
-        "analyze": analyze_done,
-        "health": health_done,
-        "recommendations": rec_done,
-    }
+    try:
+        from investment_workflow import workflow_checklist
+
+        return workflow_checklist(st_obj)
+    except ImportError:
+        ss = _sess(st_obj)
+        goal_done = _goal_step_complete(st_obj)
+        portfolio_done = _portfolio_built(st_obj) or bool(ss.get("portfolio_built"))
+        return {
+            "goal": goal_done,
+            "portfolio": portfolio_done,
+            "analyze": bool(ss.get("portfolio_analyzed")),
+            "health": bool(ss.get("portfolio_health_reviewed")),
+            "recommendations": bool(ss.get("recommendations_displayed")),
+        }
 
 
 def _current_step_index(st_obj: Any | None = None) -> int:
@@ -389,7 +391,12 @@ def render_recommended_next_step_card() -> bool:
                 st.session_state.investment_active_tab = STEP_TAB_LABEL["portfolio"]
         elif not state["analyze"]:
             if st.button(f"Go to {STEP_TAB_LABEL['analyze']}", type="primary", use_container_width=True, key="cta_analyze"):
-                st.session_state.investment_active_tab = STEP_TAB_LABEL["analyze"]
+                try:
+                    from investment_workflow import navigate_workflow_tab
+
+                    navigate_workflow_tab("analyze", beginner=True)
+                except ImportError:
+                    st.session_state.investment_active_tab = STEP_TAB_LABEL["analyze"]
                 st.session_state.run_health = True
                 clicked = True
         elif not state["health"]:
