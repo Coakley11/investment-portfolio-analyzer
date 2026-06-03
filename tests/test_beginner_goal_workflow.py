@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from components.beginner_coach import render_beginner_goal_tab
+from components.beginner_coach import GOAL_CARDS, _resolved_goal_card, render_beginner_goal_tab
 from components.beginner_navigation import (
     ADVANCED_TAB_LABELS,
     BEGINNER_TAB_LABELS,
@@ -71,6 +71,17 @@ class TestGoalWorkflow(unittest.TestCase):
 
     def test_render_beginner_goal_tab_exists(self) -> None:
         self.assertTrue(callable(render_beginner_goal_tab))
+
+    def test_goal_cards_always_defined(self) -> None:
+        self.assertGreaterEqual(len(GOAL_CARDS), 4)
+
+    def test_resolved_goal_card_from_session(self) -> None:
+        st = _FakeSt()
+        st.session_state.beginner_goal_card = "income"
+        card = _resolved_goal_card(st)
+        self.assertIsNotNone(card)
+        self.assertEqual(card["id"], "income")
+        self.assertEqual(card["title"], "Income")
 
 
 if __name__ == "__main__":

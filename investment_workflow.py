@@ -20,7 +20,7 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-goal-cards-fix"
+WORKFLOW_UI_BUILD = "2026-06-03-goal-cards-always"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 _GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (

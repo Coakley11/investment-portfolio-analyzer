@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import streamlit as st
 
@@ -136,8 +138,30 @@ def render_beginner_analysis_pipeline() -> None:
     )
 
 
+def _resolved_goal_card(st_obj: Any | None = None) -> dict[str, str] | None:
+    """Map session state to the active beginner goal card, if any."""
+    ss = st_obj.session_state if st_obj is not None else st.session_state
+    card_id = ss.get("beginner_goal_card")
+    if card_id:
+        for card in GOAL_CARDS:
+            if card.get("id") == card_id:
+                return card
+    goal_key = ss.get("guide_goal_choice")
+    if goal_key:
+        for card in GOAL_CARDS:
+            if card.get("goal_key") == goal_key:
+                return card
+    return None
+
+
 def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool = False) -> None:
-    """Step 1 — large goal cards; one click loads the recommended portfolio."""
+    """
+    Step 1 — large goal cards; one click loads the recommended portfolio.
+
+    UX invariant (Beginner): always render every goal card on the Goal step.
+    Never hide the picker because a goal is already selected — highlight the
+    current choice and let the user switch anytime.
+    """
     if change_goal_mode:
         st.markdown(
             """
@@ -152,18 +176,36 @@ def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool =
             unsafe_allow_html=True,
         )
     st.markdown("#### Step 1 — Choose your goal")
-    st.caption("Tap a card to load a recommended portfolio. You can fine-tune weights later.")
-    selected = st.session_state.get("beginner_goal_card")
+    current = _resolved_goal_card()
+    if current:
+        preset = st.session_state.get("preset_applied")
+        preset_note = f" · Portfolio: **{preset}**" if preset else ""
+        st.success(
+            f"**Current goal: {current['title']}**{preset_note} — highlighted below. "
+            "Tap any card to switch goals."
+        )
+    else:
+        st.caption(
+            "Tap a card to load a recommended portfolio. You can change your goal here anytime."
+        )
+    selected_id = current["id"] if current else None
     cols = st.columns(3)
     for i, card in enumerate(GOAL_CARDS):
         with cols[i % 3]:
-            active = selected == card["id"]
+            active = selected_id == card["id"]
             border = "#4da3ff" if active else "#334155"
             bg = "rgba(77,163,255,0.12)" if active else "rgba(20,28,43,0.85)"
+            current_badge = (
+                '<div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.06em;'
+                'color:#86efac;font-weight:700;margin-bottom:0.25rem;">Current</div>'
+                if active
+                else ""
+            )
             st.markdown(
                 f"""
                 <div style="background:{bg};border:2px solid {border};border-radius:12px;
                 padding:0.85rem 0.75rem;margin-bottom:0.5rem;min-height:7.5rem;">
+                {current_badge}
                 <div style="font-size:1.6rem;line-height:1;">{card['emoji']}</div>
                 <div style="font-weight:700;color:#f1f5f9;font-size:1rem;margin:0.35rem 0 0.2rem 0;">
                 {card['title']}</div>
@@ -253,10 +295,10 @@ def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool =
 
 def render_beginner_goal_tab(*, change_goal_mode: bool = False) -> None:
     """
-    Beginner Step 1 tab — goal cards always visible first.
+    Beginner ``① Choose Goal`` tab.
 
-    Macro and pipeline guidance stay available but collapsed so Change Goal
-    does not bury the card picker below a long economic-environment section.
+    Always shows the full goal-card grid first (see ``render_goal_cards``).
+    Optional macro/pipeline sections stay collapsed so cards stay in view.
     """
     st.markdown(
         f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
@@ -415,6 +457,7 @@ def render_beginner_rebalance_cards(
 
 __all__ = [
     "GOAL_CARDS",
+    "_resolved_goal_card",
     "render_beginner_analysis_pipeline",
     "render_beginner_analyze_results",
     "render_beginner_goal_tab",

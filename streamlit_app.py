@@ -49,7 +49,7 @@ render_optimizer_confidence = getattr(
 )
 _beginner_coach = importlib.import_module("components.beginner_coach")
 render_goal_cards = _beginner_coach.render_goal_cards
-render_beginner_goal_tab = getattr(_beginner_coach, "render_beginner_goal_tab", None)
+render_beginner_goal_tab = _beginner_coach.render_beginner_goal_tab
 render_portfolio_visual_table = getattr(_beginner_coach, "render_portfolio_visual_table", lambda *_a, **_k: None)
 render_beginner_analyze_results = _beginner_coach.render_beginner_analyze_results
 render_beginner_rebalance_cards = getattr(_beginner_coach, "render_beginner_rebalance_cards", lambda *_a, **_k: None)
@@ -1589,16 +1589,7 @@ _active_tab = st.session_state["investment_active_tab"]
 if _active_tab == _main_tab_labels[0]:
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
-        if render_beginner_goal_tab is not None:
-            render_beginner_goal_tab(change_goal_mode=_change_goal_mode)
-        else:
-            st.markdown(
-                f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
-                unsafe_allow_html=True,
-            )
-            render_beginner_macro_panel()
-            render_beginner_analysis_pipeline()
-            render_goal_cards()
+        render_beginner_goal_tab(change_goal_mode=_change_goal_mode)
         try:
             from investment_workflow import render_goal_change_workflow_debug
 
