@@ -19,7 +19,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-reset-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-workflow-sync-v1"
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -81,6 +81,12 @@ _PERSIST_SCALAR_KEYS = (
     "plan_expenses",
     "plan_monthly",
     "investment_plan_generated",
+    "visited_explain",
+    "visited_risk",
+    "visited_forward",
+    "visited_mc",
+    "visited_implement",
+    "run_risk_macro",
 )
 
 _LEGACY_TAB_KEY = "health_active_tab"
@@ -126,6 +132,12 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "plan_expenses": 0,
     "plan_monthly": 0,
     "investment_plan_generated": False,
+    "visited_explain": False,
+    "visited_risk": False,
+    "visited_forward": False,
+    "visited_mc": False,
+    "visited_implement": False,
+    "run_risk_macro": False,
     "holdings_df": "default holdings",
     "health_summary": None,
 }
@@ -282,6 +294,20 @@ def _snapshot_mode_debug(st: Any, *, saved: str | None = None) -> None:
     ss["_suite_inv_debug_mode_final"] = current_experience_mode(st)
 
 
+def _persist_scalar_value(ss: Any, key: str) -> Any:
+    if key in ss:
+        val = ss[key]
+        if isinstance(val, dt.date):
+            return val.isoformat()
+        return copy.deepcopy(val)
+    if key in PERSIST_FIELD_DEFAULTS:
+        default = PERSIST_FIELD_DEFAULTS[key]
+        if isinstance(default, dt.date):
+            return default.isoformat()
+        return copy.deepcopy(default)
+    return None
+
+
 def build_investment_disk_state(st: Any) -> dict[str, Any]:
     ss = st.session_state
     state: dict[str, Any] = {}
@@ -291,19 +317,28 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
     for key in _PERSIST_SCALAR_KEYS:
         if key in (EXPERIENCE_KEY, PERSISTED_EXPERIENCE_KEY):
             continue
-        if key in ss:
-            val = ss[key]
-            if isinstance(val, dt.date):
-                state[key] = val.isoformat()
-            else:
-                state[key] = copy.deepcopy(val)
+        val = _persist_scalar_value(ss, key)
+        if val is not None or key in PERSIST_FIELD_DEFAULTS:
+            state[key] = val
     if INVESTMENT_ACTIVE_TAB_KEY in state:
         state[_LEGACY_TAB_KEY] = state[INVESTMENT_ACTIVE_TAB_KEY]
     if "holdings_df" in ss and isinstance(ss["holdings_df"], pd.DataFrame):
         state["holdings_df"] = _df_to_records(ss["holdings_df"])
+        try:
+            from components.beginner_navigation import _holdings_fingerprint
+
+            state["holdings_fingerprint"] = _holdings_fingerprint(ss["holdings_df"])
+        except Exception:
+            pass
     summary = ss.get("health_summary")
     if isinstance(summary, dict):
         state["health_summary"] = copy.deepcopy(summary)
+    try:
+        from investment_workflow import WORKFLOW_STATE_BLOB_KEY, build_workflow_persist_blob
+
+        state[WORKFLOW_STATE_BLOB_KEY] = build_workflow_persist_blob(st)
+    except ImportError:
+        pass
     _snapshot_mode_debug(st, saved=mode)
     return state
 
@@ -315,8 +350,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     _record_restore_debug(st, state)
     st.session_state["_suite_inv_debug_picked_experience"] = state.get(EXPERIENCE_KEY)
 
+    try:
+        from investment_workflow import WORKFLOW_STATE_BLOB_KEY as _WF_BLOB
+    except ImportError:
+        _WF_BLOB = "workflow_state"
+
     for key, val in state.items():
-        if key == _LEGACY_TAB_KEY:
+        if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint"):
             continue
         if key == "holdings_df":
             if val:
@@ -342,6 +382,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
 
         sync_beginner_goal_keys_from_portfolio(st)
+    except ImportError:
+        pass
+
+    try:
+        from investment_workflow import WORKFLOW_STATE_BLOB_KEY, apply_workflow_persist_blob
+
+        apply_workflow_persist_blob(st, state.get(WORKFLOW_STATE_BLOB_KEY))
     except ImportError:
         pass
 
@@ -492,6 +539,14 @@ def render_persistence_debug_content(st: Any) -> None:
         st.warning(f"Persistence import error: {import_err}")
     if restore_err:
         st.warning(f"Persistence restore error: {restore_err}")
+    try:
+        from investment_workflow import workflow_persist_audit
+
+        st.markdown("**Workflow full_session audit (live vs saved)**")
+        audit = workflow_persist_audit(st)
+        st.code("\n".join(f"{k}: {v}" for k, v in audit.items()), language=None)
+    except ImportError:
+        pass
     if cloud_err:
         st.caption(f"Cloud peek error: {cloud_err}")
     try:

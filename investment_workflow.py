@@ -20,7 +20,7 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-goal-cards-always"
+WORKFLOW_UI_BUILD = "2026-06-03-workflow-sync-v1"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 _GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
@@ -33,6 +33,8 @@ WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
 
 DEV_DIAG_SESSION_KEY = "investment_show_dev_diagnostics"
 _PENDING_INVESTMENT_TAB_KEY = "_pending_investment_tab"
+WORKFLOW_STATE_BLOB_KEY = "workflow_state"
+
 _WORKFLOW_INTENT_KEY = "_workflow_intent"
 _WORKFLOW_STALE_STEPS_KEY = "_workflow_stale_steps"
 _WORKFLOW_CHANGE_SNAPSHOT_KEY = "_workflow_change_snapshot"
@@ -99,6 +101,112 @@ def _clear_stale_steps(ss: Any, *steps: WorkflowCoreKey) -> None:
         ss[_WORKFLOW_STALE_STEPS_KEY] = stale
     else:
         ss.pop(_WORKFLOW_STALE_STEPS_KEY, None)
+
+
+def build_workflow_persist_blob(st_obj: Any | None = None) -> dict[str, Any]:
+    """
+    Serializable workflow progress for cloud ``full_session`` (shared Beginner/Advanced + devices).
+    """
+    ss = _sess(st_obj)
+    intent = ss.get(_WORKFLOW_INTENT_KEY)
+    blob: dict[str, Any] = {
+        "workflow_intent": intent if intent in ("change_goal", "rebuild_portfolio") else None,
+        "workflow_stale_steps": sorted(_stale_steps_set(ss)),
+        "workflow_health_status": ss.get(_HEALTH_STATUS_KEY),
+        "health_result_fingerprint": ss.get("health_result_fingerprint"),
+        "health_settings_fingerprint": ss.get("health_settings_fingerprint"),
+        "workflow_health_reviewed_fp": ss.get(_HEALTH_VIEWED_FP_KEY),
+        "workflow_recommendations_viewed_fp": ss.get(_REC_VIEWED_FP_KEY),
+        "workflow_holdings_fp": ss.get(_HOLDINGS_TRACK_KEY),
+        "checklist": workflow_checklist(st_obj),
+    }
+    return blob
+
+
+def apply_workflow_persist_blob(st_obj: Any, blob: dict[str, Any] | None) -> None:
+    """Restore workflow progress from ``workflow_state`` in a persisted session blob."""
+    if not isinstance(blob, dict):
+        return
+    ss = _sess(st_obj)
+    intent = blob.get("workflow_intent")
+    if intent in ("change_goal", "rebuild_portfolio"):
+        ss[_WORKFLOW_INTENT_KEY] = intent
+    else:
+        ss.pop(_WORKFLOW_INTENT_KEY, None)
+
+    stale_raw = blob.get("workflow_stale_steps")
+    if isinstance(stale_raw, (list, tuple)) and stale_raw:
+        ss[_WORKFLOW_STALE_STEPS_KEY] = set(str(s) for s in stale_raw)
+    elif isinstance(stale_raw, set) and stale_raw:
+        ss[_WORKFLOW_STALE_STEPS_KEY] = set(stale_raw)
+    else:
+        ss.pop(_WORKFLOW_STALE_STEPS_KEY, None)
+
+    for blob_key, session_key in (
+        ("workflow_health_status", _HEALTH_STATUS_KEY),
+        ("health_result_fingerprint", "health_result_fingerprint"),
+        ("health_settings_fingerprint", "health_settings_fingerprint"),
+        ("workflow_health_reviewed_fp", _HEALTH_VIEWED_FP_KEY),
+        ("workflow_recommendations_viewed_fp", _REC_VIEWED_FP_KEY),
+        ("workflow_holdings_fp", _HOLDINGS_TRACK_KEY),
+    ):
+        val = blob.get(blob_key)
+        if val is not None and val != "":
+            ss[session_key] = val
+        else:
+            ss.pop(session_key, None)
+
+
+def workflow_persist_audit(st_obj: Any | None = None) -> dict[str, str]:
+    """Compare live session vs what would be written to ``full_session`` (developer diagnostics)."""
+    ss = _sess(st_obj)
+    try:
+        from investment_persistent_state import build_investment_disk_state
+
+        blob = build_investment_disk_state(st_obj)
+    except Exception as exc:
+        return {"error": str(exc)}
+    wf = blob.get(WORKFLOW_STATE_BLOB_KEY) if isinstance(blob, dict) else {}
+    if not isinstance(wf, dict):
+        wf = {}
+    lines: dict[str, str] = {}
+    for label, live_key, blob_key in (
+        ("beginner_goal_card", "beginner_goal_card", "beginner_goal_card"),
+        ("guide_goal_choice", "guide_goal_choice", "guide_goal_choice"),
+        ("health_objective", "health_objective", "health_objective"),
+        ("preset_applied", "preset_applied", "preset_applied"),
+        ("portfolio_built", "portfolio_built", "portfolio_built"),
+        ("portfolio_analyzed", "portfolio_analyzed", "portfolio_analyzed"),
+        ("portfolio_health_reviewed", "portfolio_health_reviewed", "portfolio_health_reviewed"),
+        ("recommendations_displayed", "recommendations_displayed", "recommendations_displayed"),
+        ("investment_active_tab", "investment_active_tab", "investment_active_tab"),
+        ("experience", "experience", "experience"),
+        ("health_result_fingerprint", "health_result_fingerprint", "health_result_fingerprint"),
+        ("workflow_health_status", _HEALTH_STATUS_KEY, "workflow_health_status"),
+        ("stale_steps", _WORKFLOW_STALE_STEPS_KEY, "workflow_stale_steps"),
+        ("health_reviewed_fp", _HEALTH_VIEWED_FP_KEY, "workflow_health_reviewed_fp"),
+    ):
+        live = ss.get(live_key)
+        saved = wf.get(blob_key) if blob_key in wf else blob.get(live_key)
+        if label in ("beginner_goal_card", "guide_goal_choice", "health_objective", "preset_applied"):
+            saved = blob.get(live_key)
+        lines[label] = f"live={live!r} · cloud_blob={saved!r}"
+    lines["holdings_df"] = "live=DataFrame · cloud_blob=records" if blob.get("holdings_df") else "live=… · cloud_blob=missing"
+    lines["health_result_object"] = (
+        "live=present" if ss.get("health_result") else "live=missing (expected after cross-device restore)"
+    )
+    return lines
+
+
+def _restored_analysis_without_object(st_obj: Any | None = None) -> bool:
+    """True when analyze completed on another device but ``health_result`` was not restored."""
+    ss = _sess(st_obj)
+    return (
+        bool(ss.get("portfolio_analyzed"))
+        and bool(ss.get("health_result_fingerprint"))
+        and isinstance(ss.get("health_summary"), dict)
+        and not ss.get("health_result")
+    )
 
 
 def clear_workflow_intent(st_obj: Any | None = None) -> None:
@@ -499,6 +607,16 @@ def mark_analysis_complete(st_obj: Any | None = None) -> None:
     ss = _sess(st_obj)
     ss["portfolio_analyzed"] = True
     _clear_stale_steps(ss, "analyze")
+    _autosave_after_workflow_change(st_obj)
+
+
+def _autosave_after_workflow_change(st_obj: Any | None = None) -> None:
+    try:
+        from investment_persistent_state import autosave_investment_state
+
+        autosave_investment_state(st_obj)
+    except Exception:
+        pass
 
 
 def mark_health_reviewed(st_obj: Any | None = None) -> None:
@@ -529,10 +647,14 @@ def reconcile_workflow_after_restore(st_obj: Any | None = None) -> None:
     """
     Align checklist flags with restored analysis cache.
 
-    Clears stale analysis/health/rec flags when health blob is missing or fingerprint
-    no longer matches holdings (using last known analysis fingerprint only).
+    Trusts persisted fingerprints + ``health_summary`` when the in-memory
+    ``health_result`` object is absent after cross-device restore.
     """
     ss = _sess(st_obj)
+    if _restored_analysis_without_object(st_obj):
+        if ss.get(_HEALTH_STATUS_KEY) != "fresh":
+            record_workflow_health_status("fresh", st_obj)
+        return
     if not ss.get("portfolio_analyzed") and not ss.get("health_result"):
         return
     if not ss.get("health_result"):
@@ -556,6 +678,11 @@ def reconcile_workflow_health(
         invalidate_workflow_from("portfolio", st_obj)
         return
     if ss.get("portfolio_analyzed") and not ss.get("health_result"):
+        if _restored_analysis_without_object(st_obj) and cached_fp == fp:
+            record_workflow_health_status("fresh", st_obj)
+            ss["portfolio_analyzed"] = True
+            _clear_stale_steps(ss, "analyze")
+            return
         invalidate_workflow_from("portfolio", st_obj)
         return
     if ss.get("health_result") and cached_fp == fp:
@@ -578,11 +705,15 @@ def record_workflow_health_status(status: str, st_obj: Any | None = None) -> Non
 
 
 def _health_is_fresh(st_obj: Any | None = None) -> bool:
-    """Workflow health is fresh only when status and cached analysis blob agree."""
+    """Workflow health is fresh when status and fingerprint/summary agree."""
     ss = _sess(st_obj)
     if ss.get(_HEALTH_STATUS_KEY) != "fresh":
         return False
-    return bool(ss.get("health_result")) and bool(ss.get("health_result_fingerprint"))
+    if not ss.get("health_result_fingerprint"):
+        return False
+    if ss.get("health_result"):
+        return True
+    return _restored_analysis_without_object(st_obj)
 
 
 def goal_display_label(st_obj: Any | None = None) -> str:
@@ -913,7 +1044,7 @@ def workflow_checklist(st_obj: Any | None = None) -> dict[str, bool]:
     goal_done = _goal_step_complete(st_obj)
     portfolio_done = _portfolio_built(st_obj) or bool(ss.get("portfolio_built"))
 
-    analyze_done = bool(ss.get("portfolio_analyzed")) and fresh and bool(ss.get("health_result"))
+    analyze_done = bool(ss.get("portfolio_analyzed")) and fresh
     health_done = (
         fresh
         and bool(ss.get("portfolio_health_reviewed"))
@@ -1019,6 +1150,7 @@ def mark_health_reviewed_for_portfolio(
     mark_health_reviewed(st_obj)
     ss[_HEALTH_VIEWED_FP_KEY] = fp
     _clear_stale_steps(ss, "health")
+    _autosave_after_workflow_change(st_obj)
 
 
 def mark_recommendations_if_current(st_obj: Any | None = None) -> None:
@@ -1032,6 +1164,7 @@ def mark_recommendations_if_current(st_obj: Any | None = None) -> None:
     mark_recommendations_viewed(st_obj)
     ss[_REC_VIEWED_FP_KEY] = fp
     _clear_stale_steps(ss, "recommendations")
+    _autosave_after_workflow_change(st_obj)
 
 
 def render_plan_context_banner(st_obj: Any, *, beginner: bool) -> None:
