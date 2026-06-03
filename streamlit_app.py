@@ -1171,9 +1171,9 @@ def render_overview_tab(
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
                 try:
-                    from investment_workflow import navigate_workflow_tab
+                    from investment_workflow import request_workflow_tab_navigation
 
-                    navigate_workflow_tab("analyze", beginner=True)
+                    request_workflow_tab_navigation("analyze", beginner=True)
                 except ImportError:
                     pass
                 st.rerun()
@@ -1549,6 +1549,12 @@ try:
     sync_beginner_goal_keys_from_portfolio(st)
 except Exception:
     pass
+try:
+    from investment_workflow import apply_pending_investment_tab
+
+    apply_pending_investment_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
+except ImportError:
+    pass
 ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
 st.radio(
     "Section",
@@ -1801,9 +1807,9 @@ if _active_tab == _main_tab_labels[3]:
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             try:
-                from investment_workflow import navigate_workflow_tab
+                from investment_workflow import request_workflow_tab_navigation
 
-                navigate_workflow_tab("analyze", beginner=True)
+                request_workflow_tab_navigation("analyze", beginner=True)
             except ImportError:
                 pass
             st.rerun()

@@ -17,8 +17,9 @@ import portfolio_core as core
 
 WorkflowStep = Literal["goal", "portfolio", "analysis", "health", "recommendations"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v1"
+WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v2"
 DEV_DIAG_SESSION_KEY = "investment_show_dev_diagnostics"
+_PENDING_INVESTMENT_TAB_KEY = "_pending_investment_tab"
 _HOLDINGS_TRACK_KEY = "_workflow_holdings_fp"
 _HEALTH_STATUS_KEY = "_workflow_health_status"
 _HEALTH_VIEWED_FP_KEY = "_workflow_health_reviewed_fp"
@@ -236,26 +237,67 @@ def recommendations_status_label(st_obj: Any | None = None) -> str:
     return "Open Health → Recommendations"
 
 
-def navigate_workflow_tab(step: WorkflowStep, *, beginner: bool) -> None:
+def workflow_tab_label_for_step(step: WorkflowStep, *, beginner: bool) -> str:
     from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS, STEP_TAB_LABEL
 
-    ss = st.session_state
     if step == "goal":
-        ss["investment_active_tab"] = (
-            STEP_TAB_LABEL["goal"] if beginner else ADVANCED_TAB_LABELS[0]
-        )
-    elif step == "portfolio":
-        ss["investment_active_tab"] = (
-            STEP_TAB_LABEL["portfolio"] if beginner else ADVANCED_TAB_LABELS[2]
-        )
-    elif step == "analyze":
-        ss["investment_active_tab"] = (
-            STEP_TAB_LABEL["analyze"] if beginner else ADVANCED_TAB_LABELS[3]
-        )
-    elif step in ("health", "recommendations"):
-        ss["investment_active_tab"] = (
-            STEP_TAB_LABEL["health"] if beginner else ADVANCED_TAB_LABELS[4]
-        )
+        return STEP_TAB_LABEL["goal"] if beginner else ADVANCED_TAB_LABELS[0]
+    if step == "portfolio":
+        return STEP_TAB_LABEL["portfolio"] if beginner else ADVANCED_TAB_LABELS[2]
+    if step == "analyze":
+        return STEP_TAB_LABEL["analyze"] if beginner else ADVANCED_TAB_LABELS[3]
+    if step in ("health", "recommendations"):
+        return STEP_TAB_LABEL["health"] if beginner else ADVANCED_TAB_LABELS[4]
+    return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+
+
+def request_workflow_tab_navigation(
+    step: WorkflowStep,
+    *,
+    beginner: bool,
+    st_obj: Any | None = None,
+) -> None:
+    """
+    Schedule a section tab change before the next script run.
+
+    Do not assign ``investment_active_tab`` after the section radio has rendered.
+    """
+    _sess(st_obj)[_PENDING_INVESTMENT_TAB_KEY] = workflow_tab_label_for_step(step, beginner=beginner)
+
+
+def apply_pending_investment_tab(
+    st_obj: Any,
+    tab_labels: list[str],
+    *,
+    beginner_mode: bool,
+) -> bool:
+    """
+    Apply deferred navigation immediately before the section radio widget.
+
+    Returns True when a pending tab was applied to session state.
+    """
+    from components.beginner_navigation import normalize_tab_label_for_mode
+    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY
+
+    ss = _sess(st_obj)
+    pending = ss.pop(_PENDING_INVESTMENT_TAB_KEY, None)
+    if not pending:
+        return False
+    label = normalize_tab_label_for_mode(str(pending).strip(), beginner=beginner_mode)
+    if label in tab_labels:
+        ss[INVESTMENT_ACTIVE_TAB_KEY] = label
+        return True
+    return False
+
+
+def navigate_workflow_tab(
+    step: WorkflowStep,
+    *,
+    beginner: bool,
+    st_obj: Any | None = None,
+) -> None:
+    """Schedule safe tab navigation (use ``apply_pending_investment_tab`` before the radio)."""
+    request_workflow_tab_navigation(step, beginner=beginner, st_obj=st_obj)
 
 
 def workflow_checklist(st_obj: Any | None = None) -> dict[str, bool]:
@@ -370,7 +412,7 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
             use_container_width=True,
             type="primary",
         ):
-            navigate_workflow_tab("portfolio", beginner=beginner)
+            request_workflow_tab_navigation("portfolio", beginner=beginner, st_obj=st_obj)
             clicked = True
     with c2:
         if st.button(
@@ -378,7 +420,7 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
             key="wf_rebuild_change_goal",
             use_container_width=True,
         ):
-            navigate_workflow_tab("goal", beginner=beginner)
+            request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
             clicked = True
     preset = _sess(st_obj).get("preset_applied")
     if preset:

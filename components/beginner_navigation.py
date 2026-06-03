@@ -384,27 +384,47 @@ def render_recommended_next_step_card() -> bool:
         if not state["goal"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['goal']}", type="primary", use_container_width=True, key="cta_goal")
             if clicked:
-                st.session_state.investment_active_tab = STEP_TAB_LABEL["goal"]
+                try:
+                    from investment_workflow import request_workflow_tab_navigation
+
+                    request_workflow_tab_navigation("goal", beginner=True)
+                except ImportError:
+                    st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["goal"]
         elif not state["portfolio"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['portfolio']}", type="primary", use_container_width=True, key="cta_portfolio")
             if clicked:
-                st.session_state.investment_active_tab = STEP_TAB_LABEL["portfolio"]
+                try:
+                    from investment_workflow import request_workflow_tab_navigation
+
+                    request_workflow_tab_navigation("portfolio", beginner=True)
+                except ImportError:
+                    st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["portfolio"]
         elif not state["analyze"]:
             if st.button(f"Go to {STEP_TAB_LABEL['analyze']}", type="primary", use_container_width=True, key="cta_analyze"):
                 try:
-                    from investment_workflow import navigate_workflow_tab
+                    from investment_workflow import request_workflow_tab_navigation
 
-                    navigate_workflow_tab("analyze", beginner=True)
+                    request_workflow_tab_navigation("analyze", beginner=True)
                 except ImportError:
-                    st.session_state.investment_active_tab = STEP_TAB_LABEL["analyze"]
+                    st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["analyze"]
                 st.session_state.run_health = True
                 clicked = True
         elif not state["health"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_health")
             if clicked:
-                st.session_state.investment_active_tab = STEP_TAB_LABEL["health"]
+                try:
+                    from investment_workflow import request_workflow_tab_navigation
+
+                    request_workflow_tab_navigation("health", beginner=True)
+                except ImportError:
+                    st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
         elif not state["recommendations"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_rec")
             if clicked:
-                st.session_state.investment_active_tab = STEP_TAB_LABEL["health"]
+                try:
+                    from investment_workflow import request_workflow_tab_navigation
+
+                    request_workflow_tab_navigation("health", beginner=True)
+                except ImportError:
+                    st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
     return clicked

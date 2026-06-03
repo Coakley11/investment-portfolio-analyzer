@@ -5,12 +5,15 @@ from __future__ import annotations
 import unittest
 
 from investment_workflow import (
+    apply_pending_investment_tab,
     invalidate_workflow_from,
     mark_health_reviewed_for_portfolio,
     portfolio_analysis_fingerprint,
     record_workflow_health_status,
+    request_workflow_tab_navigation,
     workflow_checklist,
 )
+from components.beginner_navigation import BEGINNER_TAB_LABELS
 
 
 class _FakeSessionState(dict):
@@ -64,6 +67,18 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         state = workflow_checklist(st)
         self.assertTrue(state["analyze"])
         self.assertTrue(state["health"])
+
+    def test_pending_tab_applied_before_radio(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss["investment_active_tab"] = BEGINNER_TAB_LABELS[3]
+        request_workflow_tab_navigation("portfolio", beginner=True, st_obj=st)
+        self.assertIn("_pending_investment_tab", ss)
+        self.assertNotEqual(ss.get("investment_active_tab"), BEGINNER_TAB_LABELS[2])
+        applied = apply_pending_investment_tab(st, BEGINNER_TAB_LABELS, beginner_mode=True)
+        self.assertTrue(applied)
+        self.assertEqual(ss["investment_active_tab"], BEGINNER_TAB_LABELS[2])
+        self.assertNotIn("_pending_investment_tab", ss)
 
     def test_portfolio_invalidate_keeps_goal(self) -> None:
         st = _FakeSt()
