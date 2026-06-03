@@ -10,7 +10,8 @@ from investment_workflow import (
     WORKFLOW_CORE_STEPS,
     StepVisual,
     WorkflowCoreKey,
-    apply_pending_investment_tab,
+    commit_investment_tab_navigation,
+    open_goal_step_navigation,
     request_core_step_navigation,
     workflow_step_visual_states,
     workflow_tab_label_for_core_step,
@@ -96,7 +97,10 @@ def render_workflow_navigator(
                 type=type_,
                 help=f"Go to {dest}",
             ):
-                request_core_step_navigation(step, beginner=beginner_mode, st_obj=st_obj)
+                if step == "goal":
+                    open_goal_step_navigation(st_obj, beginner=beginner_mode)
+                else:
+                    request_core_step_navigation(step, beginner=beginner_mode, st_obj=st_obj)
                 clicked = True
     return clicked
 
@@ -137,8 +141,9 @@ def render_optional_tools_navigator(
                     use_container_width=True,
                     type="primary" if is_active else "secondary",
                 ):
-                    ss = st_obj.session_state
-                    ss["_pending_investment_tab"] = tab_label
+                    commit_investment_tab_navigation(
+                        st_obj, tab_label, beginner_mode=beginner_mode
+                    )
                     clicked = True
     return clicked
 
@@ -149,8 +154,10 @@ def apply_workflow_navigation(
     beginner_mode: bool,
     tab_labels: list[str],
 ) -> bool:
-    """Apply pending tab then render navigator; return True if rerun needed."""
-    apply_pending_investment_tab(st_obj, tab_labels, beginner_mode=beginner_mode)
+    """Render navigator; return True if a step button requested rerun.
+
+    Pending tab is applied once in ``streamlit_app`` before this runs.
+    """
     active = st_obj.session_state.get("investment_active_tab", tab_labels[0])
     nav_clicked = render_workflow_navigator(
         st_obj, beginner_mode=beginner_mode, tab_labels=tab_labels, active_tab=active

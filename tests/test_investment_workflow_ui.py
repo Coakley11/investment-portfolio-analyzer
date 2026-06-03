@@ -73,8 +73,8 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         ss = st.session_state
         ss["investment_active_tab"] = BEGINNER_TAB_LABELS[3]
         request_workflow_tab_navigation("portfolio", beginner=True, st_obj=st)
-        self.assertIn("_pending_investment_tab", ss)
-        self.assertNotEqual(ss.get("investment_active_tab"), BEGINNER_TAB_LABELS[2])
+        self.assertEqual(ss["_pending_investment_tab"], BEGINNER_TAB_LABELS[2])
+        self.assertEqual(ss["investment_active_tab"], BEGINNER_TAB_LABELS[2])
         applied = apply_pending_investment_tab(st, BEGINNER_TAB_LABELS, beginner_mode=True)
         self.assertTrue(applied)
         self.assertEqual(ss["investment_active_tab"], BEGINNER_TAB_LABELS[2])

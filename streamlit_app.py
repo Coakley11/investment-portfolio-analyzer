@@ -1549,6 +1549,7 @@ try:
     from components.workflow_navigator import apply_workflow_navigation
     from investment_workflow import (
         apply_pending_investment_tab,
+        render_goal_change_workflow_debug,
         render_plan_context_banner,
         render_workflow_intent_banner,
     )
@@ -1561,6 +1562,9 @@ try:
         st.rerun()
     render_plan_context_banner(st, beginner=beginner_mode)
     render_workflow_intent_banner(st, beginner=beginner_mode)
+    render_goal_change_workflow_debug(
+        st, beginner_mode=beginner_mode, tab_labels=_main_tab_labels
+    )
 except ImportError:
     ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
     st.radio(

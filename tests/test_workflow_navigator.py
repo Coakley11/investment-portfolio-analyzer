@@ -17,6 +17,7 @@ from investment_workflow import (
     snapshot_plan_labels,
     workflow_checklist,
     workflow_step_visual_states,
+    workflow_tab_label_for_step,
 )
 
 
@@ -108,6 +109,19 @@ class TestWorkflowTrust(unittest.TestCase):
         )
         self.assertEqual(visuals["goal"], "complete")
         self.assertEqual(visuals["portfolio"], "complete")
+        self.assertEqual(visuals["analyze"], "stale")
+
+    def test_change_goal_intent_shows_goal_current_on_goal_tab(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss["guide_goal_choice"] = "Grow my money long term"
+        ss["preset_applied"] = "Balanced"
+        ss["portfolio_built"] = True
+        begin_goal_change_workflow(st, beginner=True)
+        visuals = workflow_step_visual_states(
+            st, beginner=True, active_tab=BEGINNER_TAB_LABELS[0]
+        )
+        self.assertEqual(visuals["goal"], "current")
         self.assertEqual(visuals["analyze"], "stale")
 
     def test_snapshot_plan_labels(self) -> None:

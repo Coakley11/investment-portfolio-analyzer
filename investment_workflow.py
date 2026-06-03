@@ -20,8 +20,9 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v3"
+WORKFLOW_UI_BUILD = "2026-06-03-goal-change-fix"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
+_GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
     "goal",
     "portfolio",
@@ -398,22 +399,36 @@ def begin_goal_change_workflow(st_obj: Any, *, beginner: bool) -> None:
     Clears downstream analysis/health/rec state, shows the change-goal banner, and
     opens Step 1. The new goal is applied when the user picks a goal card or Advanced radio.
     """
+    import datetime as dt
+
     ss = _sess(st_obj)
     ss[_WORKFLOW_CHANGE_SNAPSHOT_KEY] = snapshot_plan_labels(st_obj)
     invalidate_workflow_from("goal", st_obj)
     ss[_WORKFLOW_INTENT_KEY] = "change_goal"
     request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+    dbg = dict(ss.get(_GOAL_CHANGE_DEBUG_KEY) or {})
+    dbg["change_goal_clicked_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    ss[_GOAL_CHANGE_DEBUG_KEY] = dbg
+    _refresh_goal_change_debug_snapshot(st_obj)
 
 
 def persist_plan_after_goal_selection(st_obj: Any | None = None) -> bool:
     """Write goal/portfolio/holdings to local + cloud persistence immediately after a goal pick."""
+    ok = False
     try:
         from investment_persistent_state import autosave_investment_state
 
         autosave_investment_state(st_obj)
-        return True
+        ok = True
     except Exception:
-        return False
+        ok = False
+    try:
+        dbg = dict(_sess(st_obj).get(_GOAL_CHANGE_DEBUG_KEY) or {})
+        dbg["autosave_ok"] = ok
+        _sess(st_obj)[_GOAL_CHANGE_DEBUG_KEY] = dbg
+    except Exception:
+        pass
+    return ok
 
 
 def begin_portfolio_rebuild_workflow(st_obj: Any, *, beginner: bool) -> None:
@@ -449,6 +464,7 @@ def record_goal_selection(
     clear_workflow_intent(st_obj)
     _clear_stale_steps(ss, "goal")
     persist_plan_after_goal_selection(st_obj)
+    _refresh_goal_change_debug_snapshot(st_obj, goal_selected=True)
 
 
 def mark_analysis_complete(st_obj: Any | None = None) -> None:
@@ -611,18 +627,133 @@ def workflow_tab_label_for_core_step(step: WorkflowCoreKey, *, beginner: bool) -
     return workflow_tab_label_for_step(_STEP_TO_WORKFLOW[step], beginner=beginner)
 
 
+def commit_investment_tab_navigation(
+    st_obj: Any,
+    label: str,
+    *,
+    beginner_mode: bool,
+) -> str:
+    """
+    Set both pending and active tab keys (no bound section radio in the main workflow path).
+
+    Call before the workflow navigator renders so the next rerun lands on the right step.
+    """
+    from components.beginner_navigation import normalize_tab_label_for_mode
+    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY
+
+    ss = _sess(st_obj)
+    normalized = normalize_tab_label_for_mode(str(label).strip(), beginner=beginner_mode)
+    ss[_PENDING_INVESTMENT_TAB_KEY] = normalized
+    ss[INVESTMENT_ACTIVE_TAB_KEY] = normalized
+    return normalized
+
+
+def _refresh_goal_change_debug_snapshot(
+    st_obj: Any | None = None,
+    *,
+    goal_selected: bool = False,
+) -> None:
+    """Keep the temporary goal-change debug panel in sync with live session state."""
+    import datetime as dt
+
+    ss = _sess(st_obj)
+    dbg = dict(ss.get(_GOAL_CHANGE_DEBUG_KEY) or {})
+    if goal_selected:
+        dbg["goal_selected_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    dbg["_workflow_intent"] = ss.get(_WORKFLOW_INTENT_KEY)
+    dbg["_pending_investment_tab"] = ss.get(_PENDING_INVESTMENT_TAB_KEY)
+    dbg["investment_active_tab"] = ss.get("investment_active_tab")
+    dbg["beginner_goal_card"] = str(ss.get("beginner_goal_card") or "")
+    dbg["guide_goal_choice"] = str(ss.get("guide_goal_choice") or "")
+    dbg["health_objective"] = str(ss.get("health_objective") or "")
+    dbg["preset_applied"] = str(ss.get("preset_applied") or "")
+    dbg["holdings_fp"] = _holdings_fingerprint_safe(st_obj)
+    dbg["checklist"] = workflow_checklist(st_obj)
+    dbg["stale_steps"] = sorted(_stale_steps_set(ss))
+    ss[_GOAL_CHANGE_DEBUG_KEY] = dbg
+
+
+def render_goal_change_workflow_debug(
+    st_obj: Any,
+    *,
+    beginner_mode: bool,
+    tab_labels: list[str],
+) -> None:
+    """Temporary visible debug panel for Change Goal / Open Goal workflow (remove when fixed)."""
+    ss = _sess(st_obj)
+    _refresh_goal_change_debug_snapshot(st_obj)
+    dbg = ss.get(_GOAL_CHANGE_DEBUG_KEY) or {}
+    checklist = dbg.get("checklist") or workflow_checklist(st_obj)
+    with st.expander("🐞 Goal workflow debug (temporary)", expanded=True):
+        st.caption(
+            f"Build **{WORKFLOW_UI_BUILD}** · verifies Change Goal → Goal tab → card pick → banner/checklist"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(
+                f"**Change Goal clicked (UTC):** `{dbg.get('change_goal_clicked_at') or '—'}`"
+            )
+            st.markdown(
+                f"**Goal card picked (UTC):** `{dbg.get('goal_selected_at') or '—'}`"
+            )
+            st.markdown(f"**`_workflow_intent`:** `{dbg.get('_workflow_intent') or '—'}`")
+            st.markdown(
+                f"**`_pending_investment_tab`:** `{dbg.get('_pending_investment_tab') or '—'}`"
+            )
+            st.markdown(
+                f"**`investment_active_tab`:** `{dbg.get('investment_active_tab') or '—'}`"
+            )
+            goal_tab = workflow_tab_label_for_step("goal", beginner=beginner_mode)
+            on_goal = dbg.get("investment_active_tab") == goal_tab
+            st.markdown(
+                f"**On Goal step now:** {'yes' if on_goal else 'no'} "
+                f"(expected `{goal_tab}`)"
+            )
+        with c2:
+            st.markdown(f"**`beginner_goal_card`:** `{dbg.get('beginner_goal_card') or '—'}`")
+            st.markdown(f"**`guide_goal_choice`:** `{dbg.get('guide_goal_choice') or '—'}`")
+            st.markdown(f"**`health_objective`:** `{dbg.get('health_objective') or '—'}`")
+            st.markdown(f"**`preset_applied`:** `{dbg.get('preset_applied') or '—'}`")
+            st.markdown(f"**Holdings fingerprint:** `{dbg.get('holdings_fp') or '—'}`")
+        st.markdown("**Downstream checklist (unchecked = stale/needs rerun)**")
+        st.json(
+            {
+                "goal": checklist.get("goal"),
+                "portfolio": checklist.get("portfolio"),
+                "analyze": checklist.get("analyze"),
+                "health": checklist.get("health"),
+                "recommendations": checklist.get("recommendations"),
+                "stale_steps": dbg.get("stale_steps") or [],
+            }
+        )
+        if dbg.get("autosave_ok") is not None:
+            st.markdown(f"**Last cloud autosave after goal pick:** `{dbg.get('autosave_ok')}`")
+
+
+def open_goal_step_navigation(st_obj: Any, *, beginner: bool) -> None:
+    """
+    Navigator **Open Goal** — resume change-goal mode or start it when downstream is stale.
+    """
+    ss = _sess(st_obj)
+    if ss.get(_WORKFLOW_INTENT_KEY) == "change_goal":
+        request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+        return
+    stale = _stale_steps_set(ss) & {"analyze", "health", "recommendations"}
+    if stale and workflow_checklist(st_obj).get("goal"):
+        begin_goal_change_workflow(st_obj, beginner=beginner)
+    else:
+        request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+
+
 def request_workflow_tab_navigation(
     step: WorkflowStep,
     *,
     beginner: bool,
     st_obj: Any | None = None,
 ) -> None:
-    """
-    Schedule a section tab change before the next script run.
-
-    Do not assign ``investment_active_tab`` after the section navigator has rendered.
-    """
-    _sess(st_obj)[_PENDING_INVESTMENT_TAB_KEY] = workflow_tab_label_for_step(step, beginner=beginner)
+    """Schedule and commit a section tab change (safe before the workflow navigator renders)."""
+    label = workflow_tab_label_for_step(step, beginner=beginner)
+    commit_investment_tab_navigation(st_obj, label, beginner_mode=beginner)
 
 
 def request_core_step_navigation(
@@ -649,14 +780,16 @@ def apply_pending_investment_tab(
     from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY
 
     ss = _sess(st_obj)
-    pending = ss.pop(_PENDING_INVESTMENT_TAB_KEY, None)
+    pending = ss.get(_PENDING_INVESTMENT_TAB_KEY)
     if not pending:
         return False
     label = normalize_tab_label_for_mode(str(pending).strip(), beginner=beginner_mode)
-    if label in tab_labels:
+    if label not in tab_labels:
+        return False
+    ss.pop(_PENDING_INVESTMENT_TAB_KEY, None)
+    if ss.get(INVESTMENT_ACTIVE_TAB_KEY) != label:
         ss[INVESTMENT_ACTIVE_TAB_KEY] = label
-        return True
-    return False
+    return True
 
 
 def navigate_workflow_tab(
@@ -765,8 +898,12 @@ def workflow_step_visual_states(
 
     active_step = _core_step_for_tab(active_tab, beginner=beginner) if active_tab else None
     states: dict[WorkflowCoreKey, StepVisual] = {}
+    intent = _sess(st_obj).get(_WORKFLOW_INTENT_KEY)
 
     for i, key in enumerate(WORKFLOW_CORE_STEPS):
+        if intent == "change_goal" and key == "goal":
+            states[key] = "current" if active_step == "goal" else "stale"
+            continue
         if checklist[key]:
             states[key] = "complete"
             continue

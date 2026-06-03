@@ -90,7 +90,10 @@ PRESET_DISPLAY: dict[str, dict[str, str]] = {
 }
 
 
-GOAL_WORKFLOW_DEBUG_BUILD = "2026-06-03-goal-workflow-v1"
+try:
+    from investment_workflow import WORKFLOW_UI_BUILD as GOAL_WORKFLOW_DEBUG_BUILD
+except ImportError:
+    GOAL_WORKFLOW_DEBUG_BUILD = "2026-06-03-goal-change-fix"
 
 # Beginner and advanced main tabs share the same index order (10 tabs).
 _TAB_INDEX_BY_BEGINNER = {label: i for i, label in enumerate(BEGINNER_TAB_LABELS)}
