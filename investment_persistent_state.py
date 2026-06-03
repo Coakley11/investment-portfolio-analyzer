@@ -18,7 +18,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-fix-v2"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-production-cleanup-v1"
 
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
@@ -1011,7 +1011,7 @@ def render_persistence_debug_content(st: Any) -> None:
         from components.beginner_navigation import goal_workflow_debug_lines
 
         if current_experience_mode(st) == "Beginner Mode":
-            st.markdown("**Goal workflow (temp debug)**")
+            st.markdown("**Goal workflow trace**")
             st.code("\n".join(goal_workflow_debug_lines(st)), language=None)
     except Exception:
         pass

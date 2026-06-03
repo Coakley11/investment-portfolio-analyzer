@@ -22,7 +22,7 @@ _STEP_LABELS: dict[WorkflowCoreKey, str] = {
     "portfolio": "Portfolio",
     "analyze": "Analysis",
     "health": "Health",
-    "recommendations": "Recs",
+    "recommendations": "Recommendations",
 }
 
 _VISUAL_META: dict[StepVisual, tuple[str, str, str]] = {

@@ -20,7 +20,7 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-workflow-sync-v1"
+WORKFLOW_UI_BUILD = "2026-06-03-production-cleanup-v1"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 _GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
@@ -354,11 +354,13 @@ def goal_card_collision_rows() -> list[dict[str, str]]:
 
 
 def render_goal_selection_diagnostics(
-    st_obj: Any, *, beginner_mode: bool, expanded: bool = True
+    st_obj: Any, *, beginner_mode: bool, expanded: bool = False
 ) -> None:
-    """Temporary diagnostics panel — remove after goal-change issue is confirmed fixed."""
+    """Goal-change diagnostics (developer mode only)."""
+    if not developer_diagnostics_enabled(st_obj):
+        return
     ss = _sess(st_obj)
-    with st.expander("🔬 Goal change diagnostics (temporary)", expanded=expanded):
+    with st.expander("Goal change diagnostics", expanded=expanded):
         st.caption(
             "Verdict: **A** = goal not changing · **B** = goal changed, same portfolio · "
             "**C** = data changed but banner looks the same · **OK** = expected change"
@@ -439,6 +441,24 @@ def render_goal_selection_diagnostics(
             st.write(f"Radio value now: `{ss.get('guide_goal_choice')!r}`")
 
 
+def _dev_query_param_enabled(st_obj: Any | None = None) -> bool:
+    for host in (st_obj, st):
+        if host is None:
+            continue
+        try:
+            qp = getattr(host, "query_params", None)
+            if qp is None:
+                continue
+            raw = qp.get("dev")
+            if isinstance(raw, list):
+                raw = raw[0] if raw else ""
+            if str(raw or "").strip().lower() in ("1", "true", "yes"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
     """True when dev diagnostics should render (default off for normal users)."""
     ss = _sess(st_obj)
@@ -454,24 +474,38 @@ def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
             return True
     except Exception:
         pass
+    return _dev_query_param_enabled(st_obj)
+
+
+def developer_access_available(st_obj: Any | None = None) -> bool:
+    """True when the Developer sidebar section should be visible (admin entry points)."""
+    if developer_diagnostics_enabled(st_obj):
+        return True
+    ss = _sess(st_obj)
+    if ss.get(DEV_DIAG_SESSION_KEY):
+        return True
     try:
-        raw = st.query_params.get("dev")
-        if isinstance(raw, list):
-            raw = raw[0] if raw else ""
-        if str(raw or "").strip().lower() in ("1", "true", "yes"):
+        if str(st.secrets.get("investment_dev_mode", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
             return True
     except Exception:
         pass
-    return False
+    return _dev_query_param_enabled(st_obj)
 
 
 def render_developer_sidebar_controls(st_obj: Any | None = None) -> None:
     """Collapsed sidebar toggle; persistence/workflow traces only when enabled."""
+    if not developer_access_available(st_obj):
+        return
     with st.sidebar.expander("Developer", expanded=False):
         st.checkbox(
-            "Show persistence & workflow diagnostics",
+            "Show diagnostics",
             key=DEV_DIAG_SESSION_KEY,
-            help="Cloud restore traces, timestamps, and goal-workflow debug. Off by default.",
+            help="Persistence traces and workflow debug panels. Off by default.",
         )
 
 
@@ -848,12 +882,14 @@ def render_health_workflow_debug(
     cache_status: str,
     health_loaded: bool,
 ) -> None:
-    """Temporary debug panel for Portfolio Health step (remove when confirmed fixed)."""
+    """Portfolio Health step diagnostics (developer mode only)."""
+    if not developer_diagnostics_enabled(st_obj):
+        return
     ss = _sess(st_obj)
     fp = portfolio_analysis_fingerprint(tickers, weights)
     checklist = workflow_checklist(st_obj)
-    with st.expander("🐞 Health step debug (temporary)", expanded=True):
-        st.caption(f"Build **{WORKFLOW_UI_BUILD}**")
+    with st.expander("Health step diagnostics", expanded=False):
+        st.caption(f"Build **{WORKFLOW_UI_BUILD}** (dev only)")
         st.markdown(f"**`get_health_cache_status`:** `{cache_status}`")
         st.markdown(f"**`_workflow_health_status`:** `{ss.get(_HEALTH_STATUS_KEY)!r}`")
         st.markdown(f"**`_health_is_fresh`:** `{_health_is_fresh(st_obj)}`")
@@ -887,15 +923,15 @@ def render_goal_change_workflow_debug(
     tab_labels: list[str],
     expanded: bool = False,
 ) -> None:
-    """Temporary visible debug panel for Change Goal / Open Goal workflow (remove when fixed)."""
+    """Change Goal workflow diagnostics (developer mode only)."""
+    if not developer_diagnostics_enabled(st_obj):
+        return
     ss = _sess(st_obj)
     _refresh_goal_change_debug_snapshot(st_obj)
     dbg = ss.get(_GOAL_CHANGE_DEBUG_KEY) or {}
     checklist = dbg.get("checklist") or workflow_checklist(st_obj)
-    with st.expander("🐞 Goal workflow debug (temporary)", expanded=expanded):
-        st.caption(
-            f"Build **{WORKFLOW_UI_BUILD}** · verifies Change Goal → Goal tab → card pick → banner/checklist"
-        )
+    with st.expander("Goal workflow diagnostics", expanded=expanded):
+        st.caption(f"Build **{WORKFLOW_UI_BUILD}** (dev only)")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown(
@@ -1172,23 +1208,16 @@ def render_plan_context_banner(st_obj: Any, *, beginner: bool) -> None:
     ss = _sess(st_obj)
     analysis = analysis_status_label(st_obj)
     recs = recommendations_status_label(st_obj)
-    mode = "Beginner view" if beginner else "Advanced view"
+    mode = "Beginner" if beginner else "Advanced"
     goal_line = goal_display_label(st_obj)
     port_line = portfolio_display_label(st_obj)
 
     last_change = ss.get("_workflow_last_goal_change")
     change_note = ""
     if isinstance(last_change, dict) and last_change.get("to_goal"):
-        from_p = last_change.get("from_preset") or last_change.get("from_portfolio") or "—"
-        to_p = last_change.get("to_preset") or "—"
-        from_obj = last_change.get("from_objective") or "—"
-        to_obj = last_change.get("to_objective") or "—"
         change_note = (
             f'<div style="color:#86efac;font-size:0.82rem;margin-top:0.45rem;">'
-            f'Last goal update: <strong>{last_change.get("from_goal") or "—"}</strong> '
-            f'→ <strong>{last_change.get("to_goal")}</strong>'
-            f' · Portfolio: <strong>{from_p}</strong> → <strong>{to_p}</strong>'
-            f' · Objective: <strong>{from_obj}</strong> → <strong>{to_obj}</strong></div>'
+            f'Goal updated to <strong>{last_change.get("to_goal") or "—"}</strong></div>'
         )
 
     analysis_color = "#86efac" if "Up to date" in analysis else (
@@ -1199,7 +1228,7 @@ def render_plan_context_banner(st_obj: Any, *, beginner: bool) -> None:
         <div style="background:rgba(20,28,43,0.95);border:1px solid #334155;border-radius:12px;
         padding:0.85rem 1rem;margin:0 0 0.75rem 0;">
         <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;
-        margin-bottom:0.45rem;">Your investment plan · {mode} · {WORKFLOW_UI_BUILD}</div>
+        margin-bottom:0.45rem;">Your investment plan · {mode} view · same plan on every device</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:0.5rem 1rem;
         font-size:0.9rem;color:#e2e8f0;">
         <div><span style="color:#94a3b8;">Goal</span><br><strong>{goal_line}</strong></div>

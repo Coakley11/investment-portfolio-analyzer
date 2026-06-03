@@ -287,7 +287,7 @@ def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool =
         from investment_workflow import render_goal_selection_diagnostics
 
         render_goal_selection_diagnostics(
-            st, beginner_mode=True, expanded=not change_goal_mode
+            st, beginner_mode=True, expanded=False
         )
     except ImportError:
         pass

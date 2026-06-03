@@ -116,7 +116,6 @@ try:
         ensure_experience_mode,
         ensure_investment_active_tab,
         finalize_persistence_debug,
-        render_persistence_debug_main,
         render_persistence_debug_sidebar,
         restore_investment_disk_state_once,
         sync_experience_after_widget,
@@ -140,7 +139,8 @@ if _PERSISTENCE_OK:
         st,
         "investment",
         on_reset=default_reset_investment_session,
-        help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
+        label="Reset to default",
+        help_text="Clears saved portfolio, workflow progress, local disk, and cloud session for this app.",
     )
 
 st.markdown(
@@ -842,14 +842,15 @@ def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
     if _PERSISTENCE_OK:
         try:
-            from investment_workflow import render_developer_sidebar_controls
+            from investment_workflow import developer_access_available, render_developer_sidebar_controls
 
             render_developer_sidebar_controls(st)
-            from investment_workflow import developer_diagnostics_enabled
-            from investment_persistent_state import render_persistence_debug_sidebar
+            if developer_access_available(st):
+                from investment_workflow import developer_diagnostics_enabled
+                from investment_persistent_state import render_persistence_debug_sidebar
 
-            if developer_diagnostics_enabled(st):
-                render_persistence_debug_sidebar(st)
+                if developer_diagnostics_enabled(st):
+                    render_persistence_debug_sidebar(st)
         except ImportError:
             pass
     st.sidebar.markdown("### Experience")
@@ -1597,7 +1598,7 @@ if _active_tab == _main_tab_labels[0]:
                 st,
                 beginner_mode=beginner_mode,
                 tab_labels=_main_tab_labels,
-                expanded=not _change_goal_mode,
+                expanded=False,
             )
         except ImportError:
             pass
@@ -2792,13 +2793,6 @@ try:
     if _PERSISTENCE_OK:
         autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
-        try:
-            from investment_workflow import developer_diagnostics_enabled
-
-            if developer_diagnostics_enabled(st):
-                render_persistence_debug_main(st)
-        except ImportError:
-            pass
 except Exception:
     pass
 

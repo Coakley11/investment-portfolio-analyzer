@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from investment_workflow import (
+    developer_access_available,
     developer_diagnostics_enabled,
     invalidate_workflow_from,
     portfolio_analysis_fingerprint,
@@ -27,6 +28,7 @@ class _FakeSessionState(dict):
 class _FakeSt:
     def __init__(self) -> None:
         self.session_state = _FakeSessionState()
+        self.query_params: dict[str, str] = {}
 
 
 class TestInvalidateWorkflow(unittest.TestCase):
@@ -89,10 +91,14 @@ class TestInvalidateWorkflow(unittest.TestCase):
         st = _FakeSt()
         self.assertFalse(developer_diagnostics_enabled(st))
 
-    def test_developer_diagnostics_session_toggle(self) -> None:
+    def test_developer_access_default_off(self) -> None:
         st = _FakeSt()
-        st.session_state["investment_show_dev_diagnostics"] = True
-        self.assertTrue(developer_diagnostics_enabled(st))
+        self.assertFalse(developer_access_available(st))
+
+    def test_developer_access_query_param(self) -> None:
+        st = _FakeSt()
+        st.query_params = {"dev": "1"}
+        self.assertTrue(developer_access_available(st))
 
 
 if __name__ == "__main__":
