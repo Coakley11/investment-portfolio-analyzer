@@ -27,7 +27,6 @@ from components.beginner_navigation import (
     _holdings_fingerprint,
     mark_portfolio_built,
     render_beginner_sidebar_checklist,
-    render_next_step_banner,
     render_recommended_next_step_card,
 )
 _calc_transparency = importlib.import_module("components.calculation_transparency")
@@ -1171,9 +1170,9 @@ def render_overview_tab(
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import request_core_step_navigation
 
-                    request_workflow_tab_navigation("analyze", beginner=True)
+                    request_core_step_navigation("analyze", beginner=True)
                 except ImportError:
                     pass
                 st.rerun()
@@ -1539,9 +1538,6 @@ health_badge_slot = st.empty()
 init_holdings()
 apply_asset_preset(settings["asset_preset"])
 
-if beginner_mode:
-    render_next_step_banner()
-
 _main_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
 try:
     from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
@@ -1550,19 +1546,30 @@ try:
 except Exception:
     pass
 try:
-    from investment_workflow import apply_pending_investment_tab
+    from components.workflow_navigator import apply_workflow_navigation
+    from investment_workflow import (
+        apply_pending_investment_tab,
+        render_plan_context_banner,
+        render_workflow_intent_banner,
+    )
 
     apply_pending_investment_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
+    ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
+    if apply_workflow_navigation(
+        st, beginner_mode=beginner_mode, tab_labels=_main_tab_labels
+    ):
+        st.rerun()
+    render_plan_context_banner(st, beginner=beginner_mode)
+    render_workflow_intent_banner(st, beginner=beginner_mode)
 except ImportError:
-    pass
-ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
-st.radio(
-    "Section",
-    _main_tab_labels,
-    key="investment_active_tab",
-    horizontal=True,
-    label_visibility="collapsed",
-)
+    ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
+    st.radio(
+        "Section",
+        _main_tab_labels,
+        key="investment_active_tab",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 _active_tab = st.session_state["investment_active_tab"]
 
 if _active_tab == _main_tab_labels[0]:
@@ -1627,80 +1634,111 @@ if _active_tab == _main_tab_labels[2]:
     if abs(ws - 100) > 0.5:
         st.warning(f"Weights sum to **{ws:.1f}%** — auto-normalized in calculations.")
     if beginner_mode:
-        st.caption("Scroll down for investment planning and implementation tabs (after data loads).")
+        st.caption("Scroll down for investment planning and implementation guides.")
 
 try:
     tickers, weights, asset_types = parse_holdings(st.session_state.holdings_df)
     try:
         from investment_workflow import (
+            needs_analytics_load,
             record_workflow_health_status,
             reconcile_workflow_health,
             track_holdings_dataframe,
         )
 
         track_holdings_dataframe(st.session_state.holdings_df, st)
-        reconcile_workflow_health(tickers, weights, st)
         record_workflow_health_status(get_health_cache_status(tickers, weights), st)
     except ImportError:
-        pass
+        needs_analytics_load = lambda *_a, **_k: True  # type: ignore[misc, assignment]
 except ValueError as e:
     st.error(str(e))
     if _PERSISTENCE_OK:
         autosave_investment_state(st)
     st.stop()
 
-with st.spinner("Loading market data and running analytics…"):
-    try:
-        prices = load_market_data(tuple(tickers), settings["start"], settings["end"])
-        bench_rets = load_benchmark_returns(settings["start"], settings["end"])
-        returns = compute_daily_returns(prices)
-        mean_rets = returns.mean().values * core.TRADING_DAYS
-        cov = returns.cov() * core.TRADING_DAYS
-        metrics = core.compute_extended_metrics(
-            returns, weights, settings["risk_free"], settings["initial_value"], benchmark_rets=bench_rets
-        )
-        growth = core.portfolio_growth_series(returns, weights, settings["initial_value"])
-        st.session_state.plan_compare_return = metrics.annual_return
-    except Exception as ex:
-        st.error(f"Analysis failed: {ex}")
-        if _PERSISTENCE_OK:
-            autosave_investment_state(st)
-        st.stop()
-
+_analytics_ready = False
+prices = returns = mean_rets = cov = metrics = growth = bench_rets = None
+base_risk_pack = None
+insights: list[str] = []
+explanation = None
+report_text = ""
+holdings_df = None
 mc_summary = st.session_state.get("mc_cached_summary")
 
-latest = prices.iloc[-1]
-holdings_df = core.holdings_breakdown(tickers, weights, asset_types, settings["initial_value"], latest)
-base_risk_pack = compute_risk_pack(returns, tuple(weights.tolist()), settings["initial_value"])
-insights = core.generate_portfolio_insights(
-    tickers,
-    weights,
-    asset_types,
-    metrics,
-    base_risk_pack["corr"],
-    base_risk_pack["risk_contrib"],
-)
-explanation = core.generate_portfolio_explanation(
-    tickers, weights, asset_types, metrics, base_risk_pack["corr"], base_risk_pack["risk_contrib"], benchmark_rets=bench_rets
-)
-report_text = core.build_summary_report(
-    tickers, weights, metrics, mc_summary, insights, settings
-)
-export_buttons(
-    holdings_df,
-    metrics,
-    base_risk_pack["scenarios"],
-    base_risk_pack["vol_rank"],
-    base_risk_pack["risk_contrib"],
-    report_text,
-)
-
 try:
-    from investment_workflow import render_plan_context_banner
+    _load_analytics = needs_analytics_load(_active_tab, _main_tab_labels, st)
+except NameError:
+    _load_analytics = True
 
-    render_plan_context_banner(st, beginner=beginner_mode)
-except ImportError:
-    pass
+if _load_analytics:
+    try:
+        from investment_workflow import reconcile_workflow_health
+
+        reconcile_workflow_health(tickers, weights, st)
+        record_workflow_health_status(get_health_cache_status(tickers, weights), st)
+    except ImportError:
+        pass
+    with st.spinner("Loading market data and running analytics…"):
+        try:
+            prices = load_market_data(tuple(tickers), settings["start"], settings["end"])
+            bench_rets = load_benchmark_returns(settings["start"], settings["end"])
+            returns = compute_daily_returns(prices)
+            mean_rets = returns.mean().values * core.TRADING_DAYS
+            cov = returns.cov() * core.TRADING_DAYS
+            metrics = core.compute_extended_metrics(
+                returns, weights, settings["risk_free"], settings["initial_value"], benchmark_rets=bench_rets
+            )
+            growth = core.portfolio_growth_series(returns, weights, settings["initial_value"])
+            st.session_state.plan_compare_return = metrics.annual_return
+        except Exception as ex:
+            st.error(f"Analysis failed: {ex}")
+            if _PERSISTENCE_OK:
+                autosave_investment_state(st)
+            st.stop()
+
+    latest = prices.iloc[-1]
+    holdings_df = core.holdings_breakdown(tickers, weights, asset_types, settings["initial_value"], latest)
+    base_risk_pack = compute_risk_pack(returns, tuple(weights.tolist()), settings["initial_value"])
+    insights = core.generate_portfolio_insights(
+        tickers,
+        weights,
+        asset_types,
+        metrics,
+        base_risk_pack["corr"],
+        base_risk_pack["risk_contrib"],
+    )
+    explanation = core.generate_portfolio_explanation(
+        tickers, weights, asset_types, metrics, base_risk_pack["corr"], base_risk_pack["risk_contrib"], benchmark_rets=bench_rets
+    )
+    report_text = core.build_summary_report(
+        tickers, weights, metrics, mc_summary, insights, settings
+    )
+    export_buttons(
+        holdings_df,
+        metrics,
+        base_risk_pack["scenarios"],
+        base_risk_pack["vol_rank"],
+        base_risk_pack["risk_contrib"],
+        report_text,
+    )
+    _analytics_ready = True
+else:
+    try:
+        from investment_workflow import reconcile_workflow_health
+
+        reconcile_workflow_health(tickers, weights, st)
+    except ImportError:
+        pass
+
+
+def _require_analytics(feature: str) -> bool:
+    if _analytics_ready:
+        return True
+    st.info(
+        f"**{feature}** needs market data. You're on a quick-edit screen — "
+        "open **Analysis**, **Overview**, or **Health** (or run **Analyze Portfolio**) to load analytics."
+    )
+    return False
 
 if _active_tab == _main_tab_labels[2]:
     try:
@@ -1752,7 +1790,7 @@ if _active_tab == _main_tab_labels[2]:
 
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[5]:
+if _active_tab == _main_tab_labels[5] and _require_analytics("Explain This Portfolio"):
     if beginner_mode:
         st.session_state.visited_explain = True
     section_header(
@@ -1796,7 +1834,7 @@ if _active_tab == _main_tab_labels[5]:
 
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[3]:
+if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"):
     st.session_state.visited_risk = True
     if beginner_mode:
         section_header(
@@ -1807,9 +1845,9 @@ if _active_tab == _main_tab_labels[3]:
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             try:
-                from investment_workflow import request_workflow_tab_navigation
+                from investment_workflow import request_core_step_navigation
 
-                request_workflow_tab_navigation("analyze", beginner=True)
+                request_core_step_navigation("analyze", beginner=True)
             except ImportError:
                 pass
             st.rerun()
@@ -1911,7 +1949,7 @@ if _active_tab == _main_tab_labels[3]:
 
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[4]:
+if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health"):
     section_header(
         "Portfolio Health",
         "Your portfolio checkup — what's working, what to watch, and ideas to consider." if beginner_mode
@@ -2276,7 +2314,7 @@ if _active_tab == _main_tab_labels[4]:
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[1]:
+if _active_tab == _main_tab_labels[1] and _require_analytics("Overview"):
     render_overview_tab(
         settings,
         metrics,
@@ -2293,7 +2331,7 @@ if _active_tab == _main_tab_labels[1]:
 
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[6]:
+if _active_tab == _main_tab_labels[6] and _require_analytics("Macro Analysis"):
     if beginner_mode:
         section_header(
             "Macro Analysis",
@@ -2409,7 +2447,7 @@ if _active_tab == _main_tab_labels[6]:
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[7]:
+if _active_tab == _main_tab_labels[7] and _require_analytics("Monte Carlo"):
     section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
     if beginner_mode:
         what_why_do(
@@ -2517,7 +2555,7 @@ if _active_tab == _main_tab_labels[7]:
 
 # ── Optimization ──────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[8]:
+if _active_tab == _main_tab_labels[8] and _require_analytics("Optimization"):
     if beginner_mode:
         st.info("Portfolio optimization is available in **Advanced Mode**.")
     else:

@@ -16,10 +16,24 @@ import streamlit as st
 import portfolio_core as core
 
 WorkflowStep = Literal["goal", "portfolio", "analysis", "health", "recommendations"]
+WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendations"]
+StepVisual = Literal["complete", "current", "stale", "available"]
+WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v2"
+WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v3"
+WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
+    "goal",
+    "portfolio",
+    "analyze",
+    "health",
+    "recommendations",
+)
+
 DEV_DIAG_SESSION_KEY = "investment_show_dev_diagnostics"
 _PENDING_INVESTMENT_TAB_KEY = "_pending_investment_tab"
+_WORKFLOW_INTENT_KEY = "_workflow_intent"
+_WORKFLOW_STALE_STEPS_KEY = "_workflow_stale_steps"
+_WORKFLOW_CHANGE_SNAPSHOT_KEY = "_workflow_change_snapshot"
 _HOLDINGS_TRACK_KEY = "_workflow_holdings_fp"
 _HEALTH_STATUS_KEY = "_workflow_health_status"
 _HEALTH_VIEWED_FP_KEY = "_workflow_health_reviewed_fp"
@@ -40,11 +54,63 @@ _ANALYSIS_CACHE_KEYS = (
     "request_portfolio_analyze",
 )
 
+_STEP_TO_WORKFLOW: dict[WorkflowCoreKey, WorkflowStep] = {
+    "goal": "goal",
+    "portfolio": "portfolio",
+    "analyze": "analysis",
+    "health": "health",
+    "recommendations": "recommendations",
+}
+
 
 def _sess(st_obj: Any | None = None):
     if st_obj is not None:
         return st_obj.session_state
     return st.session_state
+
+
+def _stale_steps_set(ss: Any) -> set[str]:
+    raw = ss.get(_WORKFLOW_STALE_STEPS_KEY)
+    if isinstance(raw, set):
+        return raw
+    if isinstance(raw, (list, tuple)):
+        return set(raw)
+    return set()
+
+
+def _mark_downstream_stale(ss: Any, from_step: WorkflowStep) -> None:
+    stale = _stale_steps_set(ss)
+    if from_step == "goal":
+        stale.update({"analyze", "health", "recommendations"})
+    elif from_step == "portfolio":
+        stale.update({"analyze", "health", "recommendations"})
+    elif from_step == "analysis":
+        stale.update({"health", "recommendations"})
+    ss[_WORKFLOW_STALE_STEPS_KEY] = stale
+
+
+def _clear_stale_steps(ss: Any, *steps: WorkflowCoreKey) -> None:
+    stale = _stale_steps_set(ss)
+    for step in steps:
+        stale.discard(step)
+    if stale:
+        ss[_WORKFLOW_STALE_STEPS_KEY] = stale
+    else:
+        ss.pop(_WORKFLOW_STALE_STEPS_KEY, None)
+
+
+def clear_workflow_intent(st_obj: Any | None = None) -> None:
+    ss = _sess(st_obj)
+    ss.pop(_WORKFLOW_INTENT_KEY, None)
+    ss.pop(_WORKFLOW_CHANGE_SNAPSHOT_KEY, None)
+
+
+def snapshot_plan_labels(st_obj: Any | None = None) -> dict[str, str]:
+    return {
+        "goal": goal_display_label(st_obj),
+        "portfolio": portfolio_display_label(st_obj),
+        "objective": str(_sess(st_obj).get("health_objective") or ""),
+    }
 
 
 def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
@@ -102,6 +168,19 @@ def _clear_downstream_completion(ss: Any) -> None:
     ss.pop(_REC_VIEWED_FP_KEY, None)
 
 
+def _sync_health_status_after_invalidate(step: WorkflowStep, st_obj: Any | None = None) -> None:
+    ss = _sess(st_obj)
+    if step in ("goal", "portfolio"):
+        if ss.get("health_result"):
+            record_workflow_health_status("portfolio_stale", st_obj)
+        else:
+            record_workflow_health_status("missing", st_obj)
+    elif step == "analysis":
+        status = ss.get(_HEALTH_STATUS_KEY, "missing")
+        if status == "fresh":
+            record_workflow_health_status("settings_stale", st_obj)
+
+
 def invalidate_workflow_from(step: WorkflowStep, st_obj: Any | None = None) -> None:
     """
     Invalidate workflow completion from ``step`` onward.
@@ -114,15 +193,60 @@ def invalidate_workflow_from(step: WorkflowStep, st_obj: Any | None = None) -> N
     if step in ("goal", "portfolio"):
         _clear_downstream_completion(ss)
         _clear_analysis_cache(ss)
+        _mark_downstream_stale(ss, step)
     elif step == "analysis":
         ss["portfolio_health_reviewed"] = False
         ss["recommendations_displayed"] = False
+        _mark_downstream_stale(ss, step)
+    _sync_health_status_after_invalidate(step, st_obj)
+
+
+def begin_goal_change_workflow(st_obj: Any, *, beginner: bool) -> None:
+    """Start change-goal flow: invalidate downstream, navigate to goal, set intent banner."""
+    ss = _sess(st_obj)
+    ss[_WORKFLOW_CHANGE_SNAPSHOT_KEY] = snapshot_plan_labels(st_obj)
+    invalidate_workflow_from("goal", st_obj)
+    ss[_WORKFLOW_INTENT_KEY] = "change_goal"
+    request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+
+
+def begin_portfolio_rebuild_workflow(st_obj: Any, *, beginner: bool) -> None:
+    """Start rebuild flow: invalidate downstream, navigate to portfolio, set intent banner."""
+    ss = _sess(st_obj)
+    ss[_WORKFLOW_CHANGE_SNAPSHOT_KEY] = snapshot_plan_labels(st_obj)
+    invalidate_workflow_from("portfolio", st_obj)
+    ss[_WORKFLOW_INTENT_KEY] = "rebuild_portfolio"
+    request_workflow_tab_navigation("portfolio", beginner=beginner, st_obj=st_obj)
+
+
+def record_goal_selection(
+    st_obj: Any,
+    *,
+    goal_title: str,
+    preset: str | None,
+    objective: str,
+    beginner: bool,
+    prior: dict[str, str] | None = None,
+) -> None:
+    """Call after user confirms a new goal; clears change-goal intent and records what changed."""
+    ss = _sess(st_obj)
+    before = prior or ss.get(_WORKFLOW_CHANGE_SNAPSHOT_KEY) or {}
+    ss["_workflow_last_goal_change"] = {
+        "from_goal": before.get("goal"),
+        "from_portfolio": before.get("portfolio"),
+        "to_goal": goal_title,
+        "to_preset": preset or portfolio_display_label(st_obj),
+        "to_objective": objective,
+    }
+    clear_workflow_intent(st_obj)
+    _clear_stale_steps(ss, "goal")
 
 
 def mark_analysis_complete(st_obj: Any | None = None) -> None:
     """Call when a fresh health evaluation is cached."""
     ss = _sess(st_obj)
     ss["portfolio_analyzed"] = True
+    _clear_stale_steps(ss, "analyze")
 
 
 def mark_health_reviewed(st_obj: Any | None = None) -> None:
@@ -144,6 +268,8 @@ def track_holdings_dataframe(df: pd.DataFrame, st_obj: Any | None = None) -> Non
     prev = ss.get(_HOLDINGS_TRACK_KEY)
     if prev is not None and prev != fp:
         invalidate_workflow_from("portfolio", st_obj)
+        if ss.get(_WORKFLOW_INTENT_KEY) != "rebuild_portfolio":
+            ss[_WORKFLOW_INTENT_KEY] = "rebuild_portfolio"
     ss[_HOLDINGS_TRACK_KEY] = fp
 
 
@@ -161,7 +287,6 @@ def reconcile_workflow_after_restore(st_obj: Any | None = None) -> None:
         if any(ss.get(k) for k in _ANALYSIS_FLAG_KEYS):
             invalidate_workflow_from("portfolio", st_obj)
         return
-    # Holdings-based reconcile runs after tickers are parsed (see reconcile_workflow_health).
     if ss.get("portfolio_analyzed") and not ss.get("health_result_fingerprint"):
         invalidate_workflow_from("portfolio", st_obj)
 
@@ -183,10 +308,17 @@ def reconcile_workflow_health(
         return
     if ss.get("health_result") and cached_fp == fp:
         ss["portfolio_analyzed"] = True
+        _clear_stale_steps(ss, "analyze")
 
 
 def record_workflow_health_status(status: str, st_obj: Any | None = None) -> None:
-    _sess(st_obj)[_HEALTH_STATUS_KEY] = str(status or "missing")
+    status = str(status or "missing")
+    ss = _sess(st_obj)
+    ss[_HEALTH_STATUS_KEY] = status
+    if status == "portfolio_stale":
+        _mark_downstream_stale(ss, "portfolio")
+    elif status == "settings_stale":
+        _mark_downstream_stale(ss, "analysis")
 
 
 def _health_is_fresh(st_obj: Any | None = None) -> bool:
@@ -215,12 +347,16 @@ def portfolio_display_label(st_obj: Any | None = None) -> str:
 def analysis_status_label(st_obj: Any | None = None) -> str:
     ss = _sess(st_obj)
     status = ss.get(_HEALTH_STATUS_KEY, "missing")
-    if status == "fresh":
+    if status == "fresh" and workflow_checklist(st_obj)["analyze"]:
         return "Up to date"
+    if status == "fresh":
+        return "Run Analyze to refresh"
     if status == "settings_stale":
         return "Stale (settings changed)"
     if status == "portfolio_stale":
         return "Stale (portfolio changed)"
+    if "analyze" in _stale_steps_set(ss):
+        return "Needs refresh"
     if ss.get("run_health"):
         return "Running…"
     return "Not run yet"
@@ -228,7 +364,7 @@ def analysis_status_label(st_obj: Any | None = None) -> str:
 
 def recommendations_status_label(st_obj: Any | None = None) -> str:
     ss = _sess(st_obj)
-    if not _health_is_fresh(st_obj):
+    if not _health_is_fresh(st_obj) or "recommendations" in _stale_steps_set(ss):
         return "Needs fresh analysis"
     if ss.get(_REC_VIEWED_FP_KEY) == ss.get("health_result_fingerprint") and ss.get(
         "recommendations_displayed"
@@ -244,11 +380,15 @@ def workflow_tab_label_for_step(step: WorkflowStep, *, beginner: bool) -> str:
         return STEP_TAB_LABEL["goal"] if beginner else ADVANCED_TAB_LABELS[0]
     if step == "portfolio":
         return STEP_TAB_LABEL["portfolio"] if beginner else ADVANCED_TAB_LABELS[2]
-    if step == "analyze":
+    if step == "analysis":
         return STEP_TAB_LABEL["analyze"] if beginner else ADVANCED_TAB_LABELS[3]
     if step in ("health", "recommendations"):
         return STEP_TAB_LABEL["health"] if beginner else ADVANCED_TAB_LABELS[4]
     return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+
+
+def workflow_tab_label_for_core_step(step: WorkflowCoreKey, *, beginner: bool) -> str:
+    return workflow_tab_label_for_step(_STEP_TO_WORKFLOW[step], beginner=beginner)
 
 
 def request_workflow_tab_navigation(
@@ -260,9 +400,18 @@ def request_workflow_tab_navigation(
     """
     Schedule a section tab change before the next script run.
 
-    Do not assign ``investment_active_tab`` after the section radio has rendered.
+    Do not assign ``investment_active_tab`` after the section navigator has rendered.
     """
     _sess(st_obj)[_PENDING_INVESTMENT_TAB_KEY] = workflow_tab_label_for_step(step, beginner=beginner)
+
+
+def request_core_step_navigation(
+    step: WorkflowCoreKey,
+    *,
+    beginner: bool,
+    st_obj: Any | None = None,
+) -> None:
+    request_workflow_tab_navigation(_STEP_TO_WORKFLOW[step], beginner=beginner, st_obj=st_obj)
 
 
 def apply_pending_investment_tab(
@@ -272,7 +421,7 @@ def apply_pending_investment_tab(
     beginner_mode: bool,
 ) -> bool:
     """
-    Apply deferred navigation immediately before the section radio widget.
+    Apply deferred navigation immediately before the section navigator.
 
     Returns True when a pending tab was applied to session state.
     """
@@ -296,8 +445,31 @@ def navigate_workflow_tab(
     beginner: bool,
     st_obj: Any | None = None,
 ) -> None:
-    """Schedule safe tab navigation (use ``apply_pending_investment_tab`` before the radio)."""
+    """Schedule safe tab navigation (use ``apply_pending_investment_tab`` before the navigator)."""
     request_workflow_tab_navigation(step, beginner=beginner, st_obj=st_obj)
+
+
+def needs_analytics_load(
+    active_tab: str,
+    tab_labels: list[str],
+    st_obj: Any | None = None,
+) -> bool:
+    """
+    True when this run should download market data and compute portfolio metrics.
+
+    Goal and portfolio-edit tabs stay fast unless analysis is explicitly requested.
+    """
+    ss = _sess(st_obj)
+    if ss.get("run_health") or ss.get("request_portfolio_analyze"):
+        return True
+    try:
+        idx = tab_labels.index(active_tab)
+    except ValueError:
+        return True
+    # Goal (0) and Portfolio Inputs / Build (2) — holdings only
+    if idx in (0, 2):
+        return False
+    return True
 
 
 def workflow_checklist(st_obj: Any | None = None) -> dict[str, bool]:
@@ -333,6 +505,70 @@ def workflow_checklist(st_obj: Any | None = None) -> dict[str, bool]:
     }
 
 
+def _core_step_for_tab(active_tab: str, *, beginner: bool) -> WorkflowCoreKey | None:
+    from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS, STEP_TAB_LABEL
+
+    labels = BEGINNER_TAB_LABELS if beginner else ADVANCED_TAB_LABELS
+    mapping = {
+        STEP_TAB_LABEL["goal"]: "goal",
+        STEP_TAB_LABEL["portfolio"]: "portfolio",
+        STEP_TAB_LABEL["analyze"]: "analyze",
+        STEP_TAB_LABEL["health"]: "health",
+        labels[0]: "goal",
+        labels[2]: "portfolio",
+        labels[3]: "analyze",
+        labels[4]: "health",
+    }
+    return mapping.get(active_tab)  # type: ignore[return-value]
+
+
+def workflow_step_visual_states(
+    st_obj: Any | None = None,
+    *,
+    beginner: bool,
+    active_tab: str | None = None,
+) -> dict[WorkflowCoreKey, StepVisual]:
+    """
+    Visual state per core workflow step. No hard locks — stale steps remain navigable.
+    """
+    checklist = workflow_checklist(st_obj)
+    stale = _stale_steps_set(_sess(st_obj))
+    status = _sess(st_obj).get(_HEALTH_STATUS_KEY, "missing")
+
+    first_open = 0
+    for i, key in enumerate(WORKFLOW_CORE_STEPS):
+        if not checklist[key]:
+            first_open = i
+            break
+    else:
+        first_open = len(WORKFLOW_CORE_STEPS) - 1
+
+    active_step = _core_step_for_tab(active_tab, beginner=beginner) if active_tab else None
+    states: dict[WorkflowCoreKey, StepVisual] = {}
+
+    for i, key in enumerate(WORKFLOW_CORE_STEPS):
+        if checklist[key]:
+            states[key] = "complete"
+            continue
+        is_stale = key in stale or (
+            key == "analyze"
+            and status in ("portfolio_stale", "settings_stale")
+        ) or (
+            key in ("health", "recommendations")
+            and (not _health_is_fresh(st_obj) or "analyze" in stale or not checklist["analyze"])
+            and (checklist["portfolio"] or stale)
+        )
+        if active_step == key:
+            states[key] = "current"
+        elif is_stale:
+            states[key] = "stale"
+        elif i <= first_open:
+            states[key] = "available"
+        else:
+            states[key] = "available"
+    return states
+
+
 def mark_health_reviewed_for_portfolio(
     tickers: list[str],
     weights: Any,
@@ -347,6 +583,7 @@ def mark_health_reviewed_for_portfolio(
         return
     mark_health_reviewed(st_obj)
     ss[_HEALTH_VIEWED_FP_KEY] = fp
+    _clear_stale_steps(ss, "health")
 
 
 def mark_recommendations_if_current(st_obj: Any | None = None) -> None:
@@ -359,52 +596,86 @@ def mark_recommendations_if_current(st_obj: Any | None = None) -> None:
         return
     mark_recommendations_viewed(st_obj)
     ss[_REC_VIEWED_FP_KEY] = fp
+    _clear_stale_steps(ss, "recommendations")
 
 
 def render_plan_context_banner(st_obj: Any, *, beginner: bool) -> None:
     """Always-visible summary of the single shared investment plan."""
     ss = _sess(st_obj)
-    fresh = _health_is_fresh(st_obj)
     analysis = analysis_status_label(st_obj)
     recs = recommendations_status_label(st_obj)
     mode = "Beginner view" if beginner else "Advanced view"
+    goal_line = goal_display_label(st_obj)
+    port_line = portfolio_display_label(st_obj)
+
+    last_change = ss.get("_workflow_last_goal_change")
+    change_note = ""
+    if isinstance(last_change, dict) and last_change.get("to_goal"):
+        change_note = (
+            f'<div style="color:#86efac;font-size:0.82rem;margin-top:0.45rem;">'
+            f'Last goal update: <strong>{last_change.get("from_goal") or "—"}</strong> '
+            f'→ <strong>{last_change.get("to_goal")}</strong>'
+            f' · Portfolio: <strong>{last_change.get("to_preset") or "—"}</strong></div>'
+        )
+
+    analysis_color = "#86efac" if "Up to date" in analysis else (
+        "#fbbf24" if "Stale" in analysis or "Needs" in analysis else "#e2e8f0"
+    )
     st.markdown(
         f"""
         <div style="background:rgba(20,28,43,0.95);border:1px solid #334155;border-radius:12px;
-        padding:0.85rem 1rem;margin:0 0 1rem 0;">
+        padding:0.85rem 1rem;margin:0 0 0.75rem 0;">
         <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;
         margin-bottom:0.45rem;">Your investment plan · {mode} · {WORKFLOW_UI_BUILD}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:0.5rem 1rem;
         font-size:0.9rem;color:#e2e8f0;">
-        <div><span style="color:#94a3b8;">Goal</span><br><strong>{goal_display_label(st_obj)}</strong></div>
-        <div><span style="color:#94a3b8;">Portfolio</span><br><strong>{portfolio_display_label(st_obj)}</strong></div>
-        <div><span style="color:#94a3b8;">Analysis</span><br><strong>{analysis}</strong></div>
+        <div><span style="color:#94a3b8;">Goal</span><br><strong>{goal_line}</strong></div>
+        <div><span style="color:#94a3b8;">Portfolio</span><br><strong>{port_line}</strong></div>
+        <div><span style="color:#94a3b8;">Analysis</span><br>
+        <strong style="color:{analysis_color};">{analysis}</strong></div>
         <div><span style="color:#94a3b8;">Recommendations</span><br><strong>{recs}</strong></div>
         </div>
+        {change_note}
         </div>
         """,
         unsafe_allow_html=True,
     )
-    if not fresh and ss.get("health_result"):
-        st.caption("Portfolio or settings changed — re-run **Analyze Portfolio** or **Refresh Portfolio Health**.")
+
+
+def render_workflow_intent_banner(st_obj: Any, *, beginner: bool) -> None:
+    """Banner for active change-goal or rebuild-portfolio workflow."""
+    ss = _sess(st_obj)
+    intent = ss.get(_WORKFLOW_INTENT_KEY)
+    if intent not in ("change_goal", "rebuild_portfolio"):
+        return
+    snap = ss.get(_WORKFLOW_CHANGE_SNAPSHOT_KEY) or {}
+    if intent == "change_goal":
+        st.info(
+            f"**Change your goal** — Pick a new goal below. "
+            f"Current: **{snap.get('goal', '—')}** · Portfolio: **{snap.get('portfolio', '—')}**. "
+            f"Analysis, health, and recommendations were cleared and need to be run again."
+        )
+    else:
+        tab = workflow_tab_label_for_core_step("portfolio", beginner=beginner)
+        st.info(
+            f"**Rebuild portfolio** — Adjust holdings on **{tab}** (or load a preset). "
+            f"Goal stays **{snap.get('goal', goal_display_label(st_obj))}**. "
+            f"Analysis, health, and recommendations were cleared."
+        )
 
 
 def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
     """
-    Clear actions to rebuild holdings while keeping the goal.
+    Clear actions to rebuild holdings or change goal.
 
     Returns True if a navigation rerun was requested.
     """
-    from components.beginner_navigation import STEP_TAB_LABEL
-
     st.markdown("#### Rebuild / rebalance portfolio")
     st.caption(
-        "Your goal stays the same. Rebuilding clears analysis, health, and recommendation checkmarks "
-        "until you run them again on the new mix."
+        "These actions clear analysis, health, and recommendation progress, then take you to the right step."
     )
     c1, c2 = st.columns(2)
     clicked = False
-    tab_label = STEP_TAB_LABEL["portfolio"] if beginner else "Portfolio Inputs"
     with c1:
         if st.button(
             "Edit holdings & weights",
@@ -412,7 +683,7 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
             use_container_width=True,
             type="primary",
         ):
-            request_workflow_tab_navigation("portfolio", beginner=beginner, st_obj=st_obj)
+            begin_portfolio_rebuild_workflow(st_obj, beginner=beginner)
             clicked = True
     with c2:
         if st.button(
@@ -420,9 +691,9 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
             key="wf_rebuild_change_goal",
             use_container_width=True,
         ):
-            request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+            begin_goal_change_workflow(st_obj, beginner=beginner)
             clicked = True
     preset = _sess(st_obj).get("preset_applied")
     if preset:
-        st.caption(f"Current preset: **{preset}** — pick a new goal card or preset to reload a template.")
+        st.caption(f"Current preset: **{preset}** — choose a different goal card to load another template.")
     return clicked

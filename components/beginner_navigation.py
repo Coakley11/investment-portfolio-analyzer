@@ -273,24 +273,46 @@ def get_recommended_next_step(st_obj: Any | None = None) -> tuple[str, str, str]
 
 def render_beginner_sidebar_checklist() -> None:
     st.sidebar.markdown("### Your journey")
-    st.sidebar.caption("Steps 1–5 are required · Tabs ⑦–⑩ are optional.")
-    state = _checklist_state()
-    current = _current_step_index()
-    for i, (key, label) in enumerate(CHECKLIST_STEPS):
-        done = state[key]
-        is_current = i == current and not done
-        if done:
-            icon, style = "✅", "color:#86efac;font-weight:500;"
-        elif is_current:
-            icon, style = "👉", "color:#4da3ff;font-weight:600;font-size:0.95rem;"
-        else:
-            icon, style = "⬜", "color:#64748b;"
-        st.sidebar.markdown(
-            f'<div style="{style}line-height:1.65;margin:0.2rem 0;">{icon} {label}</div>',
-            unsafe_allow_html=True,
-        )
-    if all(state.values()):
-        st.sidebar.success("All main steps complete!")
+    st.sidebar.caption("Matches the workflow bar above the main area.")
+    try:
+        from investment_workflow import workflow_step_visual_states
+
+        active = st.session_state.get("investment_active_tab")
+        visuals = workflow_step_visual_states(st, beginner=True, active_tab=active)
+        icons = {"complete": "✓", "current": "▶", "stale": "⚠", "available": "○"}
+        for key, label in CHECKLIST_STEPS:
+            vis = visuals.get(key, "available")
+            icon = icons.get(vis, "○")
+            if vis == "complete":
+                style = "color:#86efac;font-weight:500;"
+            elif vis == "current":
+                style = "color:#4da3ff;font-weight:600;font-size:0.95rem;"
+            elif vis == "stale":
+                style = "color:#fbbf24;font-weight:500;"
+            else:
+                style = "color:#64748b;"
+            st.sidebar.markdown(
+                f'<div style="{style}line-height:1.65;margin:0.2rem 0;">{icon} {label}</div>',
+                unsafe_allow_html=True,
+            )
+        if all(_checklist_state().values()):
+            st.sidebar.success("All main steps complete!")
+    except ImportError:
+        state = _checklist_state()
+        current = _current_step_index()
+        for i, (key, label) in enumerate(CHECKLIST_STEPS):
+            done = state[key]
+            is_current = i == current and not done
+            if done:
+                icon, style = "✅", "color:#86efac;font-weight:500;"
+            elif is_current:
+                icon, style = "👉", "color:#4da3ff;font-weight:600;font-size:0.95rem;"
+            else:
+                icon, style = "⬜", "color:#64748b;"
+            st.sidebar.markdown(
+                f'<div style="{style}line-height:1.65;margin:0.2rem 0;">{icon} {label}</div>',
+                unsafe_allow_html=True,
+            )
     st.sidebar.divider()
 
 
@@ -385,26 +407,26 @@ def render_recommended_next_step_card() -> bool:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['goal']}", type="primary", use_container_width=True, key="cta_goal")
             if clicked:
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import begin_goal_change_workflow
 
-                    request_workflow_tab_navigation("goal", beginner=True)
+                    begin_goal_change_workflow(st, beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["goal"]
         elif not state["portfolio"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['portfolio']}", type="primary", use_container_width=True, key="cta_portfolio")
             if clicked:
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import begin_portfolio_rebuild_workflow
 
-                    request_workflow_tab_navigation("portfolio", beginner=True)
+                    begin_portfolio_rebuild_workflow(st, beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["portfolio"]
         elif not state["analyze"]:
             if st.button(f"Go to {STEP_TAB_LABEL['analyze']}", type="primary", use_container_width=True, key="cta_analyze"):
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import request_core_step_navigation
 
-                    request_workflow_tab_navigation("analyze", beginner=True)
+                    request_core_step_navigation("analyze", beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["analyze"]
                 st.session_state.run_health = True
@@ -413,18 +435,18 @@ def render_recommended_next_step_card() -> bool:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_health")
             if clicked:
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import request_core_step_navigation
 
-                    request_workflow_tab_navigation("health", beginner=True)
+                    request_core_step_navigation("health", beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
         elif not state["recommendations"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_rec")
             if clicked:
                 try:
-                    from investment_workflow import request_workflow_tab_navigation
+                    from investment_workflow import request_core_step_navigation
 
-                    request_workflow_tab_navigation("health", beginner=True)
+                    request_core_step_navigation("health", beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
     return clicked

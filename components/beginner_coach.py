@@ -165,6 +165,12 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                 use_container_width=True,
                 type="primary" if active else "secondary",
             ):
+                try:
+                    from investment_workflow import snapshot_plan_labels
+
+                    _prior_goal = snapshot_plan_labels(st)
+                except ImportError:
+                    _prior_goal = None
                 st.session_state.beginner_goal_card = card["id"]
                 st.session_state.guide_goal_choice = card["goal_key"]
                 st.session_state.health_objective = card["objective"]
@@ -188,9 +194,20 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                     except Exception:
                         pass
                 try:
-                    from investment_workflow import invalidate_workflow_from
+                    from investment_workflow import (
+                        invalidate_workflow_from,
+                        record_goal_selection,
+                    )
 
                     invalidate_workflow_from("goal", st)
+                    record_goal_selection(
+                        st,
+                        goal_title=card["title"],
+                        preset=card.get("preset"),
+                        objective=card["objective"],
+                        beginner=True,
+                        prior=_prior_goal,
+                    )
                 except ImportError:
                     st.session_state.run_health = False
                     st.session_state.pop("health_result", None)

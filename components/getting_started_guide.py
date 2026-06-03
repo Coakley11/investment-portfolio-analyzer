@@ -107,10 +107,12 @@ def _auto_apply_for_goal(goal: str) -> None:
     if last == goal:
         return
     is_goal_change = last is not None
+    prior = None
     if is_goal_change:
         try:
-            from investment_workflow import invalidate_workflow_from
+            from investment_workflow import invalidate_workflow_from, snapshot_plan_labels
 
+            prior = snapshot_plan_labels(st)
             invalidate_workflow_from("goal")
         except ImportError:
             st.session_state.run_health = False
@@ -137,6 +139,19 @@ def _auto_apply_for_goal(goal: str) -> None:
                 from investment_workflow import invalidate_workflow_from
 
                 invalidate_workflow_from("portfolio")
+            except ImportError:
+                pass
+            try:
+                from investment_workflow import record_goal_selection
+
+                record_goal_selection(
+                    st,
+                    goal_title=goal,
+                    preset=preset,
+                    objective=objective,
+                    beginner=False,
+                    prior=prior,
+                )
             except ImportError:
                 pass
         if not is_goal_change:
