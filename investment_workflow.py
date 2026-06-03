@@ -107,6 +107,31 @@ def clear_workflow_intent(st_obj: Any | None = None) -> None:
     ss.pop(_WORKFLOW_CHANGE_SNAPSHOT_KEY, None)
 
 
+def reset_investment_workflow_state(st_obj: Any | None = None) -> None:
+    """Clear workflow intents, stale flags, analysis cache, and checklist completion."""
+    ss = _sess(st_obj)
+    for key in (
+        _WORKFLOW_INTENT_KEY,
+        _WORKFLOW_STALE_STEPS_KEY,
+        _WORKFLOW_CHANGE_SNAPSHOT_KEY,
+        _PENDING_INVESTMENT_TAB_KEY,
+        _HOLDINGS_TRACK_KEY,
+        _HEALTH_STATUS_KEY,
+        _HEALTH_VIEWED_FP_KEY,
+        _REC_VIEWED_FP_KEY,
+        _GOAL_SELECTION_DEBUG_KEY,
+        _GOAL_CHANGE_DEBUG_KEY,
+        "_workflow_last_goal_change",
+        "request_portfolio_analyze",
+        "health_refresh",
+    ):
+        ss.pop(key, None)
+    for key in _ANALYSIS_FLAG_KEYS:
+        ss[key] = False
+    _clear_analysis_cache(ss)
+    ss.pop("health_summary", None)
+
+
 def snapshot_plan_labels(st_obj: Any | None = None) -> dict[str, str]:
     ss = _sess(st_obj)
     return {

@@ -19,7 +19,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-diagnostic-v3"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-reset-v1"
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -129,6 +129,28 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "holdings_df": "default holdings",
     "health_summary": None,
 }
+
+# Ephemeral keys cleared on Reset to Default (not written to cloud/disk).
+_EXTRA_RESET_SESSION_KEYS = (
+    "guide_auto_applied_preset",
+    "guide_suggested_preset",
+    "visited_risk",
+    "visited_explain",
+    "run_risk_macro",
+    "run_health",
+    "health_result",
+    "health_result_fingerprint",
+    "health_settings_fingerprint",
+    "health_summary",
+    "request_portfolio_analyze",
+    "health_refresh",
+    "macro_live_snapshot",
+    "_activity_health_objective",
+    "_activity_holdings_fp",
+    "plan_compare_return",
+    "mc_cached_summary",
+    "investment_show_dev_diagnostics",
+)
 
 
 def current_experience_mode(st: Any) -> str:
@@ -514,24 +536,88 @@ def render_persistence_debug(st: Any, *, final: bool = False) -> None:
     render_persistence_debug_sidebar(st)
 
 
-def default_reset_investment_session(st: Any) -> None:
+def apply_investment_session_defaults(st: Any) -> None:
+    """Apply first-run defaults to ``st.session_state`` (goal tab, empty workflow)."""
     import portfolio_core as core
 
-    reset_user_state(APP_ID)
-    for key in list(st.session_state.keys()):
+    from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS
+
+    try:
+        from investment_workflow import reset_investment_workflow_state
+
+        reset_investment_workflow_state(st)
+    except ImportError:
+        pass
+
+    ss = st.session_state
+    for key in list(ss.keys()):
         if str(key).startswith("_suite_"):
-            st.session_state.pop(key, None)
-    st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
-    st.session_state[EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
-    st.session_state[PERSISTED_EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
-    st.session_state.sidebar_portfolio_value = 100_000
-    for k in (
-        "health_result",
-        "health_summary",
-        "health_result_fingerprint",
-        "health_settings_fingerprint",
-        "preset_applied",
-        INVESTMENT_ACTIVE_TAB_KEY,
-        _LEGACY_TAB_KEY,
-    ):
-        st.session_state.pop(k, None)
+            ss.pop(key, None)
+    for key in _EXTRA_RESET_SESSION_KEYS:
+        ss.pop(key, None)
+
+    for key, default in PERSIST_FIELD_DEFAULTS.items():
+        if key == "holdings_df":
+            ss["holdings_df"] = pd.DataFrame(core.DEFAULT_HOLDINGS)
+        elif default is None:
+            ss.pop(key, None)
+        else:
+            ss[key] = copy.deepcopy(default)
+
+    mode = ss.get(EXPERIENCE_KEY)
+    if mode not in EXPERIENCE_OPTIONS:
+        mode = EXPERIENCE_OPTIONS[0]
+    ss[EXPERIENCE_KEY] = mode
+    ss[PERSISTED_EXPERIENCE_KEY] = mode
+    ss[INVESTMENT_ACTIVE_TAB_KEY] = (
+        BEGINNER_TAB_LABELS[0] if mode == EXPERIENCE_OPTIONS[0] else ADVANCED_TAB_LABELS[0]
+    )
+    ss.pop(_LEGACY_TAB_KEY, None)
+    ensure_analysis_date_defaults(st)
+
+
+def default_reset_investment_session(st: Any) -> None:
+    """
+    Full Investment reset: session, local disk, and cloud ``full_session``.
+
+    Called from sidebar Reset after ``reset_user_state`` deletes the disk file.
+    """
+    from suite_user_persistence import (
+        _LOCAL_DIRTY_PREFIX,
+        _SESSION_RESTORED_PREFIX,
+        _restored_fp_key,
+        save_user_state,
+    )
+
+    apply_investment_session_defaults(st)
+
+    fresh = build_investment_disk_state(st)
+    save_user_state(APP_ID, fresh)
+
+    try:
+        from suite_cloud_state import clear_cloud_full_session, save_cloud_full_session
+
+        clear_cloud_full_session(APP_ID)
+        tab = st.session_state.get(INVESTMENT_ACTIVE_TAB_KEY, "")
+        save_cloud_full_session(
+            APP_ID,
+            fresh,
+            page=str(tab),
+            summary="Reset to defaults",
+        )
+    except Exception as exc:
+        st.session_state["_suite_persist_reset_cloud_error"] = str(exc)
+
+    flag = f"{_SESSION_RESTORED_PREFIX}{APP_ID}"
+    st.session_state[flag] = True
+    try:
+        import hashlib
+        import json
+
+        blob = json.dumps(fresh, sort_keys=True, default=str)
+        st.session_state[_restored_fp_key(APP_ID)] = hashlib.sha256(blob.encode("utf-8")).hexdigest()[
+            :20
+        ]
+    except Exception:
+        pass
+    st.session_state[f"{_LOCAL_DIRTY_PREFIX}{APP_ID}"] = False
