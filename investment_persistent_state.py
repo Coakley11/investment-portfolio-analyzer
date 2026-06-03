@@ -63,6 +63,14 @@ _PERSIST_SCALAR_KEYS = (
     "health_bond_min",
     "health_run_optimizer",
     "beginner_objective",
+    "guide_goal_choice",
+    "beginner_goal_card",
+    "guide_last_applied_goal",
+    "guide_portfolio_loaded",
+    "portfolio_built",
+    "portfolio_analyzed",
+    "portfolio_health_reviewed",
+    "recommendations_displayed",
     "overview_subtab",
     "overview_show_extended_metrics",
     "mc_assumption_mode",
@@ -100,6 +108,14 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "health_bond_min": 0,
     "health_run_optimizer": False,
     "beginner_objective": None,
+    "guide_goal_choice": None,
+    "beginner_goal_card": None,
+    "guide_last_applied_goal": None,
+    "guide_portfolio_loaded": False,
+    "portfolio_built": False,
+    "portfolio_analyzed": False,
+    "portfolio_health_reviewed": False,
+    "recommendations_displayed": False,
     "overview_subtab": None,
     "overview_show_extended_metrics": False,
     "mc_assumption_mode": "Historical returns",
@@ -172,11 +188,22 @@ def ensure_analysis_date_defaults(st: Any) -> None:
         st.session_state["analysis_end_date"] = end_default
 
 
-def ensure_investment_active_tab(st: Any, tab_labels: list[str]) -> None:
+def ensure_investment_active_tab(st: Any, tab_labels: list[str], *, beginner_mode: bool = False) -> None:
     if not tab_labels:
         return
     if INVESTMENT_ACTIVE_TAB_KEY not in st.session_state and _LEGACY_TAB_KEY in st.session_state:
         st.session_state[INVESTMENT_ACTIVE_TAB_KEY] = st.session_state[_LEGACY_TAB_KEY]
+    raw = st.session_state.get(INVESTMENT_ACTIVE_TAB_KEY)
+    if raw:
+        try:
+            from components.beginner_navigation import normalize_tab_label_for_mode
+
+            st.session_state[INVESTMENT_ACTIVE_TAB_KEY] = normalize_tab_label_for_mode(
+                str(raw),
+                beginner=beginner_mode,
+            )
+        except ImportError:
+            pass
     validate_state_option(st, INVESTMENT_ACTIVE_TAB_KEY, tab_labels, tab_labels[0])
 
 
@@ -277,6 +304,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
 
     if "holdings_df" not in st.session_state:
         st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+
+    try:
+        from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
+
+        sync_beginner_goal_keys_from_portfolio(st)
+    except ImportError:
+        pass
 
     st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
 
@@ -413,6 +447,14 @@ def render_persistence_debug_content(st: Any) -> None:
         st.warning(f"Persistence restore error: {restore_err}")
     if cloud_err:
         st.caption(f"Cloud peek error: {cloud_err}")
+    try:
+        from components.beginner_navigation import goal_workflow_debug_lines
+
+        if current_experience_mode(st) == "Beginner Mode":
+            st.markdown("**Goal workflow (temp debug)**")
+            st.code("\n".join(goal_workflow_debug_lines(st)), language=None)
+    except Exception:
+        pass
 
 
 def render_persistence_debug_sidebar(st: Any) -> None:

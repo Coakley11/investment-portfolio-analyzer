@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import streamlit as st
 
@@ -88,6 +90,100 @@ PRESET_DISPLAY: dict[str, dict[str, str]] = {
 }
 
 
+GOAL_WORKFLOW_DEBUG_BUILD = "2026-06-03-goal-workflow-v1"
+
+# Beginner and advanced main tabs share the same index order (10 tabs).
+_TAB_INDEX_BY_BEGINNER = {label: i for i, label in enumerate(BEGINNER_TAB_LABELS)}
+_TAB_INDEX_BY_ADVANCED = {label: i for i, label in enumerate(ADVANCED_TAB_LABELS)}
+
+
+def normalize_tab_label_for_mode(label: str, *, beginner: bool) -> str:
+    """Map a saved tab from the other experience mode to the active label set."""
+    cleaned = str(label or "").strip()
+    if not cleaned:
+        return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+    if beginner:
+        if cleaned in BEGINNER_TAB_LABELS:
+            return cleaned
+        if cleaned in ADVANCED_TAB_LABELS:
+            return BEGINNER_TAB_LABELS[ADVANCED_TAB_LABELS.index(cleaned)]
+    else:
+        if cleaned in ADVANCED_TAB_LABELS:
+            return cleaned
+        if cleaned in BEGINNER_TAB_LABELS:
+            return ADVANCED_TAB_LABELS[BEGINNER_TAB_LABELS.index(cleaned)]
+    return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+
+
+def _sess(st_obj: Any | None = None):
+    if st_obj is not None:
+        return st_obj.session_state
+    return st.session_state
+
+
+def sync_beginner_goal_keys_from_portfolio(st: Any) -> bool:
+    """
+    Align checklist goal keys with restored or preset-loaded portfolio state.
+
+    Returns True when goal keys were inferred and written.
+    """
+    ss = _sess(st)
+    if ss.get("guide_goal_choice") or ss.get("beginner_goal_card"):
+        return False
+    preset = str(ss.get("preset_applied") or "").strip()
+    objective = str(ss.get("health_objective") or "").strip()
+    if not preset and not objective:
+        return False
+    try:
+        from components.beginner_coach import GOAL_CARDS
+    except ImportError:
+        return False
+    preset_to_card_id = {
+        "Conservative": "preservation",
+        "Balanced": "balanced",
+        "Aggressive": "growth",
+        "Dividend Income": "income",
+        "Retirement": "retirement",
+    }
+    preferred_id = preset_to_card_id.get(preset)
+    if preferred_id:
+        for card in GOAL_CARDS:
+            if card.get("id") == preferred_id:
+                ss.beginner_goal_card = card["id"]
+                ss.guide_goal_choice = card["goal_key"]
+                return True
+    if preset and objective:
+        for card in GOAL_CARDS:
+            if card.get("preset") == preset and card.get("objective") == objective:
+                ss.beginner_goal_card = card["id"]
+                ss.guide_goal_choice = card["goal_key"]
+                return True
+    for card in GOAL_CARDS:
+        if preset and card.get("preset") == preset:
+            ss.beginner_goal_card = card["id"]
+            ss.guide_goal_choice = card["goal_key"]
+            return True
+    for card in GOAL_CARDS:
+        if objective and card.get("objective") == objective:
+            ss.beginner_goal_card = card["id"]
+            ss.guide_goal_choice = card["goal_key"]
+            return True
+    return False
+
+
+def _goal_step_complete(st_obj: Any | None = None) -> bool:
+    ss = _sess(st_obj)
+    if ss.get("guide_goal_choice") or ss.get("beginner_goal_card"):
+        return True
+    preset = ss.get("preset_applied")
+    objective = ss.get("health_objective")
+    if preset and objective:
+        return True
+    if preset and _portfolio_built(st_obj):
+        return True
+    return False
+
+
 def _holdings_fingerprint(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return ""
@@ -101,28 +197,28 @@ def _holdings_fingerprint(df: pd.DataFrame) -> str:
     return "|".join(f"{t}:{w}:{a}" for t, w, a in rows)
 
 
-def _portfolio_built() -> bool:
-    if st.session_state.get("preset_applied") or st.session_state.get("guide_portfolio_loaded"):
+def _portfolio_built(st_obj: Any | None = None) -> bool:
+    ss = _sess(st_obj)
+    if ss.get("preset_applied") or ss.get("guide_portfolio_loaded"):
         return True
-    df = st.session_state.get("holdings_df")
+    df = ss.get("holdings_df")
     if df is None or df.empty:
         return False
     default_fp = _holdings_fingerprint(pd.DataFrame(core.DEFAULT_HOLDINGS))
     return _holdings_fingerprint(df) != default_fp
 
 
-def mark_portfolio_built() -> None:
-    st.session_state.portfolio_built = True
+def mark_portfolio_built(st_obj: Any | None = None) -> None:
+    _sess(st_obj).portfolio_built = True
 
 
-def _checklist_state() -> dict[str, bool]:
-    goal_done = bool(st.session_state.get("guide_goal_choice")) or bool(
-        st.session_state.get("beginner_goal_card")
-    )
-    portfolio_done = _portfolio_built() or bool(st.session_state.get("portfolio_built"))
-    analyze_done = bool(st.session_state.get("portfolio_analyzed"))
-    health_done = bool(st.session_state.get("portfolio_health_reviewed"))
-    rec_done = bool(st.session_state.get("recommendations_displayed"))
+def _checklist_state(st_obj: Any | None = None) -> dict[str, bool]:
+    ss = _sess(st_obj)
+    goal_done = _goal_step_complete(st_obj)
+    portfolio_done = _portfolio_built(st_obj) or bool(ss.get("portfolio_built"))
+    analyze_done = bool(ss.get("portfolio_analyzed"))
+    health_done = bool(ss.get("portfolio_health_reviewed"))
+    rec_done = bool(ss.get("recommendations_displayed"))
     return {
         "goal": goal_done,
         "portfolio": portfolio_done,
@@ -132,16 +228,16 @@ def _checklist_state() -> dict[str, bool]:
     }
 
 
-def _current_step_index() -> int:
-    state = _checklist_state()
+def _current_step_index(st_obj: Any | None = None) -> int:
+    state = _checklist_state(st_obj)
     for i, (key, _) in enumerate(CHECKLIST_STEPS):
         if not state[key]:
             return i
     return len(CHECKLIST_STEPS) - 1
 
 
-def get_recommended_next_step() -> tuple[str, str, str]:
-    state = _checklist_state()
+def get_recommended_next_step(st_obj: Any | None = None) -> tuple[str, str, str]:
+    state = _checklist_state(st_obj)
     total = len(CHECKLIST_STEPS)
     if not state["goal"]:
         tab = STEP_TAB_LABEL["goal"]
@@ -213,6 +309,59 @@ def render_next_step_banner() -> None:
     )
 
 
+def _workflow_redirect_reason(*, tab_labels: list[str] | None = None, st_obj: Any | None = None) -> str:
+    """Human-readable reason the coach banner points at Step 1 (Choose Goal)."""
+    ss = _sess(st_obj)
+    state = _checklist_state(st_obj)
+    if state["goal"]:
+        return "goal step complete — no redirect to Choose Goal"
+    parts: list[str] = []
+    if not ss.get("guide_goal_choice"):
+        parts.append("guide_goal_choice missing")
+    if not ss.get("beginner_goal_card"):
+        parts.append("beginner_goal_card missing")
+    preset = ss.get("preset_applied")
+    objective = ss.get("health_objective")
+    if preset:
+        parts.append(f"preset_applied={preset!r} (counts toward goal if objective set)")
+    if objective:
+        parts.append(f"health_objective={objective!r}")
+    if preset and not objective:
+        parts.append("preset without health_objective — goal still incomplete")
+    active = ss.get("investment_active_tab")
+    labels = tab_labels or BEGINNER_TAB_LABELS
+    if active and active not in labels:
+        mapped = normalize_tab_label_for_mode(str(active), beginner=True)
+        parts.append(
+            f"active tab {active!r} invalid for beginner — would reset to {mapped!r}"
+        )
+    return "; ".join(parts) if parts else "unknown"
+
+
+def goal_workflow_debug_lines(st_obj: Any, *, tab_labels: list[str] | None = None) -> list[str]:
+    ss = _sess(st_obj)
+    state = _checklist_state(st_obj)
+    step_idx = _current_step_index(st_obj)
+    step_key, step_label = (
+        CHECKLIST_STEPS[step_idx] if step_idx < len(CHECKLIST_STEPS) else ("done", "complete")
+    )
+    labels = tab_labels or BEGINNER_TAB_LABELS
+    active = ss.get("investment_active_tab")
+    goal_valid = state["goal"]
+    return [
+        f"build: {GOAL_WORKFLOW_DEBUG_BUILD}",
+        f"selected goal (guide_goal_choice): {ss.get('guide_goal_choice')!r}",
+        f"goal card id (beginner_goal_card): {ss.get('beginner_goal_card')!r}",
+        f"preset_applied: {ss.get('preset_applied')!r}",
+        f"health_objective: {ss.get('health_objective')!r}",
+        f"workflow step: {step_key!r} ({step_label})",
+        f"checklist goal valid: {goal_valid!r}",
+        f"investment_active_tab: {active!r}",
+        f"tab valid for current labels: {(active in labels) if active else False!r}",
+        f"redirect reason: {_workflow_redirect_reason(tab_labels=labels, st_obj=st_obj)}",
+    ]
+
+
 def render_recommended_next_step_card() -> bool:
     step_label, tab_label, message = get_recommended_next_step()
     state = _checklist_state()
@@ -232,15 +381,24 @@ def render_recommended_next_step_card() -> bool:
     with c1:
         if not state["goal"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['goal']}", type="primary", use_container_width=True, key="cta_goal")
+            if clicked:
+                st.session_state.investment_active_tab = STEP_TAB_LABEL["goal"]
         elif not state["portfolio"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['portfolio']}", type="primary", use_container_width=True, key="cta_portfolio")
+            if clicked:
+                st.session_state.investment_active_tab = STEP_TAB_LABEL["portfolio"]
         elif not state["analyze"]:
             if st.button(f"Go to {STEP_TAB_LABEL['analyze']}", type="primary", use_container_width=True, key="cta_analyze"):
+                st.session_state.investment_active_tab = STEP_TAB_LABEL["analyze"]
                 st.session_state.run_health = True
                 st.session_state.portfolio_analyzed = True
                 clicked = True
         elif not state["health"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_health")
+            if clicked:
+                st.session_state.investment_active_tab = STEP_TAB_LABEL["health"]
         elif not state["recommendations"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_rec")
+            if clicked:
+                st.session_state.investment_active_tab = STEP_TAB_LABEL["health"]
     return clicked

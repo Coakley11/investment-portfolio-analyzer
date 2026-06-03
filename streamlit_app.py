@@ -818,6 +818,15 @@ def render_sidebar() -> dict:
         if portfolio_preset in core.PORTFOLIO_PRESETS:
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
             st.session_state.preset_applied = portfolio_preset
+            if beginner:
+                from components.beginner_navigation import OBJECTIVE_TO_PRESET, mark_portfolio_built, sync_beginner_goal_keys_from_portfolio
+
+                for objective, preset_name in OBJECTIVE_TO_PRESET.items():
+                    if preset_name == portfolio_preset:
+                        st.session_state.health_objective = objective
+                        break
+                mark_portfolio_built()
+                sync_beginner_goal_keys_from_portfolio(st)
             st.session_state.pop("health_summary", None)
             st.rerun()
 
@@ -1454,7 +1463,14 @@ if beginner_mode:
     render_next_step_banner()
 
 _main_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
-ensure_investment_active_tab(st, _main_tab_labels)
+if beginner_mode:
+    try:
+        from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
+
+        sync_beginner_goal_keys_from_portfolio(st)
+    except Exception:
+        pass
+ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
 st.radio(
     "Section",
     _main_tab_labels,
