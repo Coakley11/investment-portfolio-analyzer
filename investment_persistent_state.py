@@ -18,7 +18,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-experience-save-debug-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-debug-v1"
 
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
@@ -457,6 +457,50 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
 
 
+def _record_session_sync_debug(st: Any) -> None:
+    """Capture whether this Streamlit session skipped cloud re-sync (stale in-memory mode)."""
+    ss = st.session_state
+    try:
+        from suite_cloud_state import parse_persist_timestamp
+    except ImportError:
+        parse_persist_timestamp = lambda _ts: 0.0  # type: ignore
+
+    cloud_ts = ss.get("_suite_persist_debug_cloud_ts")
+    applied = ss.get("_suite_applied_cloud_ts::investment")
+    cloud_epoch = parse_persist_timestamp(cloud_ts)
+    applied_epoch = parse_persist_timestamp(applied)
+    cloud_exp = ss.get("_suite_inv_debug_cloud_experience")
+    in_mem = current_experience_mode(st)
+    already = bool(ss.get("_suite_disk_state_restored::investment"))
+    skip_reason = ss.get("_suite_persist_restore_skip_reason")
+    restore_ran = ss.get("_suite_inv_debug_restore_ran")
+    cloud_newer = cloud_epoch > applied_epoch
+    skip_not_newer = bool(
+        already
+        and cloud_ts
+        and cloud_epoch <= applied_epoch
+        and not ss.get("_suite_persist_local_dirty::investment")
+    )
+    memory_cloud_mismatch = (
+        cloud_exp in EXPERIENCE_OPTIONS and in_mem in EXPERIENCE_OPTIONS and in_mem != cloud_exp
+    )
+
+    ss["_suite_inv_debug_session_sync"] = {
+        "already_restored_flag": already,
+        "restore_ran_this_script": restore_ran,
+        "last_applied_cloud_ts": applied,
+        "cloud_ts_peek": cloud_ts,
+        "cloud_newer_than_applied": cloud_newer,
+        "skip_resync_not_newer": skip_not_newer,
+        "in_memory_experience": in_mem,
+        "cloud_peek_experience": cloud_exp,
+        "memory_cloud_mismatch": memory_cloud_mismatch,
+        "restore_skip_reason": skip_reason,
+        "local_dirty": ss.get("_suite_persist_local_dirty::investment"),
+        "stale_session_likely": bool(memory_cloud_mismatch and (skip_not_newer or not restore_ran)),
+    }
+
+
 def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_cloud_experience"] = None
     st.session_state["_suite_inv_debug_disk_experience"] = None
@@ -503,6 +547,7 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     if not restored:
         ensure_experience_mode(st)
         st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
+    _record_session_sync_debug(st)
     return restored
 
 
@@ -630,6 +675,35 @@ def _restore_probe_lines(st: Any) -> list[str]:
     ]
     if probe.get("cloud_load_error"):
         lines.append(f"cloud probe error: {probe.get('cloud_load_error')!r}")
+    return lines
+
+
+def session_sync_trace_lines(st: Any) -> list[str]:
+    """Streamlit session re-sync gate (stale in-memory mode vs newer cloud)."""
+    ss = st.session_state
+    sync = ss.get("_suite_inv_debug_session_sync")
+    if not isinstance(sync, dict):
+        return ["session sync: not recorded"]
+    lines = [f"build: {PERSISTENCE_DEBUG_BUILD_ID}"]
+    for key in (
+        "already_restored_flag",
+        "restore_ran_this_script",
+        "last_applied_cloud_ts",
+        "cloud_ts_peek",
+        "cloud_newer_than_applied",
+        "skip_resync_not_newer",
+        "in_memory_experience",
+        "cloud_peek_experience",
+        "memory_cloud_mismatch",
+        "restore_skip_reason",
+        "local_dirty",
+        "stale_session_likely",
+    ):
+        lines.append(f"{key}: {sync.get(key)!r}")
+    lines.append(
+        "note: Streamlit session_state survives reruns and many hard refreshes; "
+        "restore_once skips when already_restored and cloud_ts <= last_applied"
+    )
     return lines
 
 
@@ -767,6 +841,8 @@ def render_persistence_debug_content(st: Any) -> None:
     source = ss.get("_suite_persist_last_restore_source") or "—"
     st.caption(f"Diagnostic build **{PERSISTENCE_DEBUG_BUILD_ID}**")
     st.caption(f"Last cloud save: **{save_at or '—'}** · restore: **{restore_at or '—'}** ({source})")
+    st.markdown("**Session sync trace (stale in-memory vs cloud)**")
+    st.code("\n".join(session_sync_trace_lines(st)), language=None)
     st.markdown("**Experience mode trace (restore / Dell)**")
     st.code("\n".join(experience_mode_trace_lines(st)), language=None)
     st.markdown("**Mode switch + autosave trace (phone / save path)**")
