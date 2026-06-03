@@ -391,7 +391,6 @@ def render_recommended_next_step_card() -> bool:
             if st.button(f"Go to {STEP_TAB_LABEL['analyze']}", type="primary", use_container_width=True, key="cta_analyze"):
                 st.session_state.investment_active_tab = STEP_TAB_LABEL["analyze"]
                 st.session_state.run_health = True
-                st.session_state.portfolio_analyzed = True
                 clicked = True
         elif not state["health"]:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_health")

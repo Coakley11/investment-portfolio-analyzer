@@ -105,7 +105,6 @@ except Exception:
     pass
 
 _PERSISTENCE_OK = False
-_PERSISTENCE_DEBUG_MAIN_SLOT = None
 
 try:
     from investment_persistent_state import (
@@ -143,7 +142,6 @@ if _PERSISTENCE_OK:
         on_reset=default_reset_investment_session,
         help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
     )
-    _PERSISTENCE_DEBUG_MAIN_SLOT = st.empty()
 
 st.markdown(
     """
@@ -637,6 +635,12 @@ def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str],
     st.session_state.health_result_fingerprint = fp
     st.session_state.health_settings_fingerprint = settings_fp
     try:
+        from investment_workflow import mark_analysis_complete
+
+        mark_analysis_complete(st)
+    except ImportError:
+        st.session_state.portfolio_analyzed = True
+    try:
         from investment_activity import log_portfolio_health_checked
 
         log_portfolio_health_checked(
@@ -770,7 +774,17 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
     if _PERSISTENCE_OK:
-        render_persistence_debug_sidebar(st)
+        try:
+            from investment_workflow import render_developer_sidebar_controls
+
+            render_developer_sidebar_controls(st)
+            from investment_workflow import developer_diagnostics_enabled
+            from investment_persistent_state import render_persistence_debug_sidebar
+
+            if developer_diagnostics_enabled(st):
+                render_persistence_debug_sidebar(st)
+        except ImportError:
+            pass
     st.sidebar.markdown("### Experience")
     ensure_analysis_date_defaults(st)
     ensure_experience_mode(st)
@@ -816,6 +830,12 @@ def render_sidebar() -> dict:
     )
     if st.sidebar.button("Apply preset", use_container_width=True, type="primary"):
         if portfolio_preset in core.PORTFOLIO_PRESETS:
+            try:
+                from investment_workflow import invalidate_workflow_from
+
+                invalidate_workflow_from("portfolio")
+            except ImportError:
+                pass
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
             st.session_state.preset_applied = portfolio_preset
             if beginner:
@@ -1517,6 +1537,12 @@ if _active_tab == _main_tab_labels[2]:
     )
     st.session_state.holdings_df = edited
     try:
+        from investment_workflow import track_holdings_dataframe
+
+        track_holdings_dataframe(edited, st)
+    except ImportError:
+        pass
+    try:
         from investment_activity import log_holdings_updated
 
         _h_fp = _holdings_fingerprint(edited)
@@ -1540,6 +1566,13 @@ if _active_tab == _main_tab_labels[2]:
 
 try:
     tickers, weights, asset_types = parse_holdings(st.session_state.holdings_df)
+    try:
+        from investment_workflow import reconcile_workflow_health, track_holdings_dataframe
+
+        track_holdings_dataframe(st.session_state.holdings_df, st)
+        reconcile_workflow_health(tickers, weights, st)
+    except ImportError:
+        pass
 except ValueError as e:
     st.error(str(e))
     if _PERSISTENCE_OK:
@@ -1689,11 +1722,17 @@ if _active_tab == _main_tab_labels[3]:
         if st.button("Analyze Portfolio", type="primary", key="beg_analyze", use_container_width=True):
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
-            st.session_state.portfolio_analyzed = True
             st.rerun()
         _beg_health = get_cached_health(tickers, weights)
         if _beg_health:
-            st.session_state.portfolio_health_reviewed = True
+            try:
+                from investment_workflow import mark_analysis_complete, mark_health_reviewed
+
+                mark_analysis_complete(st)
+                mark_health_reviewed(st)
+            except ImportError:
+                st.session_state.portfolio_analyzed = True
+                st.session_state.portfolio_health_reviewed = True
             render_beginner_analyze_results(
                 _beg_health,
                 objective=st.session_state.get("health_objective", "balanced growth"),
@@ -1854,6 +1893,14 @@ if _active_tab == _main_tab_labels[4]:
                 key="health_load_objective_preset",
                 use_container_width=False,
             ):
+                try:
+                    from investment_workflow import invalidate_workflow_from
+
+                    invalidate_workflow_from("portfolio")
+                except ImportError:
+                    st.session_state.run_health = False
+                    st.session_state.pop("health_result", None)
+                    st.session_state.pop("health_result_fingerprint", None)
                 st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[suggested_preset])
                 st.session_state.preset_applied = suggested_preset
                 st.session_state.guide_portfolio_loaded = True
@@ -1868,9 +1915,6 @@ if _active_tab == _main_tab_labels[4]:
                     )
                 except Exception:
                     pass
-                st.session_state.run_health = False
-                st.session_state.pop("health_result", None)
-                st.session_state.pop("health_result_fingerprint", None)
                 st.rerun()
 
     if not st.session_state.get("run_health", False):
@@ -1908,6 +1952,12 @@ if _active_tab == _main_tab_labels[4]:
 
         _prev_obj = st.session_state.get("_activity_health_objective")
         if _prev_obj and _prev_obj != health_objective:
+            try:
+                from investment_workflow import invalidate_workflow_from
+
+                invalidate_workflow_from("goal")
+            except ImportError:
+                pass
             try:
                 from investment_activity import log_risk_profile_changed
 
@@ -2550,9 +2600,13 @@ try:
     if _PERSISTENCE_OK:
         autosave_investment_state(st)
         finalize_persistence_debug(st)
-        if _PERSISTENCE_DEBUG_MAIN_SLOT is not None:
-            with _PERSISTENCE_DEBUG_MAIN_SLOT.container():
+        try:
+            from investment_workflow import developer_diagnostics_enabled
+
+            if developer_diagnostics_enabled(st):
                 render_persistence_debug_main(st)
+        except ImportError:
+            pass
 except Exception:
     pass
 

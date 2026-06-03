@@ -75,12 +75,17 @@ PRESET_TABS = [
 
 def _apply_preset(name: str, *, sync_objective: str | None = None) -> None:
     if name in core.PORTFOLIO_PRESETS:
+        try:
+            from investment_workflow import invalidate_workflow_from
+
+            invalidate_workflow_from("portfolio")
+        except ImportError:
+            st.session_state.run_health = False
+            st.session_state.pop("health_result", None)
+            st.session_state.pop("health_result_fingerprint", None)
         st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[name])
         st.session_state.preset_applied = name
         st.session_state.guide_portfolio_loaded = True
-        st.session_state.run_health = False
-        st.session_state.pop("health_result", None)
-        st.session_state.pop("health_result_fingerprint", None)
         if sync_objective:
             st.session_state.health_objective = sync_objective
         try:
@@ -102,6 +107,15 @@ def _auto_apply_for_goal(goal: str) -> None:
     if last == goal:
         return
     is_goal_change = last is not None
+    if is_goal_change:
+        try:
+            from investment_workflow import invalidate_workflow_from
+
+            invalidate_workflow_from("goal")
+        except ImportError:
+            st.session_state.run_health = False
+            st.session_state.pop("health_result", None)
+            st.session_state.pop("health_result_fingerprint", None)
     st.session_state.guide_last_applied_goal = goal
     st.session_state.guide_suggested_preset = preset
     st.session_state.health_objective = objective
@@ -118,9 +132,13 @@ def _auto_apply_for_goal(goal: str) -> None:
         st.session_state.preset_applied = preset
         st.session_state.guide_portfolio_loaded = True
         st.session_state.guide_auto_applied_preset = preset
-        st.session_state.run_health = False
-        st.session_state.pop("health_result", None)
-        st.session_state.pop("health_result_fingerprint", None)
+        if is_goal_change:
+            try:
+                from investment_workflow import invalidate_workflow_from
+
+                invalidate_workflow_from("portfolio")
+            except ImportError:
+                pass
         if not is_goal_change:
             try:
                 from investment_activity import log_goal_selected, log_portfolio_created

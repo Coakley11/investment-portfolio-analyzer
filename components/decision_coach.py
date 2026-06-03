@@ -121,7 +121,12 @@ def render_recommendations_panel(
     )
     st.markdown(f"#### {title}")
     st.caption(lead)
-    st.session_state.recommendations_displayed = True
+    try:
+        from investment_workflow import mark_recommendations_viewed
+
+        mark_recommendations_viewed(st)
+    except ImportError:
+        st.session_state.recommendations_displayed = True
 
     details = health.recommendation_details or [
         core.RecommendationDetail(

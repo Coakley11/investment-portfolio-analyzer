@@ -175,6 +175,17 @@ def sync_experience_after_widget(st: Any) -> None:
     ss[PERSISTED_EXPERIENCE_KEY] = mode
     ss["_suite_inv_debug_mode_final"] = mode
     if prev != mode:
+        try:
+            from components.beginner_navigation import normalize_tab_label_for_mode
+
+            raw_tab = ss.get(INVESTMENT_ACTIVE_TAB_KEY)
+            if raw_tab:
+                ss[INVESTMENT_ACTIVE_TAB_KEY] = normalize_tab_label_for_mode(
+                    str(raw_tab),
+                    beginner=(mode == "Beginner Mode"),
+                )
+        except ImportError:
+            pass
         ss["_suite_inv_debug_mode_saved"] = mode
         autosave_investment_state(st)
 
@@ -312,6 +323,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     except ImportError:
         pass
 
+    try:
+        from investment_workflow import reconcile_workflow_after_restore
+
+        reconcile_workflow_after_restore(st)
+    except ImportError:
+        pass
+
     st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
 
 
@@ -425,7 +443,14 @@ def _persistence_account_lines(st: Any) -> list[str]:
 
 
 def render_persistence_debug_content(st: Any) -> None:
-    """Shared debug body (main page + sidebar)."""
+    """Shared debug body (main page + sidebar). Requires developer diagnostics enabled."""
+    try:
+        from investment_workflow import developer_diagnostics_enabled
+
+        if not developer_diagnostics_enabled(st):
+            return
+    except ImportError:
+        return
     ss = st.session_state
     save_at = ss.get("_suite_persist_last_save_at")
     restore_at = ss.get("_suite_persist_last_restore_at")
@@ -458,14 +483,28 @@ def render_persistence_debug_content(st: Any) -> None:
 
 
 def render_persistence_debug_sidebar(st: Any) -> None:
-    """Top of sidebar — expanded so mobile users see it without hunting."""
-    with st.sidebar.expander("Persistence diagnostics", expanded=True):
+    """Sidebar persistence trace (developer toggle must be on)."""
+    try:
+        from investment_workflow import developer_diagnostics_enabled
+
+        if not developer_diagnostics_enabled(st):
+            return
+    except ImportError:
+        return
+    with st.sidebar.expander("Persistence diagnostics", expanded=False):
         render_persistence_debug_content(st)
 
 
 def render_persistence_debug_main(st: Any) -> None:
-    """Main page banner — filled from a top-of-page empty slot after init completes."""
-    with st.expander("Persistence diagnostics (experience mode)", expanded=True):
+    """Main page persistence trace (developer toggle must be on)."""
+    try:
+        from investment_workflow import developer_diagnostics_enabled
+
+        if not developer_diagnostics_enabled(st):
+            return
+    except ImportError:
+        return
+    with st.expander("Persistence diagnostics (developer)", expanded=False):
         render_persistence_debug_content(st)
 
 

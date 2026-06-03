@@ -172,7 +172,6 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                     st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[card["preset"]])
                     st.session_state.preset_applied = card["preset"]
                     st.session_state.guide_portfolio_loaded = True
-                    mark_portfolio_built()
                     try:
                         from investment_activity import log_goal_selected, log_portfolio_created
 
@@ -188,9 +187,15 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                         )
                     except Exception:
                         pass
-                st.session_state.run_health = False
-                st.session_state.pop("health_result", None)
-                st.session_state.pop("health_result_fingerprint", None)
+                try:
+                    from investment_workflow import invalidate_workflow_from
+
+                    invalidate_workflow_from("goal", st)
+                except ImportError:
+                    st.session_state.run_health = False
+                    st.session_state.pop("health_result", None)
+                    st.session_state.pop("health_result_fingerprint", None)
+                mark_portfolio_built(st)
                 st.rerun()
     if st.session_state.get("preset_applied"):
         st.success(f"Portfolio loaded: **{st.session_state.preset_applied}**")
