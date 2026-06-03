@@ -208,6 +208,12 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                         beginner=True,
                         prior=_prior_goal,
                     )
+                    from investment_workflow import capture_goal_selection_debug
+
+                    if _prior_goal is not None:
+                        capture_goal_selection_debug(
+                            st, before=_prior_goal, card=card, source="beginner_card"
+                        )
                 except ImportError:
                     st.session_state.run_health = False
                     st.session_state.pop("health_result", None)
@@ -216,6 +222,12 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                 st.rerun()
     if st.session_state.get("preset_applied"):
         st.success(f"Portfolio loaded: **{st.session_state.preset_applied}**")
+    try:
+        from investment_workflow import render_goal_selection_diagnostics
+
+        render_goal_selection_diagnostics(st, beginner_mode=True)
+    except ImportError:
+        pass
 
 
 def render_portfolio_visual_table(

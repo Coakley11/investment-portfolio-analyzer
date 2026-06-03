@@ -21,6 +21,7 @@ StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
 WORKFLOW_UI_BUILD = "2026-06-03-workflow-ui-v3"
+_GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
     "goal",
     "portfolio",
@@ -106,11 +107,200 @@ def clear_workflow_intent(st_obj: Any | None = None) -> None:
 
 
 def snapshot_plan_labels(st_obj: Any | None = None) -> dict[str, str]:
+    ss = _sess(st_obj)
     return {
         "goal": goal_display_label(st_obj),
+        "goal_banner": goal_display_label(st_obj),
+        "beginner_goal_card": str(ss.get("beginner_goal_card") or ""),
+        "guide_goal_choice": str(ss.get("guide_goal_choice") or ""),
         "portfolio": portfolio_display_label(st_obj),
-        "objective": str(_sess(st_obj).get("health_objective") or ""),
+        "preset_applied": str(ss.get("preset_applied") or ""),
+        "objective": str(ss.get("health_objective") or ""),
+        "holdings_fp": _holdings_fingerprint_safe(st_obj),
     }
+
+
+def _holdings_fingerprint_safe(st_obj: Any | None = None) -> str:
+    try:
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = _sess(st_obj).get("holdings_df")
+        if df is None:
+            return ""
+        return _holdings_fingerprint(df)
+    except Exception:
+        return ""
+
+
+def classify_goal_change_verdict(before: dict[str, str], after: dict[str, str]) -> str:
+    """
+    Classify goal-selection outcome for diagnostics.
+
+    A — goal keys did not change
+    B — goal changed but portfolio preset / holdings fingerprint unchanged
+    C — goal and portfolio changed; banner may still look unchanged (display mismatch)
+    OK — goal and portfolio both changed as expected
+    """
+    g_before = before.get("guide_goal_choice") or before.get("goal")
+    g_after = after.get("guide_goal_choice") or after.get("goal")
+    card_before = before.get("beginner_goal_card", "")
+    card_after = after.get("beginner_goal_card", "")
+    preset_before = before.get("preset_applied") or before.get("portfolio")
+    preset_after = after.get("preset_applied") or after.get("portfolio")
+    fp_before = before.get("holdings_fp", "")
+    fp_after = after.get("holdings_fp", "")
+    obj_before = before.get("objective", "")
+    obj_after = after.get("objective", "")
+
+    goal_changed = (g_before != g_after) or (card_before != card_after) or (obj_before != obj_after)
+    portfolio_changed = (preset_before != preset_after) or (
+        fp_before != fp_after and bool(fp_before or fp_after)
+    )
+
+    if not goal_changed:
+        return "A"
+    if goal_changed and not portfolio_changed:
+        return "B"
+    if goal_changed and portfolio_changed:
+        banner_before = before.get("goal_banner") or g_before
+        banner_after = after.get("goal_banner") or g_after
+        if banner_before == banner_after:
+            return "C"
+        return "OK"
+    return "?"
+
+
+def capture_goal_selection_debug(
+    st_obj: Any,
+    *,
+    before: dict[str, str],
+    card: dict[str, str] | None = None,
+    source: str = "beginner_card",
+) -> None:
+    """Store before/after session snapshots for temporary goal-change diagnostics."""
+    ss = _sess(st_obj)
+    after = snapshot_plan_labels(st_obj)
+    after["beginner_goal_card"] = str(ss.get("beginner_goal_card") or "")
+    verdict = classify_goal_change_verdict(before, after)
+    ss[_GOAL_SELECTION_DEBUG_KEY] = {
+        "source": source,
+        "verdict": verdict,
+        "verdict_label": {
+            "A": "Goal did not change in session",
+            "B": "Goal changed but portfolio preset/holdings did not",
+            "C": "Goal and portfolio changed; plan banner goal line may look unchanged",
+            "OK": "Goal and portfolio both changed",
+        }.get(verdict, "Unknown"),
+        "before": before,
+        "after": after,
+        "card": dict(card) if card else None,
+        "last_goal_change_record": ss.get("_workflow_last_goal_change"),
+        "plan_banner_goal_line": goal_display_label(st_obj),
+    }
+
+
+def goal_card_collision_rows() -> list[dict[str, str]]:
+    """Rows showing beginner cards that share preset or guide_goal_choice."""
+    try:
+        from components.beginner_coach import GOAL_CARDS
+    except ImportError:
+        return []
+    rows: list[dict[str, str]] = []
+    for card in GOAL_CARDS:
+        rows.append(
+            {
+                "card_id": card["id"],
+                "title": card["title"],
+                "goal_key": card["goal_key"],
+                "preset": card["preset"],
+                "objective": card["objective"],
+            }
+        )
+    return rows
+
+
+def render_goal_selection_diagnostics(st_obj: Any, *, beginner_mode: bool) -> None:
+    """Temporary diagnostics panel — remove after goal-change issue is confirmed fixed."""
+    ss = _sess(st_obj)
+    with st.expander("🔬 Goal change diagnostics (temporary)", expanded=True):
+        st.caption(
+            "Verdict: **A** = goal not changing · **B** = goal changed, same portfolio · "
+            "**C** = data changed but banner looks the same · **OK** = expected change"
+        )
+        dbg = ss.get(_GOAL_SELECTION_DEBUG_KEY)
+        if dbg:
+            verdict = dbg.get("verdict", "?")
+            st.warning(f"**Last selection verdict: {verdict}** — {dbg.get('verdict_label', '')}")
+            st.markdown("**Before → after (last goal card click or Advanced radio change)**")
+            b = dbg.get("before") or {}
+            a = dbg.get("after") or {}
+            st.table(
+                [
+                    {
+                        "field": "guide_goal_choice",
+                        "before": b.get("guide_goal_choice"),
+                        "after": a.get("guide_goal_choice"),
+                        "changed": b.get("guide_goal_choice") != a.get("guide_goal_choice"),
+                    },
+                    {
+                        "field": "beginner_goal_card",
+                        "before": b.get("beginner_goal_card"),
+                        "after": a.get("beginner_goal_card"),
+                        "changed": b.get("beginner_goal_card") != a.get("beginner_goal_card"),
+                    },
+                    {
+                        "field": "health_objective",
+                        "before": b.get("objective"),
+                        "after": a.get("objective"),
+                        "changed": b.get("objective") != a.get("objective"),
+                    },
+                    {
+                        "field": "preset_applied",
+                        "before": b.get("preset_applied"),
+                        "after": a.get("preset_applied"),
+                        "changed": b.get("preset_applied") != a.get("preset_applied"),
+                    },
+                    {
+                        "field": "holdings fingerprint",
+                        "before": b.get("holdings_fp"),
+                        "after": a.get("holdings_fp"),
+                        "changed": b.get("holdings_fp") != a.get("holdings_fp"),
+                    },
+                    {
+                        "field": "plan banner goal line",
+                        "before": b.get("goal_banner"),
+                        "after": a.get("goal_banner"),
+                        "changed": b.get("goal_banner") != a.get("goal_banner"),
+                    },
+                ]
+            )
+            if dbg.get("card"):
+                st.markdown("**Card clicked**")
+                st.json(dbg["card"])
+            if dbg.get("last_goal_change_record"):
+                st.markdown("**`_workflow_last_goal_change` record** (banner footer)")
+                st.json(dbg["last_goal_change_record"])
+        else:
+            st.info("Select a goal card to populate before/after snapshots.")
+
+        st.markdown("**Current session (live)**")
+        live = snapshot_plan_labels(st_obj)
+        live["beginner_goal_card"] = str(ss.get("beginner_goal_card") or "")
+        st.json(live)
+
+        st.markdown("**Beginner cards that share the same preset or goal key**")
+        collisions = goal_card_collision_rows()
+        if collisions:
+            st.dataframe(collisions, use_container_width=True, hide_index=True)
+            st.caption(
+                "⚠️ **Long-Term Growth** and **Balanced** both use preset **Balanced** and "
+                "goal key **Grow my money long term** — switching between them changes the "
+                "highlighted card only, not the plan banner or holdings."
+            )
+
+        if not beginner_mode:
+            st.markdown("**Advanced** uses the same `guide_goal_choice` session key as Beginner.")
+            st.write(f"Radio value now: `{ss.get('guide_goal_choice')!r}`")
 
 
 def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
@@ -232,9 +422,11 @@ def record_goal_selection(
     ss = _sess(st_obj)
     before = prior or ss.get(_WORKFLOW_CHANGE_SNAPSHOT_KEY) or {}
     ss["_workflow_last_goal_change"] = {
-        "from_goal": before.get("goal"),
-        "from_portfolio": before.get("portfolio"),
-        "to_goal": goal_title,
+        "from_goal": before.get("guide_goal_choice") or before.get("goal"),
+        "from_portfolio": before.get("preset_applied") or before.get("portfolio"),
+        "from_objective": before.get("objective"),
+        "to_goal": str(_sess(st_obj).get("guide_goal_choice") or goal_title),
+        "to_goal_title": goal_title,
         "to_preset": preset or portfolio_display_label(st_obj),
         "to_objective": objective,
     }
@@ -611,11 +803,16 @@ def render_plan_context_banner(st_obj: Any, *, beginner: bool) -> None:
     last_change = ss.get("_workflow_last_goal_change")
     change_note = ""
     if isinstance(last_change, dict) and last_change.get("to_goal"):
+        from_p = last_change.get("from_preset") or last_change.get("from_portfolio") or "—"
+        to_p = last_change.get("to_preset") or "—"
+        from_obj = last_change.get("from_objective") or "—"
+        to_obj = last_change.get("to_objective") or "—"
         change_note = (
             f'<div style="color:#86efac;font-size:0.82rem;margin-top:0.45rem;">'
             f'Last goal update: <strong>{last_change.get("from_goal") or "—"}</strong> '
             f'→ <strong>{last_change.get("to_goal")}</strong>'
-            f' · Portfolio: <strong>{last_change.get("to_preset") or "—"}</strong></div>'
+            f' · Portfolio: <strong>{from_p}</strong> → <strong>{to_p}</strong>'
+            f' · Objective: <strong>{from_obj}</strong> → <strong>{to_obj}</strong></div>'
         )
 
     analysis_color = "#86efac" if "Up to date" in analysis else (

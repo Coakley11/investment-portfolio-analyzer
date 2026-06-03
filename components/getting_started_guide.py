@@ -108,11 +108,16 @@ def _auto_apply_for_goal(goal: str) -> None:
         return
     is_goal_change = last is not None
     prior = None
+    try:
+        from investment_workflow import snapshot_plan_labels
+
+        prior = snapshot_plan_labels(st)
+    except ImportError:
+        prior = None
     if is_goal_change:
         try:
-            from investment_workflow import invalidate_workflow_from, snapshot_plan_labels
+            from investment_workflow import invalidate_workflow_from
 
-            prior = snapshot_plan_labels(st)
             invalidate_workflow_from("goal")
         except ImportError:
             st.session_state.run_health = False
@@ -142,7 +147,7 @@ def _auto_apply_for_goal(goal: str) -> None:
             except ImportError:
                 pass
             try:
-                from investment_workflow import record_goal_selection
+                from investment_workflow import capture_goal_selection_debug, record_goal_selection
 
                 record_goal_selection(
                     st,
@@ -152,6 +157,13 @@ def _auto_apply_for_goal(goal: str) -> None:
                     beginner=False,
                     prior=prior,
                 )
+                if prior is not None:
+                    capture_goal_selection_debug(
+                        st,
+                        before=prior,
+                        card={"id": goal, "title": goal, "preset": preset, "objective": objective},
+                        source="advanced_radio",
+                    )
             except ImportError:
                 pass
         if not is_goal_change:
@@ -223,6 +235,12 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
             st.success(f"✓ Loaded the **{preset}** portfolio. See Step 2 for details.")
             st.session_state.pop("guide_auto_applied_preset", None)
         st.caption(f"Portfolio objective: **{objective.replace('_', ' ')}**")
+        try:
+            from investment_workflow import render_goal_selection_diagnostics
+
+            render_goal_selection_diagnostics(st, beginner_mode=False)
+        except ImportError:
+            pass
 
     with step_tabs[1]:
         st.markdown("#### Step 2 — Pick a portfolio type")

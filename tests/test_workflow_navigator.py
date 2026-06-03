@@ -9,6 +9,7 @@ from investment_workflow import (
     WORKFLOW_CORE_STEPS,
     begin_goal_change_workflow,
     begin_portfolio_rebuild_workflow,
+    classify_goal_change_verdict,
     invalidate_workflow_from,
     needs_analytics_load,
     record_workflow_health_status,
@@ -115,6 +116,44 @@ class TestWorkflowTrust(unittest.TestCase):
         snap = snapshot_plan_labels(st)
         self.assertEqual(snap["goal"], "Generate income")
         self.assertEqual(snap["portfolio"], "Dividend Income")
+
+    def test_verdict_b_same_preset_different_card(self) -> None:
+        before = {
+            "guide_goal_choice": "Grow my money long term",
+            "beginner_goal_card": "balanced",
+            "preset_applied": "Balanced",
+            "objective": "balanced growth",
+            "holdings_fp": "SPY:60.0:Equity|BND:40.0:Bonds",
+            "goal_banner": "Grow my money long term",
+        }
+        after = {
+            "guide_goal_choice": "Grow my money long term",
+            "beginner_goal_card": "growth",
+            "preset_applied": "Balanced",
+            "objective": "balanced growth",
+            "holdings_fp": "SPY:60.0:Equity|BND:40.0:Bonds",
+            "goal_banner": "Grow my money long term",
+        }
+        self.assertEqual(classify_goal_change_verdict(before, after), "B")
+
+    def test_verdict_ok_retirement(self) -> None:
+        before = {
+            "guide_goal_choice": "Grow my money long term",
+            "beginner_goal_card": "balanced",
+            "preset_applied": "Balanced",
+            "objective": "balanced growth",
+            "holdings_fp": "fp-a",
+            "goal_banner": "Grow my money long term",
+        }
+        after = {
+            "guide_goal_choice": "Save for retirement",
+            "beginner_goal_card": "retirement",
+            "preset_applied": "Retirement",
+            "objective": "retirement",
+            "holdings_fp": "fp-b",
+            "goal_banner": "Save for retirement",
+        }
+        self.assertEqual(classify_goal_change_verdict(before, after), "OK")
 
 
 if __name__ == "__main__":
