@@ -9,10 +9,22 @@ loads the newer of cloud vs local disk and applies it to ``st.session_state``.
 from __future__ import annotations
 
 import copy
-from datetime import datetime
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 FULL_SESSION_KEY = "full_session"
+
+PickSource = Literal["cloud", "disk", "none"]
+
+
+@dataclass(frozen=True)
+class RestorePickResult:
+    state: dict[str, Any]
+    source: PickSource
+    reason: str
+    cloud_ts: str | None
+    disk_ts: str | None
 
 _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
     "music": ("suite_resume", "suite_page", "suite_pick_key", "suite_song"),
@@ -49,14 +61,29 @@ def has_resume_query_params(st: Any, app_key: str) -> bool:
     return False
 
 
-def _parse_ts(ts: str | None) -> float:
+def parse_persist_timestamp(ts: str | None) -> float:
+    """Parse ISO / Supabase timestamps to UTC epoch seconds (naive => UTC)."""
     if not ts:
         return 0.0
-    s = str(ts).strip().replace("Z", "+00:00")
+    s = str(ts).strip()
+    if not s:
+        return 0.0
+    if "T" not in s and " " in s:
+        s = s.replace(" ", "T", 1)
+    s = s.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(s[:26]).timestamp()
+        dt = datetime.fromisoformat(s[:32])
     except ValueError:
         return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.timestamp()
+
+
+def _parse_ts(ts: str | None) -> float:
+    return parse_persist_timestamp(ts)
 
 
 def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
@@ -109,21 +136,59 @@ def save_cloud_full_session(
         pass
 
 
+def pick_restore_session(
+    cloud_state: dict[str, Any],
+    cloud_ts: str | None,
+    disk_state: dict[str, Any],
+    disk_ts: str | None,
+    *,
+    local_dirty: bool = False,
+    prefer_cloud_on_tie: bool = True,
+) -> RestorePickResult:
+    """
+    Choose restore payload for direct open / cloud re-sync.
+
+    When ``local_dirty`` is False (fresh open, no unsaved edits on this device),
+    the newer timestamp wins; ties favor cloud for cross-device sync.
+    When ``local_dirty`` is True, keep local disk over remote cloud.
+    """
+    cloud_epoch = _parse_ts(cloud_ts)
+    disk_epoch = _parse_ts(disk_ts)
+
+    if not cloud_state and not disk_state:
+        return RestorePickResult({}, "none", "empty", cloud_ts, disk_ts)
+    if cloud_state and not disk_state:
+        return RestorePickResult(cloud_state, "cloud", "disk missing", cloud_ts, disk_ts)
+    if disk_state and not cloud_state:
+        return RestorePickResult(disk_state, "disk", "cloud missing", cloud_ts, disk_ts)
+
+    if local_dirty:
+        return RestorePickResult(
+            disk_state,
+            "disk",
+            "local unsaved edits",
+            cloud_ts,
+            disk_ts,
+        )
+
+    if cloud_epoch > disk_epoch:
+        return RestorePickResult(cloud_state, "cloud", "cloud newer", cloud_ts, disk_ts)
+    if disk_epoch > cloud_epoch:
+        return RestorePickResult(disk_state, "disk", "disk newer", cloud_ts, disk_ts)
+    if prefer_cloud_on_tie:
+        return RestorePickResult(cloud_state, "cloud", "tie → cloud", cloud_ts, disk_ts)
+    return RestorePickResult(disk_state, "disk", "tie → disk", cloud_ts, disk_ts)
+
+
 def pick_newer_session(
     cloud_state: dict[str, Any],
     cloud_ts: str | None,
     disk_state: dict[str, Any],
     disk_ts: str | None,
 ) -> dict[str, Any]:
-    if cloud_state and not disk_state:
-        return cloud_state
-    if disk_state and not cloud_state:
-        return disk_state
-    if not cloud_state and not disk_state:
-        return {}
-    if _parse_ts(cloud_ts) >= _parse_ts(disk_ts):
-        return cloud_state
-    return disk_state
+    return pick_restore_session(
+        cloud_state, cloud_ts, disk_state, disk_ts, local_dirty=False
+    ).state
 
 
 def session_page_summary(app_id: str, state: dict[str, Any]) -> tuple[str, str]:

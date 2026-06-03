@@ -18,7 +18,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-diagnostic-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-diagnostic-v2"
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -305,6 +305,9 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_restore_source"] = st.session_state.get(
         "_suite_persist_last_restore_source"
     )
+    st.session_state["_suite_inv_debug_pick_reason"] = st.session_state.get(
+        "_suite_persist_last_restore_reason"
+    )
     if not restored:
         ensure_experience_mode(st)
         st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
@@ -326,6 +329,11 @@ def experience_mode_trace_lines(st: Any) -> list[str]:
         f"cloud blob: {ss.get('_suite_inv_debug_cloud_experience')!r}",
         f"disk blob: {ss.get('_suite_inv_debug_disk_experience')!r}",
         f"picked blob: {ss.get('_suite_inv_debug_picked_experience')!r}",
+        f"cloud timestamp: {ss.get('_suite_persist_debug_cloud_ts')!r}",
+        f"disk timestamp: {ss.get('_suite_persist_debug_disk_ts')!r}",
+        f"pick source: {ss.get('_suite_persist_debug_pick_source')!r}",
+        f"pick reason: {ss.get('_suite_persist_debug_pick_reason')!r}",
+        f"local dirty: {ss.get('_suite_persist_local_dirty::investment')!r}",
         f"after restore: {ss.get('_suite_inv_debug_mode_after_restore')!r}",
         f"saved to cloud: {ss.get('_suite_inv_debug_mode_saved')!r}",
         f"after init: {ss.get('_suite_inv_debug_mode_final')!r}",

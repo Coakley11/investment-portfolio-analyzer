@@ -27,6 +27,9 @@ _SESSION_BANNER_KEY = "_suite_persist_banner"
 _SESSION_SAVED_FLASH_KEY = "_suite_persist_saved_flash"
 _SESSION_INVALID_WARN_KEY = "_suite_persist_invalid_warn"
 _SESSION_CLOUD_BANNER_KEY = "_suite_persist_cloud_banner"
+_LOCAL_DIRTY_PREFIX = "_suite_persist_local_dirty::"
+_APPLIED_CLOUD_TS_PREFIX = "_suite_applied_cloud_ts::"
+_RESTORED_FP_PREFIX = "_suite_restored_state_fp::"
 
 
 def _utc_now_iso() -> str:
@@ -124,6 +127,35 @@ def reset_user_state(app_id: str) -> bool:
         return False
 
 
+def _local_dirty_key(app_id: str) -> str:
+    return f"{_LOCAL_DIRTY_PREFIX}{app_id}"
+
+
+def _applied_cloud_ts_key(app_id: str) -> str:
+    return f"{_APPLIED_CLOUD_TS_PREFIX}{app_id}"
+
+
+def _restored_fp_key(app_id: str) -> str:
+    return f"{_RESTORED_FP_PREFIX}{app_id}"
+
+
+def _record_restore_debug_meta(
+    st: Any,
+    app_id: str,
+    *,
+    cloud_ts: str | None,
+    disk_ts: str | None,
+    pick_source: str,
+    pick_reason: str,
+    local_dirty: bool,
+) -> None:
+    st.session_state["_suite_persist_debug_cloud_ts"] = cloud_ts
+    st.session_state["_suite_persist_debug_disk_ts"] = disk_ts
+    st.session_state["_suite_persist_debug_pick_source"] = pick_source
+    st.session_state["_suite_persist_debug_pick_reason"] = pick_reason
+    st.session_state[_local_dirty_key(app_id)] = local_dirty
+
+
 def restore_once(
     st: Any,
     app_id: str,
@@ -131,13 +163,16 @@ def restore_once(
     apply_state: Callable[[Any, dict[str, Any]], None],
 ) -> bool:
     """
-    Restore once per browser session: cloud vs disk (newer wins).
+    Restore on direct open; re-apply when cloud is newer than last apply.
 
-    Skipped when Continue/deep-link query params are present.
+    Skipped when Continue/deep-link query params are present, or when this
+    device has unsaved local edits (``_suite_persist_local_dirty``).
     """
+    st.session_state["_suite_persist_app_id"] = app_id
     flag = f"{_SESSION_RESTORED_PREFIX}{app_id}"
-    if st.session_state.get(flag):
-        return False
+    dirty_key = _local_dirty_key(app_id)
+    applied_cloud_key = _applied_cloud_ts_key(app_id)
+    local_dirty = bool(st.session_state.get(dirty_key))
 
     skip_cloud = False
     try:
@@ -151,28 +186,75 @@ def restore_once(
         st.session_state[flag] = True
         return False
 
-    st.session_state[flag] = True
-
     disk_state, disk_warn, disk_ts = _load_raw(app_id)
     if disk_warn:
         st.session_state[_SESSION_INVALID_WARN_KEY] = disk_warn
 
     cloud_state: dict[str, Any] = {}
     cloud_ts: str | None = None
+    pick_source = "none"
+    pick_reason = "none"
     from_cloud = False
+
     try:
-        from suite_cloud_state import load_cloud_full_session, pick_newer_session
+        from suite_cloud_state import load_cloud_full_session, pick_restore_session, parse_persist_timestamp
 
         cloud_state, cloud_ts = load_cloud_full_session(app_id)
-        state = pick_newer_session(cloud_state, cloud_ts, disk_state, disk_ts)
-        if cloud_state and state is cloud_state:
-            from_cloud = True
-        elif cloud_state and disk_state and state is disk_state:
-            from_cloud = _parse_ts_simple(cloud_ts) > _parse_ts_simple(disk_ts)
+        already_restored = st.session_state.get(flag)
+        applied_cloud_ts = st.session_state.get(applied_cloud_key)
+
+        if already_restored:
+            if local_dirty:
+                _record_restore_debug_meta(
+                    st,
+                    app_id,
+                    cloud_ts=cloud_ts,
+                    disk_ts=disk_ts,
+                    pick_source="skipped",
+                    pick_reason="local unsaved edits",
+                    local_dirty=True,
+                )
+                return False
+            if cloud_state and parse_persist_timestamp(cloud_ts) <= parse_persist_timestamp(applied_cloud_ts):
+                _record_restore_debug_meta(
+                    st,
+                    app_id,
+                    cloud_ts=cloud_ts,
+                    disk_ts=disk_ts,
+                    pick_source="skipped",
+                    pick_reason="cloud not newer than last apply",
+                    local_dirty=False,
+                )
+                return False
+
+        st.session_state[flag] = True
+
+        picked = pick_restore_session(
+            cloud_state,
+            cloud_ts,
+            disk_state,
+            disk_ts,
+            local_dirty=local_dirty,
+        )
+        state = picked.state
+        pick_source = picked.source
+        pick_reason = picked.reason
+        from_cloud = picked.source == "cloud"
+
+        st.session_state["_suite_persist_debug_cloud_ts"] = cloud_ts
+        st.session_state["_suite_persist_debug_disk_ts"] = disk_ts
+        st.session_state["_suite_persist_debug_pick_source"] = pick_source
+        st.session_state["_suite_persist_debug_pick_reason"] = pick_reason
     except ImportError:
+        st.session_state[flag] = True
         state = disk_state
+        pick_source = "disk"
+        pick_reason = "cloud module missing"
     except Exception:
+        st.session_state[flag] = True
         state = disk_state
+        pick_source = "disk"
+        pick_reason = "cloud load error"
 
     if not state:
         return False
@@ -185,8 +267,24 @@ def restore_once(
         )
         return False
 
+    try:
+        import hashlib
+        import json
+
+        blob = json.dumps(state, sort_keys=True, default=str)
+        st.session_state[_restored_fp_key(app_id)] = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+    except Exception:
+        pass
+
+    st.session_state[applied_cloud_key] = cloud_ts
+    st.session_state[dirty_key] = False
+
+    if from_cloud:
+        save_user_state(app_id, state)
+
     st.session_state["_suite_persist_last_restore_at"] = _utc_now_iso()
-    st.session_state["_suite_persist_last_restore_source"] = "cloud" if from_cloud else "disk"
+    st.session_state["_suite_persist_last_restore_source"] = pick_source
+    st.session_state["_suite_persist_last_restore_reason"] = pick_reason
 
     if from_cloud:
         st.session_state[_SESSION_CLOUD_BANNER_KEY] = True
@@ -196,12 +294,17 @@ def restore_once(
 
 
 def _parse_ts_simple(ts: str | None) -> float:
-    if not ts:
-        return 0.0
     try:
-        return datetime.fromisoformat(str(ts).strip().replace("Z", "+00:00")[:26]).timestamp()
-    except ValueError:
-        return 0.0
+        from suite_cloud_state import parse_persist_timestamp
+
+        return parse_persist_timestamp(ts)
+    except ImportError:
+        if not ts:
+            return 0.0
+        try:
+            return datetime.fromisoformat(str(ts).strip().replace("Z", "+00:00")[:26]).timestamp()
+        except ValueError:
+            return 0.0
 
 
 def autosave_if_changed(
@@ -218,6 +321,9 @@ def autosave_if_changed(
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
         key = f"_suite_autosave_fp::{app_id}"
+        restored_fp = st.session_state.get(_restored_fp_key(app_id))
+        if restored_fp and fp != restored_fp:
+            st.session_state[_local_dirty_key(app_id)] = True
         if st.session_state.get(key) == fp:
             return
         saved_disk = save_user_state(app_id, state)
@@ -232,6 +338,9 @@ def autosave_if_changed(
             pass
         if saved_disk or saved_cloud:
             st.session_state[key] = fp
+            st.session_state[_restored_fp_key(app_id)] = fp
+            st.session_state[_local_dirty_key(app_id)] = False
+            st.session_state[_applied_cloud_ts_key(app_id)] = _utc_now_iso()
             st.session_state["_suite_persist_last_save_at"] = _utc_now_iso()
             st.session_state[_SESSION_SAVED_FLASH_KEY] = True
     except Exception:
@@ -272,7 +381,9 @@ def render_reset_controls(
                     for k in list(st.session_state.keys()):
                         if str(k).startswith(_SESSION_RESTORED_PREFIX) or str(k).startswith(
                             "_suite_autosave_fp::"
-                        ):
+                        ) or str(k).startswith(_LOCAL_DIRTY_PREFIX) or str(k).startswith(
+                            _APPLIED_CLOUD_TS_PREFIX
+                        ) or str(k).startswith(_RESTORED_FP_PREFIX):
                             st.session_state.pop(k, None)
                     st.session_state.pop(confirm_key, None)
                     on_reset(st)
