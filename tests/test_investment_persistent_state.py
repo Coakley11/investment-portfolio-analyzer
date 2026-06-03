@@ -74,6 +74,16 @@ def test_ensure_experience_mode_seeds_widget_from_persisted_copy():
     assert st.session_state["experience"] == "Advanced Mode"
 
 
+def test_ensure_experience_mode_widget_wins_when_both_set():
+    """Documents init bug: stale widget key overrides restored persisted copy."""
+    st = _FakeSt()
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["experience"] = "Beginner Mode"
+    ips.ensure_experience_mode(st)
+    assert st.session_state["experience"] == "Beginner Mode"
+    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Beginner Mode"
+
+
 def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
     st = _FakeSt()
     st.session_state["experience"] = "Advanced Mode"

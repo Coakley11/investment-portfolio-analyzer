@@ -19,7 +19,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-workflow-sync-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-experience-debug-v1"
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -188,6 +188,10 @@ def validate_state_option(st: Any, key: str, options: list[str] | tuple[str, ...
 def ensure_experience_mode(st: Any) -> None:
     """Seed the sidebar radio from persisted/cloud mode before the widget renders."""
     ss = st.session_state
+    ss["_suite_inv_debug_experience_pre_ensure"] = {
+        "widget": ss.get(EXPERIENCE_KEY),
+        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
+    }
     persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
     widget = ss.get(EXPERIENCE_KEY)
     if persisted in EXPERIENCE_OPTIONS and widget not in EXPERIENCE_OPTIONS:
@@ -197,6 +201,10 @@ def ensure_experience_mode(st: Any) -> None:
     default = persisted if persisted in EXPERIENCE_OPTIONS else EXPERIENCE_OPTIONS[0]
     validate_state_option(st, EXPERIENCE_KEY, EXPERIENCE_OPTIONS, default)
     ss[PERSISTED_EXPERIENCE_KEY] = ss[EXPERIENCE_KEY]
+    ss["_suite_inv_debug_experience_post_ensure"] = {
+        "widget": ss.get(EXPERIENCE_KEY),
+        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
+    }
 
 
 def sync_experience_after_widget(st: Any) -> None:
@@ -208,6 +216,11 @@ def sync_experience_after_widget(st: Any) -> None:
     prev = ss.get(PERSISTED_EXPERIENCE_KEY)
     ss[PERSISTED_EXPERIENCE_KEY] = mode
     ss["_suite_inv_debug_mode_final"] = mode
+    ss["_suite_inv_debug_experience_post_widget"] = {
+        "widget": ss.get(EXPERIENCE_KEY),
+        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
+        "active": current_experience_mode(st),
+    }
     if prev != mode:
         try:
             from components.beginner_navigation import normalize_tab_label_for_mode
@@ -416,6 +429,9 @@ def restore_investment_disk_state_once(st: Any) -> bool:
         cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
         if cloud_state:
             st.session_state["_suite_inv_debug_cloud_experience"] = cloud_state.get(EXPERIENCE_KEY)
+            st.session_state["_suite_inv_debug_cloud_persisted_experience"] = cloud_state.get(
+                PERSISTED_EXPERIENCE_KEY
+            )
         elif diag.get("cloud_has_full_session") is False and diag.get("cloud_row_found"):
             st.session_state["_suite_persist_cloud_peek_error"] = (
                 "cloud row exists but metrics.full_session is empty"
@@ -426,6 +442,9 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     disk_state, _disk_warn = load_user_state(APP_ID)
     if disk_state:
         st.session_state["_suite_inv_debug_disk_experience"] = disk_state.get(EXPERIENCE_KEY)
+        st.session_state["_suite_inv_debug_disk_persisted_experience"] = disk_state.get(
+            PERSISTED_EXPERIENCE_KEY
+        )
 
     restored = restore_once(
         st,
@@ -445,8 +464,29 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     return restored
 
 
-def autosave_investment_state(st: Any) -> None:
+def autosave_investment_state(st: Any, *, end_of_run: bool = False) -> None:
+    ss = st.session_state
+    fp_key = "_suite_autosave_fp::investment"
+    fp_before = ss.get(fp_key)
+    attempt_mode = current_experience_mode(st)
+    if end_of_run:
+        ss["_suite_inv_debug_eor_autosave_attempt_mode"] = attempt_mode
+    else:
+        ss["_suite_inv_debug_autosave_attempt_mode"] = attempt_mode
     autosave_if_changed(st, APP_ID, build_state=build_investment_disk_state)
+    fp_after = ss.get(fp_key)
+    if fp_after != fp_before and ss.get("_suite_persist_last_save_at"):
+        written_key = (
+            "_suite_inv_debug_eor_autosave_written_mode"
+            if end_of_run
+            else "_suite_inv_debug_autosave_written_mode"
+        )
+        ss[written_key] = attempt_mode
+        if end_of_run:
+            cloud_at_open = ss.get("_suite_inv_debug_cloud_experience")
+            ss["_suite_inv_debug_autosave_wrote_beginner_over_cloud_advanced"] = (
+                cloud_at_open == "Advanced Mode" and attempt_mode == EXPERIENCE_OPTIONS[0]
+            )
 
 
 def finalize_persistence_debug(st: Any) -> None:
@@ -477,19 +517,61 @@ def _restore_probe_lines(st: Any) -> list[str]:
 
 def experience_mode_trace_lines(st: Any) -> list[str]:
     ss = st.session_state
+
+    def _stage_experience(key: str) -> str | None:
+        snap = ss.get(key)
+        if isinstance(snap, dict):
+            val = snap.get("widget")
+            if val not in EXPERIENCE_OPTIONS:
+                val = snap.get("persisted")
+            return str(val) if val in EXPERIENCE_OPTIONS else None
+        return None
+
+    pick_source = ss.get("_suite_persist_debug_pick_source")
+    pick_reason = ss.get("_suite_persist_debug_pick_reason")
+    cloud_exp = ss.get("_suite_inv_debug_cloud_experience")
+    disk_exp = ss.get("_suite_inv_debug_disk_experience")
+    restored = ss.get("_suite_inv_debug_mode_after_restore")
+    pre_ensure = _stage_experience("_suite_inv_debug_experience_pre_ensure")
+    post_ensure = _stage_experience("_suite_inv_debug_experience_post_ensure")
+    post_widget = _stage_experience("_suite_inv_debug_experience_post_widget")
+    final = ss.get("_suite_inv_debug_mode_final") or current_experience_mode(st)
+    disk_won = pick_source == "disk"
+    cloud_disk_mismatch = (
+        cloud_exp in EXPERIENCE_OPTIONS
+        and disk_exp in EXPERIENCE_OPTIONS
+        and cloud_exp != disk_exp
+    )
+    hypothesis_a = bool(disk_won and cloud_disk_mismatch)
+    hypothesis_b = bool(
+        restored in EXPERIENCE_OPTIONS
+        and post_widget in EXPERIENCE_OPTIONS
+        and restored != post_widget
+    )
+    eor_written = ss.get("_suite_inv_debug_eor_autosave_written_mode")
+    hypothesis_c = bool(ss.get("_suite_inv_debug_autosave_wrote_beginner_over_cloud_advanced"))
+
     return [
         f"build: {PERSISTENCE_DEBUG_BUILD_ID}",
-        f"cloud blob: {ss.get('_suite_inv_debug_cloud_experience')!r}",
-        f"disk blob: {ss.get('_suite_inv_debug_disk_experience')!r}",
-        f"picked blob: {ss.get('_suite_inv_debug_picked_experience')!r}",
+        f"cloud experience: {cloud_exp!r}",
+        f"disk experience: {disk_exp!r}",
+        f"picked source: {pick_source!r}",
+        f"picked reason: {pick_reason!r}",
+        f"restored experience: {restored!r}",
+        f"pre-ensure experience: {pre_ensure!r}",
+        f"post-ensure experience: {post_ensure!r}",
+        f"post-widget experience: {post_widget!r}",
+        f"final active experience: {final!r}",
+        f"disk won over cloud: {disk_won} (cloud={cloud_exp!r}, disk={disk_exp!r}, reason={pick_reason!r})",
+        f"end-run autosave attempt mode: {ss.get('_suite_inv_debug_eor_autosave_attempt_mode')!r}",
+        f"end-run autosave wrote mode: {ss.get('_suite_inv_debug_eor_autosave_written_mode')!r}",
+        f"end-run autosave wrote Beginner over cloud Advanced: {hypothesis_c}",
+        f"hypothesis A (disk beat newer cloud): {hypothesis_a}",
+        f"hypothesis B (widget overwrote restore): {hypothesis_b}",
+        f"hypothesis C (end-run autosave clobbered cloud): {hypothesis_c}",
         f"cloud timestamp: {ss.get('_suite_persist_debug_cloud_ts')!r}",
         f"disk timestamp: {ss.get('_suite_persist_debug_disk_ts')!r}",
-        f"pick source: {ss.get('_suite_persist_debug_pick_source')!r}",
-        f"pick reason: {ss.get('_suite_persist_debug_pick_reason')!r}",
         f"local dirty: {ss.get('_suite_persist_local_dirty::investment')!r}",
-        f"after restore: {ss.get('_suite_inv_debug_mode_after_restore')!r}",
-        f"saved to cloud: {ss.get('_suite_inv_debug_mode_saved')!r}",
-        f"after init: {ss.get('_suite_inv_debug_mode_final')!r}",
         f"restore ran: {ss.get('_suite_inv_debug_restore_ran')!r}",
     ]
 
