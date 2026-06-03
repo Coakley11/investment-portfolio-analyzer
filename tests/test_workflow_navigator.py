@@ -10,6 +10,7 @@ from investment_workflow import (
     begin_goal_change_workflow,
     begin_portfolio_rebuild_workflow,
     classify_goal_change_verdict,
+    goal_display_label,
     invalidate_workflow_from,
     needs_analytics_load,
     record_workflow_health_status,
@@ -135,6 +136,12 @@ class TestWorkflowTrust(unittest.TestCase):
             "goal_banner": "Grow my money long term",
         }
         self.assertEqual(classify_goal_change_verdict(before, after), "B")
+
+    def test_goal_display_uses_card_title(self) -> None:
+        st = _FakeSt()
+        st.session_state["beginner_goal_card"] = "growth"
+        st.session_state["guide_goal_choice"] = "Grow my money long term"
+        self.assertEqual(goal_display_label(st), "Long-Term Growth")
 
     def test_verdict_ok_retirement(self) -> None:
         before = {

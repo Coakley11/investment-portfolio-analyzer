@@ -219,6 +219,12 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
                     st.session_state.pop("health_result", None)
                     st.session_state.pop("health_result_fingerprint", None)
                 mark_portfolio_built(st)
+                try:
+                    from investment_workflow import persist_plan_after_goal_selection
+
+                    persist_plan_after_goal_selection(st)
+                except ImportError:
+                    pass
                 st.rerun()
     if st.session_state.get("preset_applied"):
         st.success(f"Portfolio loaded: **{st.session_state.preset_applied}**")

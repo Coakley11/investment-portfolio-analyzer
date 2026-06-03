@@ -407,9 +407,9 @@ def render_recommended_next_step_card() -> bool:
             clicked = st.button(f"Go to {STEP_TAB_LABEL['goal']}", type="primary", use_container_width=True, key="cta_goal")
             if clicked:
                 try:
-                    from investment_workflow import begin_goal_change_workflow
+                    from investment_workflow import request_core_step_navigation
 
-                    begin_goal_change_workflow(st, beginner=True)
+                    request_core_step_navigation("goal", beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["goal"]
         elif not state["portfolio"]:

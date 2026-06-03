@@ -392,12 +392,28 @@ def invalidate_workflow_from(step: WorkflowStep, st_obj: Any | None = None) -> N
 
 
 def begin_goal_change_workflow(st_obj: Any, *, beginner: bool) -> None:
-    """Start change-goal flow: invalidate downstream, navigate to goal, set intent banner."""
+    """
+    Start a real goal-change workflow (not navigation-only).
+
+    Clears downstream analysis/health/rec state, shows the change-goal banner, and
+    opens Step 1. The new goal is applied when the user picks a goal card or Advanced radio.
+    """
     ss = _sess(st_obj)
     ss[_WORKFLOW_CHANGE_SNAPSHOT_KEY] = snapshot_plan_labels(st_obj)
     invalidate_workflow_from("goal", st_obj)
     ss[_WORKFLOW_INTENT_KEY] = "change_goal"
     request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+
+
+def persist_plan_after_goal_selection(st_obj: Any | None = None) -> bool:
+    """Write goal/portfolio/holdings to local + cloud persistence immediately after a goal pick."""
+    try:
+        from investment_persistent_state import autosave_investment_state
+
+        autosave_investment_state(st_obj)
+        return True
+    except Exception:
+        return False
 
 
 def begin_portfolio_rebuild_workflow(st_obj: Any, *, beginner: bool) -> None:
@@ -432,6 +448,7 @@ def record_goal_selection(
     }
     clear_workflow_intent(st_obj)
     _clear_stale_steps(ss, "goal")
+    persist_plan_after_goal_selection(st_obj)
 
 
 def mark_analysis_complete(st_obj: Any | None = None) -> None:
@@ -518,7 +535,18 @@ def _health_is_fresh(st_obj: Any | None = None) -> bool:
 
 
 def goal_display_label(st_obj: Any | None = None) -> str:
+    """Prefer active beginner card title, then guide goal text, then objective."""
     ss = _sess(st_obj)
+    card_id = ss.get("beginner_goal_card")
+    if card_id:
+        try:
+            from components.beginner_coach import GOAL_CARDS
+
+            for card in GOAL_CARDS:
+                if card.get("id") == card_id:
+                    return str(card["title"])
+        except ImportError:
+            pass
     label = ss.get("guide_goal_choice")
     if label:
         return str(label)
@@ -869,7 +897,8 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
     """
     st.markdown("#### Rebuild / rebalance portfolio")
     st.caption(
-        "These actions clear analysis, health, and recommendation progress, then take you to the right step."
+        "**Change goal** starts goal-change mode (clears analysis progress, opens Step 1) — "
+        "pick a new goal card to apply. **Edit holdings** starts rebuild mode on the portfolio step."
     )
     c1, c2 = st.columns(2)
     clicked = False
@@ -884,9 +913,11 @@ def render_rebuild_portfolio_panel(st_obj: Any, *, beginner: bool) -> bool:
             clicked = True
     with c2:
         if st.button(
-            "Change goal (Step 1)",
+            "Change goal",
             key="wf_rebuild_change_goal",
             use_container_width=True,
+            help="Starts goal-change mode: clears analysis/health/rec checkmarks and opens Step 1. "
+            "Your new goal applies when you pick a goal card.",
         ):
             begin_goal_change_workflow(st_obj, beginner=beginner)
             clicked = True
