@@ -86,6 +86,83 @@ def _parse_ts(ts: str | None) -> float:
     return parse_persist_timestamp(ts)
 
 
+def _import_storage() -> tuple[Any, str]:
+    """Resolve storage backend; standalone deploys use ``suite_storage_supabase``."""
+    try:
+        import suite_storage as storage
+
+        return storage, "suite_storage"
+    except ImportError:
+        import suite_storage_supabase as storage
+
+        return storage, "suite_storage_supabase"
+
+
+def probe_cloud_restore_diagnostics(st: Any, app_id: str) -> dict[str, Any]:
+    """
+    Explain why cloud restore may be empty (for in-app diagnostics).
+
+    Does not mutate session state except reading query params / flags.
+    """
+    diag: dict[str, Any] = {
+        "cloud_enabled": False,
+        "account_mode": "unknown",
+        "account_user_id": "",
+        "suite_user_id": "",
+        "storage_module": "",
+        "skip_resume_params": False,
+        "resume_launch_flag": False,
+        "cloud_row_found": False,
+        "cloud_has_full_session": False,
+        "cloud_updated_at": None,
+        "cloud_load_error": None,
+    }
+    try:
+        from suite_user import account_mode, get_account_user_id, get_external_user_id
+
+        diag["account_mode"] = account_mode()
+        diag["account_user_id"] = get_account_user_id()
+        diag["suite_user_id"] = get_external_user_id()
+    except Exception as exc:
+        diag["cloud_load_error"] = f"account probe: {exc}"
+
+    key = str(app_id or "").strip()
+    if key == "math":
+        key = "applied_intelligence"
+    diag["resume_launch_flag"] = bool(st.session_state.get(f"_suite_resume_launch_{key}"))
+    try:
+        diag["skip_resume_params"] = has_resume_query_params(st, app_id)
+    except Exception:
+        pass
+
+    try:
+        from suite_storage_config import cloud_storage_enabled
+
+        diag["cloud_enabled"] = cloud_storage_enabled()
+    except ImportError:
+        diag["cloud_load_error"] = diag.get("cloud_load_error") or "suite_storage_config missing"
+        return diag
+
+    if not diag["cloud_enabled"]:
+        return diag
+
+    try:
+        storage, diag["storage_module"] = _import_storage()
+        app_key = storage.normalize_app_key(app_id)
+        row = storage.load_current_states().get(app_key) or {}
+        if isinstance(row, dict) and row:
+            diag["cloud_row_found"] = True
+            diag["cloud_updated_at"] = str(row.get("updated_at") or "") or None
+            metrics = row.get("metrics")
+            if isinstance(metrics, dict):
+                blob = metrics.get(FULL_SESSION_KEY)
+                diag["cloud_has_full_session"] = isinstance(blob, dict) and bool(blob)
+    except Exception as exc:
+        diag["cloud_load_error"] = str(exc)
+
+    return diag
+
+
 def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
     """Return ``(session_dict, updated_at_iso)`` from cloud, or empty dict."""
     try:
@@ -95,7 +172,7 @@ def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
     if not cloud_storage_enabled():
         return {}, None
     try:
-        import suite_storage as storage
+        storage, _ = _import_storage()
 
         app_key = storage.normalize_app_key(app_id)
         row = storage.load_current_states().get(app_key) or {}

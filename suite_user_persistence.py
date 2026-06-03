@@ -156,6 +156,10 @@ def _record_restore_debug_meta(
     st.session_state[_local_dirty_key(app_id)] = local_dirty
 
 
+def _set_restore_skip_reason(st: Any, reason: str) -> None:
+    st.session_state["_suite_persist_restore_skip_reason"] = reason
+
+
 def restore_once(
     st: Any,
     app_id: str,
@@ -169,10 +173,15 @@ def restore_once(
     device has unsaved local edits (``_suite_persist_local_dirty``).
     """
     st.session_state["_suite_persist_app_id"] = app_id
+    st.session_state.pop("_suite_persist_restore_skip_reason", None)
     flag = f"{_SESSION_RESTORED_PREFIX}{app_id}"
     dirty_key = _local_dirty_key(app_id)
     applied_cloud_key = _applied_cloud_ts_key(app_id)
     local_dirty = bool(st.session_state.get(dirty_key))
+
+    disk_state, disk_warn, disk_ts = _load_raw(app_id)
+    if disk_warn:
+        st.session_state[_SESSION_INVALID_WARN_KEY] = disk_warn
 
     skip_cloud = False
     try:
@@ -183,18 +192,25 @@ def restore_once(
         pass
 
     if skip_cloud:
+        _set_restore_skip_reason(st, "resume query params or deep-link launch (restore skipped)")
         st.session_state[flag] = True
+        _record_restore_debug_meta(
+            st,
+            app_id,
+            cloud_ts=None,
+            disk_ts=disk_ts,
+            pick_source="skipped",
+            pick_reason="resume query params",
+            local_dirty=local_dirty,
+        )
         return False
-
-    disk_state, disk_warn, disk_ts = _load_raw(app_id)
-    if disk_warn:
-        st.session_state[_SESSION_INVALID_WARN_KEY] = disk_warn
 
     cloud_state: dict[str, Any] = {}
     cloud_ts: str | None = None
     pick_source = "none"
     pick_reason = "none"
     from_cloud = False
+    state: dict[str, Any] = {}
 
     try:
         from suite_cloud_state import load_cloud_full_session, pick_restore_session, parse_persist_timestamp
@@ -205,6 +221,7 @@ def restore_once(
 
         if already_restored:
             if local_dirty:
+                _set_restore_skip_reason(st, "already restored this session; local unsaved edits")
                 _record_restore_debug_meta(
                     st,
                     app_id,
@@ -216,6 +233,7 @@ def restore_once(
                 )
                 return False
             if cloud_state and parse_persist_timestamp(cloud_ts) <= parse_persist_timestamp(applied_cloud_ts):
+                _set_restore_skip_reason(st, "already restored this session; cloud not newer than last apply")
                 _record_restore_debug_meta(
                     st,
                     app_id,
@@ -226,8 +244,6 @@ def restore_once(
                     local_dirty=False,
                 )
                 return False
-
-        st.session_state[flag] = True
 
         picked = pick_restore_session(
             cloud_state,
@@ -246,26 +262,35 @@ def restore_once(
         st.session_state["_suite_persist_debug_pick_source"] = pick_source
         st.session_state["_suite_persist_debug_pick_reason"] = pick_reason
     except ImportError:
-        st.session_state[flag] = True
         state = disk_state
         pick_source = "disk"
         pick_reason = "cloud module missing"
-    except Exception:
-        st.session_state[flag] = True
+        _set_restore_skip_reason(st, "cloud module missing; disk-only pick")
+    except Exception as exc:
         state = disk_state
         pick_source = "disk"
         pick_reason = "cloud load error"
+        _set_restore_skip_reason(st, f"cloud load error: {exc}; disk-only pick")
 
     if not state:
+        _set_restore_skip_reason(
+            st,
+            "no restore source loaded "
+            f"(cloud_blob={'yes' if cloud_state else 'no'}, disk_blob={'yes' if disk_state else 'no'}, "
+            f"pick_reason={pick_reason!r})",
+        )
         return False
 
     try:
         apply_state(st, state)
-    except Exception:
+    except Exception as exc:
+        _set_restore_skip_reason(st, f"apply_state failed: {exc}")
         st.session_state[_SESSION_INVALID_WARN_KEY] = (
             "Some saved settings could not be restored; using defaults."
         )
         return False
+
+    st.session_state[flag] = True
 
     try:
         import hashlib

@@ -13,12 +13,13 @@ from suite_user_persistence import (
     load_user_state,
     reset_user_state,
     restore_once,
+    state_file_path,
 )
 
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-diagnostic-v2"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-diagnostic-v3"
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -283,12 +284,21 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
 def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_cloud_experience"] = None
     st.session_state["_suite_inv_debug_disk_experience"] = None
-    try:
-        from suite_cloud_state import load_cloud_full_session
+    st.session_state["_suite_inv_debug_disk_file_exists"] = state_file_path(APP_ID).is_file()
 
-        cloud_state, _cloud_ts = load_cloud_full_session(APP_ID)
+    try:
+        from suite_cloud_state import load_cloud_full_session, probe_cloud_restore_diagnostics
+
+        diag = probe_cloud_restore_diagnostics(st, APP_ID)
+        st.session_state["_suite_inv_debug_cloud_probe"] = diag
+
+        cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
         if cloud_state:
             st.session_state["_suite_inv_debug_cloud_experience"] = cloud_state.get(EXPERIENCE_KEY)
+        elif diag.get("cloud_has_full_session") is False and diag.get("cloud_row_found"):
+            st.session_state["_suite_persist_cloud_peek_error"] = (
+                "cloud row exists but metrics.full_session is empty"
+            )
     except Exception as exc:
         st.session_state["_suite_persist_cloud_peek_error"] = str(exc)
 
@@ -322,6 +332,28 @@ def finalize_persistence_debug(st: Any) -> None:
     _snapshot_mode_debug(st)
 
 
+def _restore_probe_lines(st: Any) -> list[str]:
+    ss = st.session_state
+    probe = ss.get("_suite_inv_debug_cloud_probe")
+    if not isinstance(probe, dict):
+        return ["cloud probe: not run"]
+    lines = [
+        f"cloud enabled: {probe.get('cloud_enabled')!r}",
+        f"storage module: {probe.get('storage_module')!r}",
+        f"cloud row found: {probe.get('cloud_row_found')!r}",
+        f"cloud has full_session: {probe.get('cloud_has_full_session')!r}",
+        f"cloud updated_at: {probe.get('cloud_updated_at')!r}",
+        f"skip resume params: {probe.get('skip_resume_params')!r}",
+        f"resume launch flag: {probe.get('resume_launch_flag')!r}",
+        f"disk file exists: {ss.get('_suite_inv_debug_disk_file_exists')!r}",
+        f"session restored flag: {ss.get('_suite_disk_state_restored::investment')!r}",
+        f"restore skip reason: {ss.get('_suite_persist_restore_skip_reason')!r}",
+    ]
+    if probe.get("cloud_load_error"):
+        lines.append(f"cloud probe error: {probe.get('cloud_load_error')!r}")
+    return lines
+
+
 def experience_mode_trace_lines(st: Any) -> list[str]:
     ss = st.session_state
     return [
@@ -339,6 +371,10 @@ def experience_mode_trace_lines(st: Any) -> list[str]:
         f"after init: {ss.get('_suite_inv_debug_mode_final')!r}",
         f"restore ran: {ss.get('_suite_inv_debug_restore_ran')!r}",
     ]
+
+
+def restore_diagnostics_lines(st: Any) -> list[str]:
+    return _restore_probe_lines(st)
 
 
 def _persistence_account_lines(st: Any) -> list[str]:
@@ -364,6 +400,8 @@ def render_persistence_debug_content(st: Any) -> None:
     st.caption(f"Last cloud save: **{save_at or '—'}** · restore: **{restore_at or '—'}** ({source})")
     st.markdown("**Experience mode trace**")
     st.code("\n".join(experience_mode_trace_lines(st)), language=None)
+    st.markdown("**Restore diagnostics**")
+    st.code("\n".join(restore_diagnostics_lines(st)), language=None)
     st.markdown("**Account scope**")
     st.code("\n".join(_persistence_account_lines(st)), language=None)
     import_err = ss.get("_suite_persist_import_error")
