@@ -185,6 +185,9 @@ def restore_once(
         )
         return False
 
+    st.session_state["_suite_persist_last_restore_at"] = _utc_now_iso()
+    st.session_state["_suite_persist_last_restore_source"] = "cloud" if from_cloud else "disk"
+
     if from_cloud:
         st.session_state[_SESSION_CLOUD_BANNER_KEY] = True
     else:
@@ -229,6 +232,7 @@ def autosave_if_changed(
             pass
         if saved_disk or saved_cloud:
             st.session_state[key] = fp
+            st.session_state["_suite_persist_last_save_at"] = _utc_now_iso()
             st.session_state[_SESSION_SAVED_FLASH_KEY] = True
     except Exception:
         pass

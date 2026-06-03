@@ -138,7 +138,12 @@ def session_page_summary(app_id: str, state: dict[str, Any]) -> tuple[str, str]:
         song = str((core or {}).get("song") or state.get("song") or "")
         return page, song or page or "Music session"
     if app_key == "investment":
-        tab = str(state.get("health_active_tab") or state.get("experience") or "")
+        tab = str(
+            state.get("investment_active_tab")
+            or state.get("health_active_tab")
+            or state.get("experience")
+            or ""
+        )
         return tab, tab or "Portfolio session"
     if app_key == "future_lens":
         skill = str(state.get("specific_skill") or state.get("broad_domain") or "")

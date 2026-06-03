@@ -104,15 +104,37 @@ try:
 except Exception:
     pass
 
+_PERSISTENCE_OK = False
+_PERSISTENCE_DEBUG_MAIN_SLOT = None
+
 try:
     from investment_persistent_state import (
+        EXPERIENCE_KEY,
+        EXPERIENCE_OPTIONS,
         autosave_investment_state,
         default_reset_investment_session,
+        ensure_analysis_date_defaults,
+        ensure_experience_mode,
+        ensure_investment_active_tab,
+        finalize_persistence_debug,
+        render_persistence_debug_main,
+        render_persistence_debug_sidebar,
         restore_investment_disk_state_once,
+        sync_experience_after_widget,
+        validate_state_option,
     )
     from suite_user_persistence import render_reset_controls, show_persistence_messages
 
-    restore_investment_disk_state_once(st)
+    _PERSISTENCE_OK = True
+except Exception as _persist_import_exc:
+    _PERSISTENCE_OK = False
+    st.session_state["_suite_persist_import_error"] = str(_persist_import_exc)
+
+if _PERSISTENCE_OK:
+    try:
+        restore_investment_disk_state_once(st)
+    except Exception as _persist_restore_exc:
+        st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()
     show_persistence_messages(st)
     render_reset_controls(
@@ -121,8 +143,7 @@ try:
         on_reset=default_reset_investment_session,
         help_text="Clears saved portfolio inputs and analysis settings. Market data files are not deleted.",
     )
-except Exception:
-    pass
+    _PERSISTENCE_DEBUG_MAIN_SLOT = st.empty()
 
 st.markdown(
     """
@@ -748,16 +769,20 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
+    if _PERSISTENCE_OK:
+        render_persistence_debug_sidebar(st)
     st.sidebar.markdown("### Experience")
+    ensure_analysis_date_defaults(st)
+    ensure_experience_mode(st)
     experience = st.sidebar.radio(
         "Experience level",
-        ["Beginner Mode", "Advanced Mode"],
-        index=0,
+        list(EXPERIENCE_OPTIONS),
+        key=EXPERIENCE_KEY,
         help="Beginner: simpler language and fewer charts. Advanced: full analytics.",
         label_visibility="collapsed",
     )
+    sync_experience_after_widget(st)
     beginner = experience == "Beginner Mode"
-    st.session_state.experience = experience
 
     if beginner:
         render_beginner_sidebar_checklist()
@@ -782,7 +807,13 @@ def render_sidebar() -> dict:
     st.sidebar.markdown("### Portfolio Presets")
     st.sidebar.caption("Load a ready-made mix into your portfolio.")
     preset_names = ["— custom —", *core.PORTFOLIO_PRESETS.keys()]
-    portfolio_preset = st.sidebar.selectbox("Strategy", preset_names, label_visibility="collapsed")
+    validate_state_option(st, "portfolio_preset", preset_names, "— custom —")
+    portfolio_preset = st.sidebar.selectbox(
+        "Strategy",
+        preset_names,
+        key="portfolio_preset",
+        label_visibility="collapsed",
+    )
     if st.sidebar.button("Apply preset", use_container_width=True, type="primary"):
         if portfolio_preset in core.PORTFOLIO_PRESETS:
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
@@ -1019,11 +1050,26 @@ def render_overview_tab(
         if render_recommended_next_step_card():
             st.rerun()
 
-        ov_tabs = st.tabs(
-            ["📍 Your Plan", "❤️ Health", "📋 Recommendations", "🔄 Rebalancing", "📈 Performance", "📅 Monthly"]
+        _ov_subtab_labels = [
+            "📍 Your Plan",
+            "❤️ Health",
+            "📋 Recommendations",
+            "🔄 Rebalancing",
+            "📈 Performance",
+            "📅 Monthly",
+        ]
+        from investment_persistent_state import validate_state_option
+
+        validate_state_option(st, "overview_subtab", _ov_subtab_labels, _ov_subtab_labels[0])
+        _ov_active = st.radio(
+            "Overview section",
+            _ov_subtab_labels,
+            key="overview_subtab",
+            horizontal=True,
+            label_visibility="collapsed",
         )
 
-        with ov_tabs[0]:
+        if _ov_active == _ov_subtab_labels[0]:
             if cached_health:
                 objective = st.session_state.get("health_objective", "balanced growth")
                 render_action_plan(
@@ -1043,7 +1089,7 @@ def render_overview_tab(
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
                 st.rerun()
 
-        with ov_tabs[1]:
+        if _ov_active == _ov_subtab_labels[1]:
             what_why_do(
                 "Portfolio Health Score",
                 "A 0–100 summary of return, risk, diversification, and goal fit.",
@@ -1055,7 +1101,7 @@ def render_overview_tab(
                 for item in explanation.portfolio_overview[:3]:
                     st.markdown(f"- {item}")
 
-        with ov_tabs[2]:
+        if _ov_active == _ov_subtab_labels[2]:
             if cached_health:
                 render_recommendations_panel(cached_health, settings)
             elif health_status == "settings_stale" and st.session_state.get("health_result"):
@@ -1066,7 +1112,7 @@ def render_overview_tab(
                 for item in explanation.suggested_improvements[:5]:
                     st.markdown(f'<div class="insight-card">💡 {translate_for_beginner(item.replace("**", ""))}</div>', unsafe_allow_html=True)
 
-        with ov_tabs[3]:
+        if _ov_active == _ov_subtab_labels[3]:
             if cached_health:
                 render_rebalancing_panel(cached_health, settings=settings, key_prefix="overview_rebal")
                 with st.expander("Guided adjustment (optional)", expanded=False):
@@ -1084,7 +1130,7 @@ def render_overview_tab(
             else:
                 st.info("Run **Analyze Portfolio** first to see dollar-based rebalance guidance.")
 
-        with ov_tabs[4]:
+        if _ov_active == _ov_subtab_labels[4]:
             metrics_row_primary(metrics, settings["initial_value"], settings)
             if st.toggle("Show more detail numbers", value=False, key="overview_show_extended_metrics"):
                 metrics_row_extended(metrics, settings)
@@ -1096,7 +1142,7 @@ def render_overview_tab(
             with c2:
                 st.plotly_chart(charts.allocation_chart(holdings_df), use_container_width=True)
 
-        with ov_tabs[5]:
+        if _ov_active == _ov_subtab_labels[5]:
             render_monthly_review_workflow(expanded=True)
             st.caption("Implementation steps: **💼 Portfolio Inputs** → **Implementation Guide** tab.")
 
@@ -1407,20 +1453,18 @@ apply_asset_preset(settings["asset_preset"])
 if beginner_mode:
     render_next_step_banner()
 
-(
-    tab_guide,
-    tab_overview,
-    tab_inputs,
-    tab_risk,
-    tab_health,
-    tab_explain,
-    tab_forward,
-    tab_mc,
-    tab_opt,
-    tab_frontier,
-) = st.tabs(BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS)
+_main_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
+ensure_investment_active_tab(st, _main_tab_labels)
+st.radio(
+    "Section",
+    _main_tab_labels,
+    key="investment_active_tab",
+    horizontal=True,
+    label_visibility="collapsed",
+)
+_active_tab = st.session_state["investment_active_tab"]
 
-with tab_guide:
+if _active_tab == _main_tab_labels[0]:
     if beginner_mode:
         st.markdown(
             f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
@@ -1436,7 +1480,7 @@ with tab_guide:
         )
         render_getting_started_guide(beginner_mode=False)
 
-with tab_inputs:
+if _active_tab == _main_tab_labels[2]:
     section_header(
         "Portfolio Inputs",
         "Enter fund tickers (like SPY) and what percent of your portfolio each one is." if beginner_mode
@@ -1482,6 +1526,8 @@ try:
     tickers, weights, asset_types = parse_holdings(st.session_state.holdings_df)
 except ValueError as e:
     st.error(str(e))
+    if _PERSISTENCE_OK:
+        autosave_investment_state(st)
     st.stop()
 
 with st.spinner("Loading market data and running analytics…"):
@@ -1498,6 +1544,8 @@ with st.spinner("Loading market data and running analytics…"):
         st.session_state.plan_compare_return = metrics.annual_return
     except Exception as ex:
         st.error(f"Analysis failed: {ex}")
+        if _PERSISTENCE_OK:
+            autosave_investment_state(st)
         st.stop()
 
 mc_summary = st.session_state.get("mc_cached_summary")
@@ -1528,7 +1576,7 @@ export_buttons(
     report_text,
 )
 
-with tab_inputs:
+if _active_tab == _main_tab_labels[2]:
     st.markdown("---")
     pv = float(settings["initial_value"])
     if beginner_mode:
@@ -1571,7 +1619,7 @@ with tab_inputs:
 
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
-with tab_explain:
+if _active_tab == _main_tab_labels[5]:
     if beginner_mode:
         st.session_state.visited_explain = True
     section_header(
@@ -1615,7 +1663,7 @@ with tab_explain:
 
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
-with tab_risk:
+if _active_tab == _main_tab_labels[3]:
     st.session_state.visited_risk = True
     if beginner_mode:
         section_header(
@@ -1699,7 +1747,7 @@ with tab_risk:
 
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
-with tab_health:
+if _active_tab == _main_tab_labels[4]:
     section_header(
         "Portfolio Health",
         "Your portfolio checkup — what's working, what to watch, and ideas to consider." if beginner_mode
@@ -2053,7 +2101,7 @@ with tab_health:
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 
-with tab_overview:
+if _active_tab == _main_tab_labels[1]:
     render_overview_tab(
         settings,
         metrics,
@@ -2070,7 +2118,7 @@ with tab_overview:
 
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
 
-with tab_forward:
+if _active_tab == _main_tab_labels[6]:
     if beginner_mode:
         section_header(
             "Macro Analysis",
@@ -2186,7 +2234,7 @@ with tab_forward:
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
-with tab_mc:
+if _active_tab == _main_tab_labels[7]:
     section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
     if beginner_mode:
         what_why_do(
@@ -2294,7 +2342,7 @@ with tab_mc:
 
 # ── Optimization ──────────────────────────────────────────────────────────────
 
-with tab_opt:
+if _active_tab == _main_tab_labels[8]:
     if beginner_mode:
         st.info("Portfolio optimization is available in **Advanced Mode**.")
     else:
@@ -2368,7 +2416,7 @@ with tab_opt:
 
 # ── Efficient Frontier ────────────────────────────────────────────────────────
 
-with tab_frontier:
+if _active_tab == _main_tab_labels[9]:
     if beginner_mode:
         st.info("The efficient frontier chart is available in **Advanced Mode**.")
     else:
@@ -2483,9 +2531,12 @@ with tab_frontier:
 render_health_header_badge(health_badge_slot, tickers, weights)
 
 try:
-    from investment_persistent_state import autosave_investment_state
-
-    autosave_investment_state(st)
+    if _PERSISTENCE_OK:
+        autosave_investment_state(st)
+        finalize_persistence_debug(st)
+        if _PERSISTENCE_DEBUG_MAIN_SLOT is not None:
+            with _PERSISTENCE_DEBUG_MAIN_SLOT.container():
+                render_persistence_debug_main(st)
 except Exception:
     pass
 
