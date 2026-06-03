@@ -20,7 +20,7 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-health-step-fix"
+WORKFLOW_UI_BUILD = "2026-06-03-goal-cards-fix"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 _GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
@@ -220,10 +220,12 @@ def goal_card_collision_rows() -> list[dict[str, str]]:
     return rows
 
 
-def render_goal_selection_diagnostics(st_obj: Any, *, beginner_mode: bool) -> None:
+def render_goal_selection_diagnostics(
+    st_obj: Any, *, beginner_mode: bool, expanded: bool = True
+) -> None:
     """Temporary diagnostics panel — remove after goal-change issue is confirmed fixed."""
     ss = _sess(st_obj)
-    with st.expander("🔬 Goal change diagnostics (temporary)", expanded=True):
+    with st.expander("🔬 Goal change diagnostics (temporary)", expanded=expanded):
         st.caption(
             "Verdict: **A** = goal not changing · **B** = goal changed, same portfolio · "
             "**C** = data changed but banner looks the same · **OK** = expected change"
@@ -727,13 +729,14 @@ def render_goal_change_workflow_debug(
     *,
     beginner_mode: bool,
     tab_labels: list[str],
+    expanded: bool = False,
 ) -> None:
     """Temporary visible debug panel for Change Goal / Open Goal workflow (remove when fixed)."""
     ss = _sess(st_obj)
     _refresh_goal_change_debug_snapshot(st_obj)
     dbg = ss.get(_GOAL_CHANGE_DEBUG_KEY) or {}
     checklist = dbg.get("checklist") or workflow_checklist(st_obj)
-    with st.expander("🐞 Goal workflow debug (temporary)", expanded=True):
+    with st.expander("🐞 Goal workflow debug (temporary)", expanded=expanded):
         st.caption(
             f"Build **{WORKFLOW_UI_BUILD}** · verifies Change Goal → Goal tab → card pick → banner/checklist"
         )

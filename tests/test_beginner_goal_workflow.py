@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+from components.beginner_coach import render_beginner_goal_tab
 from components.beginner_navigation import (
     ADVANCED_TAB_LABELS,
     BEGINNER_TAB_LABELS,
@@ -67,6 +68,9 @@ class TestGoalWorkflow(unittest.TestCase):
         beginner = BEGINNER_TAB_LABELS[3]
         advanced = normalize_tab_label_for_mode(beginner, beginner=False)
         self.assertEqual(advanced, ADVANCED_TAB_LABELS[3])
+
+    def test_render_beginner_goal_tab_exists(self) -> None:
+        self.assertTrue(callable(render_beginner_goal_tab))
 
 
 if __name__ == "__main__":

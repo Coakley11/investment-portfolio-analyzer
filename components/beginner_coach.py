@@ -136,8 +136,21 @@ def render_beginner_analysis_pipeline() -> None:
     )
 
 
-def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
+def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool = False) -> None:
     """Step 1 — large goal cards; one click loads the recommended portfolio."""
+    if change_goal_mode:
+        st.markdown(
+            """
+            <div id="goal-card-picker" style="background:rgba(77,163,255,0.08);border:2px solid #4da3ff;
+            border-radius:12px;padding:0.65rem 0.85rem;margin:0 0 0.75rem 0;">
+            <div style="font-weight:700;color:#f1f5f9;">Pick a new goal</div>
+            <div style="color:#94a3b8;font-size:0.88rem;margin-top:0.25rem;">
+            Tap a card below to load its portfolio template. Analysis steps will need to be run again.
+            </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     st.markdown("#### Step 1 — Choose your goal")
     st.caption("Tap a card to load a recommended portfolio. You can fine-tune weights later.")
     selected = st.session_state.get("beginner_goal_card")
@@ -231,9 +244,34 @@ def render_goal_cards(*, key_prefix: str = "goal_card") -> None:
     try:
         from investment_workflow import render_goal_selection_diagnostics
 
-        render_goal_selection_diagnostics(st, beginner_mode=True)
+        render_goal_selection_diagnostics(
+            st, beginner_mode=True, expanded=not change_goal_mode
+        )
     except ImportError:
         pass
+
+
+def render_beginner_goal_tab(*, change_goal_mode: bool = False) -> None:
+    """
+    Beginner Step 1 tab — goal cards always visible first.
+
+    Macro and pipeline guidance stay available but collapsed so Change Goal
+    does not bury the card picker below a long economic-environment section.
+    """
+    st.markdown(
+        f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
+        unsafe_allow_html=True,
+    )
+    render_goal_cards(change_goal_mode=change_goal_mode)
+    with st.expander("Current economic environment (optional)", expanded=False):
+        try:
+            from components.beginner_macro import render_beginner_macro_panel
+
+            render_beginner_macro_panel()
+        except ImportError:
+            st.caption("Macro panel unavailable.")
+    with st.expander("How the analysis works (optional)", expanded=False):
+        render_beginner_analysis_pipeline()
 
 
 def render_portfolio_visual_table(
@@ -379,6 +417,7 @@ __all__ = [
     "GOAL_CARDS",
     "render_beginner_analysis_pipeline",
     "render_beginner_analyze_results",
+    "render_beginner_goal_tab",
     "render_beginner_rebalance_cards",
     "render_goal_cards",
     "render_portfolio_visual_table",

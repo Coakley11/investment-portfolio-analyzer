@@ -49,6 +49,7 @@ render_optimizer_confidence = getattr(
 )
 _beginner_coach = importlib.import_module("components.beginner_coach")
 render_goal_cards = _beginner_coach.render_goal_cards
+render_beginner_goal_tab = getattr(_beginner_coach, "render_beginner_goal_tab", None)
 render_portfolio_visual_table = getattr(_beginner_coach, "render_portfolio_visual_table", lambda *_a, **_k: None)
 render_beginner_analyze_results = _beginner_coach.render_beginner_analyze_results
 render_beginner_rebalance_cards = getattr(_beginner_coach, "render_beginner_rebalance_cards", lambda *_a, **_k: None)
@@ -1562,7 +1563,6 @@ try:
     from components.workflow_navigator import apply_workflow_navigation
     from investment_workflow import (
         apply_pending_investment_tab,
-        render_goal_change_workflow_debug,
         render_plan_context_banner,
         render_workflow_intent_banner,
     )
@@ -1575,9 +1575,6 @@ try:
         st.rerun()
     render_plan_context_banner(st, beginner=beginner_mode)
     render_workflow_intent_banner(st, beginner=beginner_mode)
-    render_goal_change_workflow_debug(
-        st, beginner_mode=beginner_mode, tab_labels=_main_tab_labels
-    )
 except ImportError:
     ensure_investment_active_tab(st, _main_tab_labels, beginner_mode=beginner_mode)
     st.radio(
@@ -1591,13 +1588,28 @@ _active_tab = st.session_state["investment_active_tab"]
 
 if _active_tab == _main_tab_labels[0]:
     if beginner_mode:
-        st.markdown(
-            f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
-            unsafe_allow_html=True,
-        )
-        render_beginner_macro_panel()
-        render_beginner_analysis_pipeline()
-        render_goal_cards()
+        _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
+        if render_beginner_goal_tab is not None:
+            render_beginner_goal_tab(change_goal_mode=_change_goal_mode)
+        else:
+            st.markdown(
+                f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
+                unsafe_allow_html=True,
+            )
+            render_beginner_macro_panel()
+            render_beginner_analysis_pipeline()
+            render_goal_cards()
+        try:
+            from investment_workflow import render_goal_change_workflow_debug
+
+            render_goal_change_workflow_debug(
+                st,
+                beginner_mode=beginner_mode,
+                tab_labels=_main_tab_labels,
+                expanded=not _change_goal_mode,
+            )
+        except ImportError:
+            pass
     else:
         section_header(
             "Getting Started Guide",
