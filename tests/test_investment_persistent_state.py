@@ -103,12 +103,25 @@ def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
 def test_investment_cloud_resync_detects_experience_drift():
     st = _FakeSt()
     st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
     needed, detail = ips.investment_cloud_resync_needed(
         st,
         {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
     )
     assert needed is True
     assert "experience" in detail
+
+
+def test_investment_cloud_resync_skips_experience_during_local_mode_change():
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    needed, detail = ips.investment_cloud_resync_needed(
+        st,
+        {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
+    )
+    assert needed is False
+    assert "experience" not in detail
 
 
 def test_investment_cloud_resync_false_when_aligned():
@@ -121,6 +134,21 @@ def test_investment_cloud_resync_false_when_aligned():
     )
     assert needed is False
     assert detail == ""
+
+
+def test_sync_experience_mode_change_sets_pending_and_dirty(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+
+    def _fake_autosave(st_obj, *, end_of_run=False, trigger="unknown"):
+        pass
+
+    monkeypatch.setattr(ips, "autosave_investment_state", _fake_autosave)
+    ips.sync_experience_after_widget(st)
+    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Beginner Mode"
+    assert st.session_state["_suite_inv_pending_experience_mode"] == "Beginner Mode"
+    assert st.session_state["_suite_persist_local_dirty::investment"] is True
 
 
 def test_sync_experience_skips_autosave_when_mode_unchanged(monkeypatch):

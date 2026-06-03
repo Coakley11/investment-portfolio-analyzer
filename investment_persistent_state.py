@@ -18,10 +18,11 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-fix-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-fix-v2"
 
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
+_PENDING_EXPERIENCE_KEY = "_suite_inv_pending_experience_mode"
 _MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
@@ -233,6 +234,21 @@ def ensure_experience_mode(st: Any) -> None:
     }
 
 
+def _local_experience_change_in_flight(st: Any) -> bool:
+    """True when the user just changed mode locally and cloud must not overwrite it yet."""
+    ss = st.session_state
+    widget = ss.get(EXPERIENCE_KEY)
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
+    pending = ss.get(_PENDING_EXPERIENCE_KEY)
+    if pending in EXPERIENCE_OPTIONS:
+        return True
+    return (
+        widget in EXPERIENCE_OPTIONS
+        and persisted in EXPERIENCE_OPTIONS
+        and widget != persisted
+    )
+
+
 def sync_experience_after_widget(st: Any) -> None:
     """Keep persisted copy aligned with the sidebar radio; autosave immediately on change."""
     ss = st.session_state
@@ -258,6 +274,10 @@ def sync_experience_after_widget(st: Any) -> None:
     }
     switch_evt["post_widget_experience"] = mode
     if mode_change:
+        ss[_PENDING_EXPERIENCE_KEY] = mode
+        ss[f"_suite_persist_local_dirty::{APP_ID}"] = True
+        switch_evt["local_dirty_set"] = True
+        switch_evt["pending_experience_mode"] = mode
         try:
             from components.beginner_navigation import normalize_tab_label_for_mode
 
@@ -340,10 +360,19 @@ def investment_cloud_resync_needed(
         return False, ""
     cloud = _normalize_restored_state(cloud_state)
     reasons: list[str] = []
+    widget = st.session_state.get(EXPERIENCE_KEY)
+    persisted = st.session_state.get(PERSISTED_EXPERIENCE_KEY)
 
-    cloud_exp = cloud.get(EXPERIENCE_KEY)
-    if cloud_exp in EXPERIENCE_OPTIONS and cloud_exp != current_experience_mode(st):
-        reasons.append("experience")
+    if not _local_experience_change_in_flight(st):
+        cloud_exp = cloud.get(EXPERIENCE_KEY)
+        if (
+            cloud_exp in EXPERIENCE_OPTIONS
+            and widget in EXPERIENCE_OPTIONS
+            and persisted in EXPERIENCE_OPTIONS
+            and widget == persisted
+            and cloud_exp != widget
+        ):
+            reasons.append("experience")
 
     for key in (
         "beginner_goal_card",
@@ -496,9 +525,15 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY)
-    if exp in EXPERIENCE_OPTIONS:
+    preserve_exp: str | None = None
+    if _local_experience_change_in_flight(st):
+        preserve_exp = current_experience_mode(st)
+    if exp in EXPERIENCE_OPTIONS and preserve_exp is None:
         st.session_state[EXPERIENCE_KEY] = exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = exp
+    elif preserve_exp in EXPERIENCE_OPTIONS:
+        st.session_state[EXPERIENCE_KEY] = preserve_exp
+        st.session_state[PERSISTED_EXPERIENCE_KEY] = preserve_exp
 
     if "holdings_df" not in st.session_state:
         st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
@@ -569,6 +604,8 @@ def _record_session_sync_debug(st: Any) -> None:
         "local_dirty": ss.get("_suite_persist_local_dirty::investment"),
         "content_resync_needed": ss.get("_suite_persist_content_resync_needed"),
         "content_resync_detail": ss.get("_suite_persist_content_resync_detail"),
+        "pending_experience_mode": ss.get(_PENDING_EXPERIENCE_KEY),
+        "local_experience_change_in_flight": _local_experience_change_in_flight(st),
         "stale_session_likely": bool(
             memory_cloud_mismatch and (skip_not_newer or not restore_ran)
             and not ss.get("_suite_persist_content_resync_needed")
@@ -680,6 +717,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
 
         if ss.get(fp_key) == fp:
             event["outcome"] = "skipped_fp_unchanged"
+            if trigger == "mode_change":
+                ss[dirty_key] = True
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
             ss["_suite_inv_debug_last_autosave_event"] = event
             return
@@ -707,7 +746,18 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         if saved_disk or saved_cloud:
             ss[fp_key] = fp
             ss[restored_fp_key] = fp
-            ss[dirty_key] = False
+            readback_exp = event.get("cloud_readback_experience")
+            mode_saved_to_cloud = (
+                trigger == "mode_change"
+                and saved_cloud
+                and readback_exp == attempt_mode
+            )
+            if trigger == "mode_change" and not mode_saved_to_cloud:
+                ss[dirty_key] = True
+            else:
+                ss[dirty_key] = False
+            if mode_saved_to_cloud:
+                ss.pop(_PENDING_EXPERIENCE_KEY, None)
             readback_ts = event.get("cloud_readback_ts")
             if saved_cloud and readback_ts:
                 ss[applied_cloud_key] = readback_ts
@@ -785,6 +835,8 @@ def session_sync_trace_lines(st: Any) -> list[str]:
         "local_dirty",
         "content_resync_needed",
         "content_resync_detail",
+        "pending_experience_mode",
+        "local_experience_change_in_flight",
         "stale_session_likely",
     ):
         lines.append(f"{key}: {sync.get(key)!r}")
