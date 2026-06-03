@@ -2790,7 +2790,7 @@ render_health_header_badge(health_badge_slot, tickers, weights)
 
 try:
     if _PERSISTENCE_OK:
-        autosave_investment_state(st, end_of_run=True)
+        autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
         try:
             from investment_workflow import developer_diagnostics_enabled

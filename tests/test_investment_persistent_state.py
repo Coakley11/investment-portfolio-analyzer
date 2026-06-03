@@ -90,10 +90,28 @@ def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
     saved: list[str] = []
 
-    def _fake_autosave(st_obj):
-        saved.append(ips.current_experience_mode(st_obj))
+    def _fake_autosave(st_obj, *, end_of_run=False, trigger="unknown"):
+        saved.append(f"{ips.current_experience_mode(st_obj)}:{trigger}")
 
     monkeypatch.setattr(ips, "autosave_investment_state", _fake_autosave)
     ips.sync_experience_after_widget(st)
-    assert saved == ["Advanced Mode"]
+    assert saved == ["Advanced Mode:mode_change"]
     assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Advanced Mode"
+    assert st.session_state["_suite_inv_debug_last_mode_switch"]["autosave_triggered"] is True
+
+
+def test_sync_experience_skips_autosave_when_mode_unchanged(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    called = {"n": 0}
+
+    def _fake_autosave(st_obj, *, end_of_run=False, trigger="unknown"):
+        called["n"] += 1
+
+    monkeypatch.setattr(ips, "autosave_investment_state", _fake_autosave)
+    ips.sync_experience_after_widget(st)
+    assert called["n"] == 0
+    switch = st.session_state["_suite_inv_debug_last_mode_switch"]
+    assert switch["autosave_triggered"] is False
+    assert switch["autosave_skip_reason"] == "prev_equals_mode"

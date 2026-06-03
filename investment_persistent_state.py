@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 
 from suite_user_persistence import (
-    autosave_if_changed,
     load_user_state,
     reset_user_state,
     restore_once,
@@ -19,7 +18,11 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-experience-debug-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-experience-save-debug-v1"
+
+_MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
+_AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
+_MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
 EXPERIENCE_KEY = "experience"
@@ -165,6 +168,29 @@ _EXTRA_RESET_SESSION_KEYS = (
 )
 
 
+def _utc_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _append_diag_log(st: Any, key: str, entry: dict[str, Any]) -> None:
+    ss = st.session_state
+    log = ss.get(key)
+    if not isinstance(log, list):
+        log = []
+    log.append(entry)
+    ss[key] = log[-_MAX_DIAG_LOG_ENTRIES:]
+
+
+def _stage_experience_value(st: Any, snap_key: str) -> str | None:
+    snap = st.session_state.get(snap_key)
+    if isinstance(snap, dict):
+        val = snap.get("widget")
+        if val not in EXPERIENCE_OPTIONS:
+            val = snap.get("persisted")
+        return str(val) if val in EXPERIENCE_OPTIONS else None
+    return None
+
+
 def current_experience_mode(st: Any) -> str:
     ss = st.session_state
     for key in (EXPERIENCE_KEY, PERSISTED_EXPERIENCE_KEY):
@@ -214,6 +240,15 @@ def sync_experience_after_widget(st: Any) -> None:
     if mode not in EXPERIENCE_OPTIONS:
         return
     prev = ss.get(PERSISTED_EXPERIENCE_KEY)
+    mode_change = prev != mode
+    switch_evt: dict[str, Any] = {
+        "at": _utc_now_iso(),
+        "prev_persisted": prev,
+        "widget_mode": mode,
+        "mode_change_detected": mode_change,
+        "pre_ensure_experience": _stage_experience_value(st, "_suite_inv_debug_experience_pre_ensure"),
+        "post_ensure_experience": _stage_experience_value(st, "_suite_inv_debug_experience_post_ensure"),
+    }
     ss[PERSISTED_EXPERIENCE_KEY] = mode
     ss["_suite_inv_debug_mode_final"] = mode
     ss["_suite_inv_debug_experience_post_widget"] = {
@@ -221,7 +256,8 @@ def sync_experience_after_widget(st: Any) -> None:
         "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
         "active": current_experience_mode(st),
     }
-    if prev != mode:
+    switch_evt["post_widget_experience"] = mode
+    if mode_change:
         try:
             from components.beginner_navigation import normalize_tab_label_for_mode
 
@@ -234,7 +270,13 @@ def sync_experience_after_widget(st: Any) -> None:
         except ImportError:
             pass
         ss["_suite_inv_debug_mode_saved"] = mode
-        autosave_investment_state(st)
+        switch_evt["autosave_triggered"] = True
+        autosave_investment_state(st, trigger="mode_change")
+    else:
+        switch_evt["autosave_triggered"] = False
+        switch_evt["autosave_skip_reason"] = "prev_equals_mode"
+    _append_diag_log(st, _MODE_SWITCH_LOG_KEY, switch_evt)
+    ss["_suite_inv_debug_last_mode_switch"] = switch_evt
 
 
 def ensure_analysis_date_defaults(st: Any) -> None:
@@ -464,29 +506,105 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     return restored
 
 
-def autosave_investment_state(st: Any, *, end_of_run: bool = False) -> None:
+def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str = "unknown") -> None:
+    """Persist session snapshot with detailed autosave diagnostics (phone + Dell)."""
+    import hashlib
+    import json
+
+    from suite_user_persistence import (
+        _LOCAL_DIRTY_PREFIX,
+        _SESSION_SAVED_FLASH_KEY,
+        _applied_cloud_ts_key,
+        _restored_fp_key,
+        save_user_state,
+    )
+
     ss = st.session_state
-    fp_key = "_suite_autosave_fp::investment"
-    fp_before = ss.get(fp_key)
+    fp_key = f"_suite_autosave_fp::{APP_ID}"
+    dirty_key = f"{_LOCAL_DIRTY_PREFIX}{APP_ID}"
+    restored_fp_key = _restored_fp_key(APP_ID)
+    applied_cloud_key = _applied_cloud_ts_key(APP_ID)
+
     attempt_mode = current_experience_mode(st)
     if end_of_run:
         ss["_suite_inv_debug_eor_autosave_attempt_mode"] = attempt_mode
     else:
         ss["_suite_inv_debug_autosave_attempt_mode"] = attempt_mode
-    autosave_if_changed(st, APP_ID, build_state=build_investment_disk_state)
-    fp_after = ss.get(fp_key)
-    if fp_after != fp_before and ss.get("_suite_persist_last_save_at"):
-        written_key = (
-            "_suite_inv_debug_eor_autosave_written_mode"
-            if end_of_run
-            else "_suite_inv_debug_autosave_written_mode"
-        )
-        ss[written_key] = attempt_mode
-        if end_of_run:
-            cloud_at_open = ss.get("_suite_inv_debug_cloud_experience")
-            ss["_suite_inv_debug_autosave_wrote_beginner_over_cloud_advanced"] = (
-                cloud_at_open == "Advanced Mode" and attempt_mode == EXPERIENCE_OPTIONS[0]
+
+    event: dict[str, Any] = {
+        "at": _utc_now_iso(),
+        "trigger": trigger,
+        "end_of_run": end_of_run,
+        "mode_at_autosave": attempt_mode,
+        "widget_at_autosave": ss.get(EXPERIENCE_KEY),
+        "persisted_at_autosave": ss.get(PERSISTED_EXPERIENCE_KEY),
+    }
+
+    try:
+        state = build_investment_disk_state(st)
+        event["blob_experience"] = state.get(EXPERIENCE_KEY)
+        event["blob_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
+
+        blob = json.dumps(state, sort_keys=True, default=str)
+        fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+        fp_before = ss.get(fp_key)
+        event["fp_before"] = fp_before
+        event["fp_after"] = fp
+
+        restored_fp = ss.get(restored_fp_key)
+        if restored_fp and fp != restored_fp:
+            ss[dirty_key] = True
+
+        if ss.get(fp_key) == fp:
+            event["outcome"] = "skipped_fp_unchanged"
+            _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
+            ss["_suite_inv_debug_last_autosave_event"] = event
+            return
+
+        saved_disk = save_user_state(APP_ID, state)
+        saved_cloud = False
+        try:
+            from suite_cloud_state import load_cloud_full_session, save_cloud_full_session, session_page_summary
+
+            page, summary = session_page_summary(APP_ID, state)
+            save_cloud_full_session(APP_ID, state, page=page, summary=summary)
+            saved_cloud = True
+            cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
+            if cloud_state:
+                event["cloud_readback_experience"] = cloud_state.get(EXPERIENCE_KEY)
+                event["cloud_readback_persisted"] = cloud_state.get(PERSISTED_EXPERIENCE_KEY)
+            event["cloud_readback_ts"] = cloud_ts
+        except Exception as exc:
+            event["cloud_save_error"] = str(exc)
+
+        event["saved_disk"] = saved_disk
+        event["saved_cloud"] = saved_cloud
+        event["outcome"] = "saved" if (saved_disk or saved_cloud) else "save_failed"
+
+        if saved_disk or saved_cloud:
+            ss[fp_key] = fp
+            ss[restored_fp_key] = fp
+            ss[dirty_key] = False
+            ss[applied_cloud_key] = event["at"]
+            ss["_suite_persist_last_save_at"] = event["at"]
+            ss[_SESSION_SAVED_FLASH_KEY] = True
+            written_key = (
+                "_suite_inv_debug_eor_autosave_written_mode"
+                if end_of_run
+                else "_suite_inv_debug_autosave_written_mode"
             )
+            ss[written_key] = attempt_mode
+            if end_of_run:
+                cloud_at_open = ss.get("_suite_inv_debug_cloud_experience")
+                ss["_suite_inv_debug_autosave_wrote_beginner_over_cloud_advanced"] = (
+                    cloud_at_open == "Advanced Mode" and attempt_mode == EXPERIENCE_OPTIONS[0]
+                )
+    except Exception as exc:
+        event["outcome"] = "exception"
+        event["error"] = str(exc)
+
+    _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
+    ss["_suite_inv_debug_last_autosave_event"] = event
 
 
 def finalize_persistence_debug(st: Any) -> None:
@@ -517,24 +635,14 @@ def _restore_probe_lines(st: Any) -> list[str]:
 
 def experience_mode_trace_lines(st: Any) -> list[str]:
     ss = st.session_state
-
-    def _stage_experience(key: str) -> str | None:
-        snap = ss.get(key)
-        if isinstance(snap, dict):
-            val = snap.get("widget")
-            if val not in EXPERIENCE_OPTIONS:
-                val = snap.get("persisted")
-            return str(val) if val in EXPERIENCE_OPTIONS else None
-        return None
-
     pick_source = ss.get("_suite_persist_debug_pick_source")
     pick_reason = ss.get("_suite_persist_debug_pick_reason")
     cloud_exp = ss.get("_suite_inv_debug_cloud_experience")
     disk_exp = ss.get("_suite_inv_debug_disk_experience")
     restored = ss.get("_suite_inv_debug_mode_after_restore")
-    pre_ensure = _stage_experience("_suite_inv_debug_experience_pre_ensure")
-    post_ensure = _stage_experience("_suite_inv_debug_experience_post_ensure")
-    post_widget = _stage_experience("_suite_inv_debug_experience_post_widget")
+    pre_ensure = _stage_experience_value(st, "_suite_inv_debug_experience_pre_ensure")
+    post_ensure = _stage_experience_value(st, "_suite_inv_debug_experience_post_ensure")
+    post_widget = _stage_experience_value(st, "_suite_inv_debug_experience_post_widget")
     final = ss.get("_suite_inv_debug_mode_final") or current_experience_mode(st)
     disk_won = pick_source == "disk"
     cloud_disk_mismatch = (
@@ -548,7 +656,6 @@ def experience_mode_trace_lines(st: Any) -> list[str]:
         and post_widget in EXPERIENCE_OPTIONS
         and restored != post_widget
     )
-    eor_written = ss.get("_suite_inv_debug_eor_autosave_written_mode")
     hypothesis_c = bool(ss.get("_suite_inv_debug_autosave_wrote_beginner_over_cloud_advanced"))
 
     return [
@@ -574,6 +681,58 @@ def experience_mode_trace_lines(st: Any) -> list[str]:
         f"local dirty: {ss.get('_suite_persist_local_dirty::investment')!r}",
         f"restore ran: {ss.get('_suite_inv_debug_restore_ran')!r}",
     ]
+
+
+def _format_diag_event(prefix: str, evt: dict[str, Any]) -> list[str]:
+    lines = [f"{prefix} @ {evt.get('at')!r}"]
+    for key in sorted(evt):
+        if key == "at":
+            continue
+        lines.append(f"  {key}: {evt.get(key)!r}")
+    return lines
+
+
+def mode_switch_and_autosave_trace_lines(st: Any) -> list[str]:
+    """Phone-side mode switch + autosave trail (last events in this session)."""
+    ss = st.session_state
+    lines = [f"build: {PERSISTENCE_DEBUG_BUILD_ID}", "— mode switch events —"]
+    switch_log = ss.get(_MODE_SWITCH_LOG_KEY)
+    if isinstance(switch_log, list) and switch_log:
+        for idx, evt in enumerate(switch_log, start=1):
+            if isinstance(evt, dict):
+                lines.extend(_format_diag_event(f"switch #{idx}", evt))
+    else:
+        lines.append("  (none yet — toggle Experience radio to populate)")
+
+    lines.append("— autosave events —")
+    autosave_log = ss.get(_AUTOSAVE_LOG_KEY)
+    if isinstance(autosave_log, list) and autosave_log:
+        for idx, evt in enumerate(autosave_log, start=1):
+            if isinstance(evt, dict):
+                lines.extend(_format_diag_event(f"autosave #{idx}", evt))
+    else:
+        lines.append("  (none yet)")
+
+    last_switch = ss.get("_suite_inv_debug_last_mode_switch")
+    last_autosave = ss.get("_suite_inv_debug_last_autosave_event")
+    if isinstance(last_switch, dict):
+        lines.append("— last mode switch summary —")
+        lines.append(f"  mode_change_detected: {last_switch.get('mode_change_detected')!r}")
+        lines.append(f"  autosave_triggered: {last_switch.get('autosave_triggered')!r}")
+        lines.append(f"  autosave_skip_reason: {last_switch.get('autosave_skip_reason')!r}")
+        lines.append(f"  post_widget_experience: {last_switch.get('post_widget_experience')!r}")
+    if isinstance(last_autosave, dict):
+        lines.append("— last autosave summary —")
+        lines.append(f"  trigger: {last_autosave.get('trigger')!r}")
+        lines.append(f"  outcome: {last_autosave.get('outcome')!r}")
+        lines.append(f"  blob_experience: {last_autosave.get('blob_experience')!r}")
+        lines.append(f"  blob_persisted: {last_autosave.get('blob_persisted')!r}")
+        lines.append(f"  cloud_readback_experience: {last_autosave.get('cloud_readback_experience')!r}")
+        lines.append(f"  cloud_readback_persisted: {last_autosave.get('cloud_readback_persisted')!r}")
+        lines.append(f"  cloud_readback_ts: {last_autosave.get('cloud_readback_ts')!r}")
+        if last_autosave.get("cloud_save_error"):
+            lines.append(f"  cloud_save_error: {last_autosave.get('cloud_save_error')!r}")
+    return lines
 
 
 def restore_diagnostics_lines(st: Any) -> list[str]:
@@ -608,8 +767,10 @@ def render_persistence_debug_content(st: Any) -> None:
     source = ss.get("_suite_persist_last_restore_source") or "—"
     st.caption(f"Diagnostic build **{PERSISTENCE_DEBUG_BUILD_ID}**")
     st.caption(f"Last cloud save: **{save_at or '—'}** · restore: **{restore_at or '—'}** ({source})")
-    st.markdown("**Experience mode trace**")
+    st.markdown("**Experience mode trace (restore / Dell)**")
     st.code("\n".join(experience_mode_trace_lines(st)), language=None)
+    st.markdown("**Mode switch + autosave trace (phone / save path)**")
+    st.code("\n".join(mode_switch_and_autosave_trace_lines(st)), language=None)
     st.markdown("**Restore diagnostics**")
     st.code("\n".join(restore_diagnostics_lines(st)), language=None)
     st.markdown("**Account scope**")
