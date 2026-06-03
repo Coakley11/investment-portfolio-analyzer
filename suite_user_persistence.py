@@ -165,9 +165,13 @@ def restore_once(
     app_id: str,
     *,
     apply_state: Callable[[Any, dict[str, Any]], None],
+    cloud_resync_needed: Callable[[Any, dict[str, Any], str | None], tuple[bool, str]] | None = None,
 ) -> bool:
     """
     Restore on direct open; re-apply when cloud is newer than last apply.
+
+    When ``cloud_resync_needed`` returns True, re-applies cloud state even if
+    ``updated_at`` is not newer than ``last_applied`` (cross-device content drift).
 
     Skipped when Continue/deep-link query params are present, or when this
     device has unsaved local edits (``_suite_persist_local_dirty``).
@@ -218,6 +222,12 @@ def restore_once(
         cloud_state, cloud_ts = load_cloud_full_session(app_id)
         already_restored = st.session_state.get(flag)
         applied_cloud_ts = st.session_state.get(applied_cloud_key)
+        content_resync = False
+        content_resync_detail = ""
+        if cloud_resync_needed and cloud_state:
+            content_resync, content_resync_detail = cloud_resync_needed(st, cloud_state, cloud_ts)
+        st.session_state["_suite_persist_content_resync_needed"] = content_resync
+        st.session_state["_suite_persist_content_resync_detail"] = content_resync_detail or None
 
         if already_restored:
             if local_dirty:
@@ -232,7 +242,12 @@ def restore_once(
                     local_dirty=True,
                 )
                 return False
-            if cloud_state and parse_persist_timestamp(cloud_ts) <= parse_persist_timestamp(applied_cloud_ts):
+            cloud_newer = parse_persist_timestamp(cloud_ts) > parse_persist_timestamp(applied_cloud_ts)
+            if (
+                not content_resync
+                and cloud_state
+                and not cloud_newer
+            ):
                 _set_restore_skip_reason(st, "already restored this session; cloud not newer than last apply")
                 _record_restore_debug_meta(
                     st,
@@ -245,17 +260,23 @@ def restore_once(
                 )
                 return False
 
-        picked = pick_restore_session(
-            cloud_state,
-            cloud_ts,
-            disk_state,
-            disk_ts,
-            local_dirty=local_dirty,
-        )
-        state = picked.state
-        pick_source = picked.source
-        pick_reason = picked.reason
-        from_cloud = picked.source == "cloud"
+        if content_resync and cloud_state:
+            state = copy.deepcopy(cloud_state)
+            pick_source = "cloud"
+            pick_reason = f"content resync ({content_resync_detail or 'drift'})"
+            from_cloud = True
+        else:
+            picked = pick_restore_session(
+                cloud_state,
+                cloud_ts,
+                disk_state,
+                disk_ts,
+                local_dirty=local_dirty,
+            )
+            state = picked.state
+            pick_source = picked.source
+            pick_reason = picked.reason
+            from_cloud = picked.source == "cloud"
 
         st.session_state["_suite_persist_debug_cloud_ts"] = cloud_ts
         st.session_state["_suite_persist_debug_disk_ts"] = disk_ts
@@ -353,19 +374,22 @@ def autosave_if_changed(
             return
         saved_disk = save_user_state(app_id, state)
         saved_cloud = False
+        cloud_readback_ts: str | None = None
         try:
-            from suite_cloud_state import save_cloud_full_session, session_page_summary
+            from suite_cloud_state import load_cloud_full_session, save_cloud_full_session, session_page_summary
 
             page, summary = session_page_summary(app_id, state)
             save_cloud_full_session(app_id, state, page=page, summary=summary)
             saved_cloud = True
+            _cloud_state, cloud_readback_ts = load_cloud_full_session(app_id)
         except Exception:
             pass
         if saved_disk or saved_cloud:
             st.session_state[key] = fp
             st.session_state[_restored_fp_key(app_id)] = fp
             st.session_state[_local_dirty_key(app_id)] = False
-            st.session_state[_applied_cloud_ts_key(app_id)] = _utc_now_iso()
+            applied_ts = cloud_readback_ts if saved_cloud and cloud_readback_ts else _utc_now_iso()
+            st.session_state[_applied_cloud_ts_key(app_id)] = applied_ts
             st.session_state["_suite_persist_last_save_at"] = _utc_now_iso()
             st.session_state[_SESSION_SAVED_FLASH_KEY] = True
     except Exception:

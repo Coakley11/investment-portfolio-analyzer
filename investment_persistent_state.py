@@ -18,7 +18,7 @@ from suite_user_persistence import (
 APP_ID = "investment"
 
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
-PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-debug-v1"
+PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-session-sync-fix-v1"
 
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
@@ -324,6 +324,76 @@ def _normalize_restored_state(state: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def investment_cloud_resync_needed(
+    st: Any,
+    cloud_state: dict[str, Any],
+    cloud_ts: str | None = None,
+) -> tuple[bool, str]:
+    """
+    True when live session drifts from cloud ``full_session`` (cross-device re-sync).
+
+    Compares experience, goal/portfolio/workflow scalars, holdings fingerprint,
+    and workflow blob — same fields persisted for phone ↔ Dell sync.
+    """
+    del cloud_ts
+    if not isinstance(cloud_state, dict) or not cloud_state:
+        return False, ""
+    cloud = _normalize_restored_state(cloud_state)
+    reasons: list[str] = []
+
+    cloud_exp = cloud.get(EXPERIENCE_KEY)
+    if cloud_exp in EXPERIENCE_OPTIONS and cloud_exp != current_experience_mode(st):
+        reasons.append("experience")
+
+    for key in (
+        "beginner_goal_card",
+        "guide_goal_choice",
+        "health_objective",
+        "preset_applied",
+        "portfolio_built",
+        "portfolio_analyzed",
+        "portfolio_health_reviewed",
+        "recommendations_displayed",
+        "investment_active_tab",
+    ):
+        if key not in cloud:
+            continue
+        live_val = st.session_state.get(key)
+        if live_val is None and key in PERSIST_FIELD_DEFAULTS:
+            live_val = PERSIST_FIELD_DEFAULTS[key]
+        if cloud.get(key) != live_val:
+            reasons.append(key)
+
+    cloud_hfp = cloud.get("holdings_fingerprint")
+    if cloud_hfp:
+        try:
+            from components.beginner_navigation import _holdings_fingerprint
+
+            df = st.session_state.get("holdings_df")
+            if isinstance(df, pd.DataFrame) and _holdings_fingerprint(df) != cloud_hfp:
+                reasons.append("holdings_fingerprint")
+        except ImportError:
+            pass
+
+    try:
+        import json
+
+        from investment_workflow import WORKFLOW_STATE_BLOB_KEY, build_workflow_persist_blob
+
+        cloud_wf = cloud.get(WORKFLOW_STATE_BLOB_KEY)
+        if isinstance(cloud_wf, dict) and cloud_wf:
+            live_wf = build_workflow_persist_blob(st)
+            if json.dumps(cloud_wf, sort_keys=True, default=str) != json.dumps(
+                live_wf, sort_keys=True, default=str
+            ):
+                reasons.append("workflow_state")
+    except ImportError:
+        pass
+
+    detail = ",".join(reasons)
+    return bool(reasons), detail
+
+
 def _record_restore_debug(st: Any, restored_blob: dict[str, Any]) -> None:
     restored_keys: list[str] = []
     default_keys: list[str] = []
@@ -497,7 +567,12 @@ def _record_session_sync_debug(st: Any) -> None:
         "memory_cloud_mismatch": memory_cloud_mismatch,
         "restore_skip_reason": skip_reason,
         "local_dirty": ss.get("_suite_persist_local_dirty::investment"),
-        "stale_session_likely": bool(memory_cloud_mismatch and (skip_not_newer or not restore_ran)),
+        "content_resync_needed": ss.get("_suite_persist_content_resync_needed"),
+        "content_resync_detail": ss.get("_suite_persist_content_resync_detail"),
+        "stale_session_likely": bool(
+            memory_cloud_mismatch and (skip_not_newer or not restore_ran)
+            and not ss.get("_suite_persist_content_resync_needed")
+        ),
     }
 
 
@@ -536,6 +611,7 @@ def restore_investment_disk_state_once(st: Any) -> bool:
         st,
         APP_ID,
         apply_state=lambda st_obj, s: apply_investment_disk_state(st_obj, s),
+        cloud_resync_needed=investment_cloud_resync_needed,
     )
     st.session_state["_suite_inv_debug_restore_ran"] = restored
     st.session_state["_suite_inv_debug_restore_source"] = st.session_state.get(
@@ -544,8 +620,10 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_pick_reason"] = st.session_state.get(
         "_suite_persist_last_restore_reason"
     )
-    if not restored:
+    if not restored and not st.session_state.get("_suite_disk_state_restored::investment"):
         ensure_experience_mode(st)
+        st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
+    elif restored:
         st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
     _record_session_sync_debug(st)
     return restored
@@ -630,7 +708,15 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             ss[fp_key] = fp
             ss[restored_fp_key] = fp
             ss[dirty_key] = False
-            ss[applied_cloud_key] = event["at"]
+            readback_ts = event.get("cloud_readback_ts")
+            if saved_cloud and readback_ts:
+                ss[applied_cloud_key] = readback_ts
+                event["applied_cloud_ts"] = readback_ts
+                event["applied_cloud_ts_source"] = "cloud_readback"
+            else:
+                ss[applied_cloud_key] = event["at"]
+                event["applied_cloud_ts"] = event["at"]
+                event["applied_cloud_ts_source"] = "local_fallback"
             ss["_suite_persist_last_save_at"] = event["at"]
             ss[_SESSION_SAVED_FLASH_KEY] = True
             written_key = (
@@ -697,12 +783,13 @@ def session_sync_trace_lines(st: Any) -> list[str]:
         "memory_cloud_mismatch",
         "restore_skip_reason",
         "local_dirty",
+        "content_resync_needed",
+        "content_resync_detail",
         "stale_session_likely",
     ):
         lines.append(f"{key}: {sync.get(key)!r}")
     lines.append(
-        "note: Streamlit session_state survives reruns and many hard refreshes; "
-        "restore_once skips when already_restored and cloud_ts <= last_applied"
+        "note: content_resync_needed bypasses timestamp skip; last_applied uses cloud readback after save"
     )
     return lines
 

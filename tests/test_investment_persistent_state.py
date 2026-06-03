@@ -100,6 +100,29 @@ def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
     assert st.session_state["_suite_inv_debug_last_mode_switch"]["autosave_triggered"] is True
 
 
+def test_investment_cloud_resync_detects_experience_drift():
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    needed, detail = ips.investment_cloud_resync_needed(
+        st,
+        {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
+    )
+    assert needed is True
+    assert "experience" in detail
+
+
+def test_investment_cloud_resync_false_when_aligned():
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    needed, detail = ips.investment_cloud_resync_needed(
+        st,
+        {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
+    )
+    assert needed is False
+    assert detail == ""
+
+
 def test_sync_experience_skips_autosave_when_mode_unchanged(monkeypatch):
     st = _FakeSt()
     st.session_state["experience"] = "Advanced Mode"

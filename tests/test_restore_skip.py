@@ -85,6 +85,35 @@ class TestRestoreOnceSkip(unittest.TestCase):
             st.session_state["_suite_persist_restore_skip_reason"],
         )
 
+    def test_content_resync_reapplies_when_callback_reports_drift(self) -> None:
+        st = _FakeSt()
+        st.session_state["_suite_disk_state_restored::investment"] = True
+        st.session_state["_suite_applied_cloud_ts::investment"] = "2026-06-03T12:05:00+00:00"
+        st.session_state["experience"] = "Beginner Mode"
+
+        def _needs_resync(_st, cloud_state, _cloud_ts):
+            exp = cloud_state.get("experience")
+            drift = exp == "Advanced Mode" and _st.session_state.get("experience") != exp
+            return drift, "experience" if drift else ""
+
+        def _apply(_st, state):
+            _st.session_state["experience"] = state["experience"]
+
+        with patch(
+            "suite_cloud_state.load_cloud_full_session",
+            return_value=({"experience": "Advanced Mode"}, "2026-06-03T12:00:00+00:00"),
+        ):
+            with patch("suite_user_persistence._load_raw", return_value=({}, None, None)):
+                restored = restore_once(
+                    st,
+                    "investment",
+                    apply_state=_apply,
+                    cloud_resync_needed=_needs_resync,
+                )
+        self.assertTrue(restored)
+        self.assertEqual(st.session_state["experience"], "Advanced Mode")
+        self.assertIn("content resync", st.session_state["_suite_persist_debug_pick_reason"])
+
 
 class TestStorageShim(unittest.TestCase):
     def test_suite_storage_imports_load_current_states(self) -> None:
