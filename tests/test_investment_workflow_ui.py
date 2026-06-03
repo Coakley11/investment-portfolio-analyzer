@@ -5,10 +5,12 @@ from __future__ import annotations
 import unittest
 
 from investment_workflow import (
+    _health_is_fresh,
     apply_pending_investment_tab,
     invalidate_workflow_from,
     mark_health_reviewed_for_portfolio,
     portfolio_analysis_fingerprint,
+    reconcile_workflow_health,
     record_workflow_health_status,
     request_workflow_tab_navigation,
     workflow_checklist,
@@ -79,6 +81,26 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         self.assertTrue(applied)
         self.assertEqual(ss["investment_active_tab"], BEGINNER_TAB_LABELS[2])
         self.assertNotIn("_pending_investment_tab", ss)
+
+    def test_health_is_fresh_requires_cached_blob(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        record_workflow_health_status("fresh", st)
+        self.assertFalse(_health_is_fresh(st))
+        ss["health_result"] = object()
+        ss["health_result_fingerprint"] = "SPY:1.0000"
+        self.assertTrue(_health_is_fresh(st))
+
+    def test_reconcile_matching_fp_sets_fresh_status(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        fp = portfolio_analysis_fingerprint(["SPY", "BND"], [0.6, 0.4])
+        ss["health_result"] = object()
+        ss["health_result_fingerprint"] = fp
+        record_workflow_health_status("portfolio_stale", st)
+        reconcile_workflow_health(["SPY", "BND"], [0.6, 0.4], st)
+        self.assertEqual(ss["_workflow_health_status"], "fresh")
+        self.assertTrue(_health_is_fresh(st))
 
     def test_portfolio_invalidate_keeps_goal(self) -> None:
         st = _FakeSt()

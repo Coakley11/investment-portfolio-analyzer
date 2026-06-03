@@ -83,6 +83,7 @@ class TestInvalidateWorkflow(unittest.TestCase):
         ss["health_result_fingerprint"] = fp
         reconcile_workflow_health(["SPY", "BND"], [0.6, 0.4], st)
         self.assertTrue(ss["portfolio_analyzed"])
+        self.assertEqual(ss.get("_workflow_health_status"), "fresh")
 
     def test_developer_diagnostics_default_off(self) -> None:
         st = _FakeSt()

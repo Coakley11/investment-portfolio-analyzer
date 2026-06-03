@@ -20,7 +20,7 @@ WorkflowCoreKey = Literal["goal", "portfolio", "analyze", "health", "recommendat
 StepVisual = Literal["complete", "current", "stale", "available"]
 WorkflowIntent = Literal["change_goal", "rebuild_portfolio"]
 
-WORKFLOW_UI_BUILD = "2026-06-03-goal-change-fix"
+WORKFLOW_UI_BUILD = "2026-06-03-health-step-fix"
 _GOAL_SELECTION_DEBUG_KEY = "_goal_selection_debug"
 _GOAL_CHANGE_DEBUG_KEY = "_goal_change_workflow_debug"
 WORKFLOW_CORE_STEPS: tuple[WorkflowCoreKey, ...] = (
@@ -534,6 +534,10 @@ def reconcile_workflow_health(
     if ss.get("health_result") and cached_fp == fp:
         ss["portfolio_analyzed"] = True
         _clear_stale_steps(ss, "analyze")
+        record_workflow_health_status("fresh", st_obj)
+        return
+    if not ss.get("health_result"):
+        record_workflow_health_status("missing", st_obj)
 
 
 def record_workflow_health_status(status: str, st_obj: Any | None = None) -> None:
@@ -547,7 +551,11 @@ def record_workflow_health_status(status: str, st_obj: Any | None = None) -> Non
 
 
 def _health_is_fresh(st_obj: Any | None = None) -> bool:
-    return _sess(st_obj).get(_HEALTH_STATUS_KEY) == "fresh"
+    """Workflow health is fresh only when status and cached analysis blob agree."""
+    ss = _sess(st_obj)
+    if ss.get(_HEALTH_STATUS_KEY) != "fresh":
+        return False
+    return bool(ss.get("health_result")) and bool(ss.get("health_result_fingerprint"))
 
 
 def goal_display_label(st_obj: Any | None = None) -> str:
@@ -671,6 +679,47 @@ def _refresh_goal_change_debug_snapshot(
     dbg["checklist"] = workflow_checklist(st_obj)
     dbg["stale_steps"] = sorted(_stale_steps_set(ss))
     ss[_GOAL_CHANGE_DEBUG_KEY] = dbg
+
+
+def render_health_workflow_debug(
+    st_obj: Any,
+    *,
+    beginner_mode: bool,
+    tickers: list[str],
+    weights: Any,
+    cache_status: str,
+    health_loaded: bool,
+) -> None:
+    """Temporary debug panel for Portfolio Health step (remove when confirmed fixed)."""
+    ss = _sess(st_obj)
+    fp = portfolio_analysis_fingerprint(tickers, weights)
+    checklist = workflow_checklist(st_obj)
+    with st.expander("🐞 Health step debug (temporary)", expanded=True):
+        st.caption(f"Build **{WORKFLOW_UI_BUILD}**")
+        st.markdown(f"**`get_health_cache_status`:** `{cache_status}`")
+        st.markdown(f"**`_workflow_health_status`:** `{ss.get(_HEALTH_STATUS_KEY)!r}`")
+        st.markdown(f"**`_health_is_fresh`:** `{_health_is_fresh(st_obj)}`")
+        st.markdown(f"**`portfolio_analyzed`:** `{ss.get('portfolio_analyzed')!r}`")
+        st.markdown(f"**`portfolio_health_reviewed`:** `{ss.get('portfolio_health_reviewed')!r}`")
+        st.markdown(f"**`health_result` present:** `{bool(ss.get('health_result'))}`")
+        st.markdown(f"**Cached fingerprint:** `{ss.get('health_result_fingerprint')!r}`")
+        st.markdown(f"**Current fingerprint:** `{fp!r}`")
+        st.markdown(f"**Fingerprints match:** `{ss.get('health_result_fingerprint') == fp}`")
+        st.markdown(f"**`run_health`:** `{ss.get('run_health')!r}`")
+        st.markdown(f"**Health panel rendered:** `{health_loaded}`")
+        st.markdown(f"**`investment_active_tab`:** `{ss.get('investment_active_tab')!r}`")
+        goal_tab = workflow_tab_label_for_step("goal", beginner=beginner_mode)
+        health_tab = workflow_tab_label_for_step("health", beginner=beginner_mode)
+        st.markdown(f"**On Health tab:** `{ss.get('investment_active_tab') == health_tab}` (expect `{health_tab}`)")
+        st.json(
+            {
+                "checklist_analyze": checklist.get("analyze"),
+                "checklist_health": checklist.get("health"),
+                "checklist_recommendations": checklist.get("recommendations"),
+                "stale_steps": sorted(_stale_steps_set(ss)),
+                "health_viewed_fp": ss.get(_HEALTH_VIEWED_FP_KEY),
+            }
+        )
 
 
 def render_goal_change_workflow_debug(
@@ -932,12 +981,13 @@ def mark_health_reviewed_for_portfolio(
     st_obj: Any | None = None,
 ) -> None:
     """Call when Portfolio Health UI is shown for the current holdings."""
-    if not _health_is_fresh(st_obj):
-        return
     ss = _sess(st_obj)
+    if not ss.get("health_result"):
+        return
     fp = portfolio_analysis_fingerprint(tickers, weights)
     if ss.get("health_result_fingerprint") != fp:
         return
+    record_workflow_health_status("fresh", st_obj)
     mark_health_reviewed(st_obj)
     ss[_HEALTH_VIEWED_FP_KEY] = fp
     _clear_stale_steps(ss, "health")

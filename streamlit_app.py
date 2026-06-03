@@ -634,9 +634,10 @@ def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str],
     st.session_state.health_result_fingerprint = fp
     st.session_state.health_settings_fingerprint = settings_fp
     try:
-        from investment_workflow import mark_analysis_complete
+        from investment_workflow import mark_analysis_complete, record_workflow_health_status
 
         mark_analysis_complete(st)
+        record_workflow_health_status("fresh", st)
     except ImportError:
         st.session_state.portfolio_analyzed = True
     try:
@@ -656,6 +657,18 @@ def get_cached_health(tickers: list[str], weights: np.ndarray) -> core.Portfolio
     if get_health_cache_status(tickers, weights) != "fresh":
         return None
     return st.session_state.get("health_result")
+
+
+def sync_workflow_health_status(tickers: list[str], weights: np.ndarray) -> str:
+    """Align workflow checklist flags with the health cache (after reconcile)."""
+    status = get_health_cache_status(tickers, weights)
+    try:
+        from investment_workflow import record_workflow_health_status
+
+        record_workflow_health_status(status, st)
+    except ImportError:
+        pass
+    return status
 
 
 def evaluate_portfolio_health_if_needed(
@@ -1651,7 +1664,6 @@ try:
         )
 
         track_holdings_dataframe(st.session_state.holdings_df, st)
-        record_workflow_health_status(get_health_cache_status(tickers, weights), st)
     except ImportError:
         needs_analytics_load = lambda *_a, **_k: True  # type: ignore[misc, assignment]
 except ValueError as e:
@@ -1679,7 +1691,7 @@ if _load_analytics:
         from investment_workflow import reconcile_workflow_health
 
         reconcile_workflow_health(tickers, weights, st)
-        record_workflow_health_status(get_health_cache_status(tickers, weights), st)
+        sync_workflow_health_status(tickers, weights)
     except ImportError:
         pass
     with st.spinner("Loading market data and running analytics…"):
@@ -1731,6 +1743,7 @@ else:
         from investment_workflow import reconcile_workflow_health
 
         reconcile_workflow_health(tickers, weights, st)
+        sync_workflow_health_status(tickers, weights)
     except ImportError:
         pass
 
@@ -1874,12 +1887,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
                 _beg_health,
                 objective=st.session_state.get("health_objective", "balanced growth"),
             )
-            try:
-                from investment_workflow import record_workflow_health_status
-
-                record_workflow_health_status(get_health_cache_status(tickers, weights), st)
-            except ImportError:
-                pass
+            sync_workflow_health_status(tickers, weights)
             st.success("Analysis complete for your current portfolio. Open **⑤ Portfolio Health** for the full score and recommendations.")
         else:
             st.info("Click **Analyze Portfolio** above to run the checkup.")
@@ -1954,6 +1962,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
 if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health"):
+    _health_debug_loaded = False
     section_header(
         "Portfolio Health",
         "Your portfolio checkup — what's working, what to watch, and ideas to consider." if beginner_mode
@@ -2074,7 +2083,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
         try:
             from investment_workflow import invalidate_workflow_from
 
-            invalidate_workflow_from("goal")
+            invalidate_workflow_from("analysis")
         except ImportError:
             pass
         try:
@@ -2085,10 +2094,28 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             pass
     st.session_state["_activity_health_objective"] = health_objective
 
+    sync_workflow_health_status(tickers, weights)
     health: core.PortfolioHealthResult | None = get_cached_health(tickers, weights)
+    cache_status = get_health_cache_status(tickers, weights)
+    if health is None and cache_status == "fresh":
+        health = st.session_state.get("health_result")
     if not st.session_state.get("run_health", False):
         if health is None:
-            st.info("Click **Refresh Portfolio Health** to run the health analysis with your current settings.")
+            if cache_status == "settings_stale":
+                st.warning(
+                    "Macro or objective settings changed since your last analysis. "
+                    "Click **Refresh Portfolio Health** to update the score for your current settings."
+                )
+            elif bool(st.session_state.get("portfolio_analyzed")):
+                st.warning(
+                    "Analysis was run, but the health cache is not available for this portfolio. "
+                    "Click **Refresh Portfolio Health** below."
+                )
+            else:
+                st.info(
+                    "Run **Analyze Portfolio** on the previous step first, then open this tab — "
+                    "or click **Refresh Portfolio Health** below."
+                )
     else:
         health = evaluate_portfolio_health_if_needed(
             settings=settings,
@@ -2102,14 +2129,11 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             base_risk_pack=base_risk_pack,
             bench_rets=bench_rets,
         )
-        try:
-            from investment_workflow import record_workflow_health_status
-
-            record_workflow_health_status(get_health_cache_status(tickers, weights), st)
-        except ImportError:
-            pass
+        sync_workflow_health_status(tickers, weights)
 
     if health is not None:
+        _health_debug_loaded = True
+        sync_workflow_health_status(tickers, weights)
         try:
             from investment_workflow import mark_health_reviewed_for_portfolio
 
@@ -2315,6 +2339,20 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             f"Portfolio Health outputs are rule-based and model-driven. {APP_DISCLAIMER} "
             "Refresh after changing tickers, weights, or macro settings."
         )
+
+    try:
+        from investment_workflow import render_health_workflow_debug
+
+        render_health_workflow_debug(
+            st,
+            beginner_mode=beginner_mode,
+            tickers=tickers,
+            weights=weights,
+            cache_status=cache_status,
+            health_loaded=_health_debug_loaded,
+        )
+    except ImportError:
+        pass
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 
