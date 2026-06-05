@@ -1562,10 +1562,11 @@ def export_buttons(
 
 # ── Header ──────────────────────────────────────────────────────────────────────
 
-settings = render_sidebar()
+pdemo.apply_pending_portfolio_demo(st)
 if pp.is_demo_mode(st) and not pp.demo_applied(st, "portfolio"):
-    pdemo.load_sample_portfolio(st)
-    st.rerun()
+    pdemo.schedule_sample_portfolio_demo(st)
+
+settings = render_sidebar()
 beginner_mode = is_beginner_mode(settings)
 if beginner_mode:
     ensure_beginner_macro_defaults()
