@@ -840,6 +840,12 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
+    try:
+        from suite_command_center_link import render_command_center_sidebar_link
+
+        render_command_center_sidebar_link(st)
+    except Exception:
+        pass
     if _PERSISTENCE_OK:
         try:
             from investment_workflow import developer_access_available, render_developer_sidebar_controls

@@ -129,7 +129,7 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "overview_subtab": None,
     "overview_show_extended_metrics": False,
     "mc_assumption_mode": "Historical returns",
-    "plan_total_cash": None,
+    "plan_total_cash": 100_000,
     "plan_emergency": 20_000,
     "plan_near_term": 0,
     "plan_debt": 0,
@@ -556,6 +556,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         from investment_workflow import reconcile_workflow_after_restore
 
         reconcile_workflow_after_restore(st)
+    except ImportError:
+        pass
+
+    try:
+        from components.investment_planning import sanitize_plan_session_integers
+
+        sanitize_plan_session_integers(st.session_state, PERSIST_FIELD_DEFAULTS)
     except ImportError:
         pass
 
@@ -1087,6 +1094,12 @@ def apply_investment_session_defaults(st: Any) -> None:
     )
     ss.pop(_LEGACY_TAB_KEY, None)
     ensure_analysis_date_defaults(st)
+    try:
+        from components.investment_planning import sanitize_plan_session_integers
+
+        sanitize_plan_session_integers(ss, PERSIST_FIELD_DEFAULTS)
+    except ImportError:
+        pass
 
 
 def default_reset_investment_session(st: Any) -> None:

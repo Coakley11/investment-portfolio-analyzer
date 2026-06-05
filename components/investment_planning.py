@@ -39,6 +39,55 @@ def _money(x: float) -> str:
     return f"${x:,.0f}"
 
 
+def coerce_plan_integer(value: Any, fallback: int) -> int:
+    """Safe int for plan widgets — cloud restore may leave None, '', or formatted strings."""
+    fb = int(fallback)
+    if value is None:
+        return fb
+    if isinstance(value, bool):
+        return fb
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        if np.isnan(value):
+            return fb
+        return max(0, int(value))
+    text = str(value).strip()
+    if not text:
+        return fb
+    cleaned = text.replace(",", "").replace("$", "").strip()
+    try:
+        return max(0, int(float(cleaned)))
+    except (TypeError, ValueError):
+        return fb
+
+
+def plan_integer_from_session(key: str, fallback: int) -> int:
+    """Read a plan scalar from session state; invalid stored values fall back."""
+    if key not in st.session_state:
+        return coerce_plan_integer(fallback, fallback)
+    return coerce_plan_integer(st.session_state.get(key), fallback)
+
+
+def sanitize_plan_session_integers(session_state: Any, defaults: dict[str, Any] | None = None) -> None:
+    """Normalize persisted plan_* keys so widgets never see None or junk."""
+    keys = (
+        "plan_total_cash",
+        "plan_emergency",
+        "plan_near_term",
+        "plan_debt",
+        "plan_expenses",
+        "plan_monthly",
+    )
+    for key in keys:
+        fb = defaults.get(key) if defaults else None
+        if fb is None:
+            fb = 0 if key != "plan_emergency" else 20_000
+        if key not in session_state:
+            continue
+        session_state[key] = coerce_plan_integer(session_state.get(key), int(fb))
+
+
 def _plan_field(raw: Any, field: str, default: float | list[str]) -> Any:
     """Read a plan field from a dataclass, dict, or object with alternate key names."""
     if isinstance(raw, dict):
@@ -222,7 +271,10 @@ def render_how_much_to_invest(
                 "Total available cash / savings ($)",
                 min_value=0,
                 max_value=50_000_000,
-                value=int(st.session_state.get("plan_total_cash", settings["initial_value"])),
+                value=plan_integer_from_session(
+                    "plan_total_cash",
+                    coerce_plan_integer(settings.get("initial_value"), 100_000),
+                ),
                 step=5_000,
                 key=f"{key_prefix}_plan_total_cash",
             )
@@ -230,7 +282,7 @@ def render_how_much_to_invest(
                 "Emergency fund needed ($)",
                 min_value=0,
                 max_value=10_000_000,
-                value=int(st.session_state.get("plan_emergency", 20_000)),
+                value=plan_integer_from_session("plan_emergency", 20_000),
                 step=1_000,
                 key=f"{key_prefix}_plan_emergency",
             )
@@ -238,7 +290,7 @@ def render_how_much_to_invest(
                 "Money needed in the next 1–2 years ($)",
                 min_value=0,
                 max_value=10_000_000,
-                value=int(st.session_state.get("plan_near_term", 0)),
+                value=plan_integer_from_session("plan_near_term", 0),
                 step=1_000,
                 key=f"{key_prefix}_plan_near_term",
             )
@@ -247,7 +299,7 @@ def render_how_much_to_invest(
                 "Existing debt or obligations ($)",
                 min_value=0,
                 max_value=10_000_000,
-                value=int(st.session_state.get("plan_debt", 0)),
+                value=plan_integer_from_session("plan_debt", 0),
                 step=1_000,
                 key=f"{key_prefix}_plan_debt",
             )
@@ -255,7 +307,7 @@ def render_how_much_to_invest(
                 "Planned large expenses ($)",
                 min_value=0,
                 max_value=10_000_000,
-                value=int(st.session_state.get("plan_expenses", 0)),
+                value=plan_integer_from_session("plan_expenses", 0),
                 step=1_000,
                 key=f"{key_prefix}_plan_expenses",
             )
@@ -263,7 +315,7 @@ def render_how_much_to_invest(
                 "Monthly contribution (optional) ($)",
                 min_value=0,
                 max_value=500_000,
-                value=int(st.session_state.get("plan_monthly", 0)),
+                value=plan_integer_from_session("plan_monthly", 0),
                 step=100,
                 key=f"{key_prefix}_plan_monthly",
             )
@@ -273,7 +325,7 @@ def render_how_much_to_invest(
                 "Investment time horizon (years)",
                 1,
                 40,
-                int(st.session_state.get("plan_horizon", 15)),
+                plan_integer_from_session("plan_horizon", 15),
                 key=f"{key_prefix}_plan_horizon",
             )
         with r2:
