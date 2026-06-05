@@ -15,6 +15,8 @@ import streamlit as st
 
 import dashboard_charts as charts
 import portfolio_core as core
+import portfolio_polish as pp
+import portfolio_demo as pdemo
 from components.decision_coach import (
     render_action_plan,
     render_action_plan_placeholder,
@@ -403,6 +405,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+pp.inject_polish_css(st, app_slug="investment")
+
 HELP_BEGINNER = {
     "sharpe": "Whether your return is worth the risk you're taking. Higher is generally better.",
     "sortino": "Risk/reward score that cares more about bad drops than normal ups and downs.",
@@ -435,6 +439,14 @@ def _money(x: float) -> str:
 
 
 def render_branded_header(beginner: bool = True):
+    screenshot = pp.is_screenshot_mode(st)
+    if screenshot:
+        pp.render_hero_banner(
+            st,
+            "Investment Portfolio Dashboard",
+            "Live market data · Risk metrics · Monte Carlo · Efficient frontier · Portfolio optimization",
+        )
+        return
     if beginner:
         st.markdown(
             """
@@ -846,6 +858,7 @@ def render_sidebar() -> dict:
         render_command_center_sidebar_link(st)
     except Exception:
         pass
+    pp.render_sidebar_toggle(st)
     if _PERSISTENCE_OK:
         try:
             from investment_workflow import developer_access_available, render_developer_sidebar_controls
@@ -1550,6 +1563,9 @@ def export_buttons(
 # ── Header ──────────────────────────────────────────────────────────────────────
 
 settings = render_sidebar()
+if pp.is_demo_mode(st) and not pp.demo_applied(st, "portfolio"):
+    pdemo.load_sample_portfolio(st)
+    st.rerun()
 beginner_mode = is_beginner_mode(settings)
 if beginner_mode:
     ensure_beginner_macro_defaults()
@@ -1863,6 +1879,14 @@ if _active_tab == _main_tab_labels[5] and _require_analytics("Explain This Portf
 
 if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"):
     st.session_state.visited_risk = True
+    if pp.is_demo_mode(st) or pp.is_screenshot_mode(st):
+        pdemo.render_sample_portfolio_button(st)
+    pp.render_executive_summary(
+        st,
+        "Analyzes portfolio risk, return, and diversification using live Yahoo Finance data.",
+        "Translates quantitative metrics into actionable allocation insights for decision support.",
+        "Sharpe/Sortino ratios, volatility, drawdown, correlation heatmap, and rolling performance charts.",
+    )
     if beginner_mode:
         section_header(
             "Analyze Portfolio",
@@ -1900,7 +1924,12 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
             sync_workflow_health_status(tickers, weights)
             st.success("Analysis complete for your current portfolio. Open **⑤ Portfolio Health** for the full score and recommendations.")
         else:
-            st.info("Click **Analyze Portfolio** above to run the checkup.")
+            pp.render_professional_empty(
+                st,
+                "Configure your holdings on the Portfolio Inputs tab, then run Analyze Portfolio "
+                "to generate risk metrics, correlation analysis, and performance charts.",
+                title="Run portfolio analysis",
+            )
         try:
             from investment_workflow import render_rebuild_portfolio_panel
 
@@ -2367,6 +2396,8 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
 # ── Overview ──────────────────────────────────────────────────────────────────
 
 if _active_tab == _main_tab_labels[1] and _require_analytics("Overview"):
+    if pp.is_demo_mode(st) or pp.is_screenshot_mode(st):
+        pdemo.render_sample_portfolio_button(st)
     render_overview_tab(
         settings,
         metrics,
