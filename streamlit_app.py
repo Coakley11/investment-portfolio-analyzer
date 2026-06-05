@@ -1713,6 +1713,38 @@ try:
 except NameError:
     _load_analytics = True
 
+_capture_fp = None
+if pp.skip_heavy_work(st):
+    _capture_fp = pp.capture_analytics_fingerprint(
+        tickers, weights, settings["start"], settings["end"], _active_tab
+    )
+if pp.skip_heavy_work(st) and _load_analytics and _capture_fp is not None:
+    _cached_bundle = pp.restore_capture_analytics(st, _capture_fp)
+    if _cached_bundle:
+        prices = _cached_bundle["prices"]
+        returns = _cached_bundle["returns"]
+        mean_rets = _cached_bundle["mean_rets"]
+        cov = _cached_bundle["cov"]
+        metrics = _cached_bundle["metrics"]
+        growth = _cached_bundle["growth"]
+        bench_rets = _cached_bundle.get("bench_rets")
+        holdings_df = _cached_bundle["holdings_df"]
+        base_risk_pack = _cached_bundle["base_risk_pack"]
+        insights = _cached_bundle.get("insights") or []
+        explanation = _cached_bundle.get("explanation")
+        report_text = _cached_bundle.get("report_text") or ""
+        st.session_state.plan_compare_return = metrics.annual_return
+        export_buttons(
+            holdings_df,
+            metrics,
+            base_risk_pack["scenarios"],
+            base_risk_pack["vol_rank"],
+            base_risk_pack["risk_contrib"],
+            report_text,
+        )
+        _analytics_ready = True
+        _load_analytics = False
+
 if _load_analytics:
     try:
         from investment_workflow import reconcile_workflow_health
@@ -1765,6 +1797,23 @@ if _load_analytics:
         report_text,
     )
     _analytics_ready = True
+    if pp.skip_heavy_work(st) and _capture_fp is not None:
+        pp.store_capture_analytics(
+            st,
+            _capture_fp,
+            prices=prices,
+            returns=returns,
+            mean_rets=mean_rets,
+            cov=cov,
+            metrics=metrics,
+            growth=growth,
+            bench_rets=bench_rets,
+            holdings_df=holdings_df,
+            base_risk_pack=base_risk_pack,
+            insights=insights,
+            explanation=explanation,
+            report_text=report_text,
+        )
 else:
     try:
         from investment_workflow import reconcile_workflow_health
@@ -2828,7 +2877,7 @@ if _active_tab == _main_tab_labels[9]:
 render_health_header_badge(health_badge_slot, tickers, weights)
 
 try:
-    if _PERSISTENCE_OK:
+    if _PERSISTENCE_OK and not pp.skip_background_persistence(st):
         autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
 except Exception:
