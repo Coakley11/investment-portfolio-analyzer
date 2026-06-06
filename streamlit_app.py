@@ -858,6 +858,22 @@ def render_sidebar() -> dict:
         render_command_center_sidebar_link(st)
     except Exception:
         pass
+    _inv_dev = False
+    try:
+        from investment_workflow import developer_access_available
+
+        _inv_dev = developer_access_available(st)
+    except Exception:
+        pass
+    from suite_analytical_question import render_applied_math_sidebar_entry
+
+    render_applied_math_sidebar_entry(
+        st,
+        source_app="investment",
+        source_page=str(st.session_state.get("investment_active_tab") or "Overview"),
+        session_state=st.session_state,
+        developer_mode=_inv_dev,
+    )
     pp.render_sidebar_toggle(st)
     if _PERSISTENCE_OK:
         try:
@@ -1616,24 +1632,6 @@ except ImportError:
         label_visibility="collapsed",
     )
 _active_tab = st.session_state["investment_active_tab"]
-
-try:
-    from suite_analytical_question import build_context_from_session, render_analyze_with_applied_math_sidebar
-
-    _ami_ctx, _ami_summary = build_context_from_session(
-        "investment",
-        _active_tab,
-        st.session_state,
-    )
-    render_analyze_with_applied_math_sidebar(
-        st,
-        source_app="investment",
-        source_page=_active_tab,
-        context=_ami_ctx,
-        context_summary=_ami_summary,
-    )
-except Exception:
-    pass
 
 if _active_tab == _main_tab_labels[0]:
     if beginner_mode:

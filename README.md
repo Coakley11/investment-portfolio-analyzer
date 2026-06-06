@@ -41,6 +41,10 @@ This project uses two branches:
 | **`dev`** | Active development and testing — all new features and fixes land here first |
 | **`main`** | Stable production branch — deployed to Streamlit Cloud |
 
+**Streamlit Cloud (production):** branch **`main`**, main file **`streamlit_app.py`**.
+
+**Analyze with Applied Math** appears at the top of the sidebar (under Command Center). Merge `dev` → `main` to ship it to production.
+
 ### Daily development
 
 ```bash
