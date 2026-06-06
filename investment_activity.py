@@ -94,6 +94,19 @@ def log_holdings_updated(st: Any, *, tickers: list[str] | None = None) -> None:
     )
 
 
+def _holdings_fingerprint_from_session(st: Any) -> str:
+    try:
+        import pandas as pd
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = st.session_state.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return str(_holdings_fingerprint(df))
+    except Exception:
+        pass
+    return ""
+
+
 def log_portfolio_health_checked(
     st: Any,
     *,
@@ -101,6 +114,7 @@ def log_portfolio_health_checked(
     score_label: str,
     tickers: list[str],
 ) -> None:
+    hfp = _holdings_fingerprint_from_session(st)
     _record(
         "portfolio_health_checked",
         st=st,
@@ -109,6 +123,7 @@ def log_portfolio_health_checked(
             "review_type": score_label,
             "score": float(score),
             "tickers": list(tickers),
+            "holdings_fingerprint": hfp,
         },
         summary=f"Ran portfolio health check ({score_label})",
         resume_key="portfolio:health",

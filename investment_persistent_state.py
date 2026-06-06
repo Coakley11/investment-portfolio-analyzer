@@ -670,7 +670,46 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     elif restored:
         st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
     _record_session_sync_debug(st)
+    apply_suite_investment_resume(st)
     return restored
+
+
+def apply_suite_investment_resume(st: Any) -> None:
+    """Apply Command Center deep-link tab + holdings fingerprint validation after restore."""
+    page = st.session_state.pop("_suite_investment_page", None)
+    expected_fp = str(st.session_state.pop("_suite_holdings_fp", "") or "").strip()
+
+    if page:
+        tab = str(page).strip()
+        if tab:
+            try:
+                from components.beginner_navigation import normalize_tab_label_for_mode
+
+                beginner = current_experience_mode(st) == EXPERIENCE_OPTIONS[0]
+                tab = normalize_tab_label_for_mode(tab, beginner=beginner)
+            except Exception:
+                pass
+            st.session_state[INVESTMENT_ACTIVE_TAB_KEY] = tab
+            st.session_state[_LEGACY_TAB_KEY] = tab
+
+    if not expected_fp:
+        return
+
+    try:
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = st.session_state.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            actual_fp = str(_holdings_fingerprint(df))
+            if actual_fp == expected_fp:
+                st.session_state["_suite_holdings_fp_confirmed"] = True
+            else:
+                st.session_state["_suite_holdings_fp_mismatch"] = {
+                    "expected": expected_fp,
+                    "actual": actual_fp,
+                }
+    except Exception:
+        pass
 
 
 def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str = "unknown") -> None:
