@@ -1617,6 +1617,24 @@ except ImportError:
     )
 _active_tab = st.session_state["investment_active_tab"]
 
+try:
+    from suite_analytical_question import build_context_from_session, render_analyze_with_applied_math_sidebar
+
+    _ami_ctx, _ami_summary = build_context_from_session(
+        "investment",
+        _active_tab,
+        st.session_state,
+    )
+    render_analyze_with_applied_math_sidebar(
+        st,
+        source_app="investment",
+        source_page=_active_tab,
+        context=_ami_ctx,
+        context_summary=_ami_summary,
+    )
+except Exception:
+    pass
+
 if _active_tab == _main_tab_labels[0]:
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
