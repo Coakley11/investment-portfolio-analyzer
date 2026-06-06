@@ -1684,6 +1684,42 @@ if _active_tab == _main_tab_labels[2]:
     ws = edited["Weight (%)"].fillna(0).sum()
     if abs(ws - 100) > 0.5:
         st.warning(f"Weights sum to **{ws:.1f}%** — auto-normalized in calculations.")
+    try:
+        from components.beginner_navigation import mark_portfolio_built, _holdings_fingerprint
+
+        _fp = _holdings_fingerprint(edited)
+        _confirmed_fp = st.session_state.get("_portfolio_confirmed_fp")
+        if bool(st.session_state.get("portfolio_built")) and _confirmed_fp == _fp:
+            st.success("Portfolio confirmed — step complete.")
+        confirm_label = "Use this portfolio" if beginner_mode else "Confirm portfolio"
+        if st.button(
+            confirm_label,
+            type="primary",
+            use_container_width=True,
+            key="confirm_portfolio_holdings",
+        ):
+            mark_portfolio_built(st)
+            st.session_state["_portfolio_confirmed_fp"] = _fp
+            st.session_state.pop("_workflow_intent", None)
+            try:
+                from investment_activity import log_portfolio_created
+
+                log_portfolio_created(st, holdings_count=len(edited.dropna(subset=["Ticker"])))
+            except Exception:
+                pass
+            try:
+                from investment_persistent_state import autosave_investment_state
+
+                autosave_investment_state(st)
+            except Exception:
+                pass
+            st.rerun()
+        st.caption(
+            "Confirm when holdings and weights look right — this marks the Portfolio step complete "
+            "and unlocks analysis."
+        )
+    except ImportError:
+        pass
     if beginner_mode:
         st.caption("Scroll down for investment planning and implementation guides.")
 
