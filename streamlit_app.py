@@ -1141,6 +1141,13 @@ def _render_recommendation_engine(
     ):
         st.session_state.holdings_df = rec_df
         st.session_state.pop("health_summary", None)
+        try:
+            from components.beginner_navigation import mark_portfolio_built, _holdings_fingerprint
+
+            mark_portfolio_built()
+            st.session_state["_portfolio_confirmed_fp"] = _holdings_fingerprint(rec_df)
+        except Exception:
+            pass
         st.success("Applied to Portfolio Inputs.")
         st.rerun()
 

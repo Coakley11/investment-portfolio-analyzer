@@ -204,11 +204,7 @@ def _portfolio_built(st_obj: Any | None = None) -> bool:
     ss = _sess(st_obj)
     if ss.get("preset_applied") or ss.get("guide_portfolio_loaded"):
         return True
-    df = ss.get("holdings_df")
-    if df is None or df.empty:
-        return False
-    default_fp = _holdings_fingerprint(pd.DataFrame(core.DEFAULT_HOLDINGS))
-    return _holdings_fingerprint(df) != default_fp
+    return bool(ss.get("portfolio_built"))
 
 
 def mark_portfolio_built(st_obj: Any | None = None) -> None:
