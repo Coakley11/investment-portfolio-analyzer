@@ -86,6 +86,13 @@ _PUBLIC_CONTEXT_KEYS = (
     "experience_mode",
     "games_remaining",
     "rate_needed",
+    "matchup_advantages",
+    "injury_summary",
+    "key_players",
+    "series_record",
+    "rebalance_recommendation",
+    "total_drift",
+    "historical_comparison",
 )
 
 _CONTEXT_LABELS = {
@@ -133,6 +140,13 @@ _CONTEXT_LABELS = {
     "experience_mode": "Experience mode",
     "games_remaining": "Games remaining",
     "rate_needed": "Rate needed",
+    "matchup_advantages": "Matchup advantages",
+    "injury_summary": "Injury summary",
+    "key_players": "Key players",
+    "series_record": "Series record",
+    "rebalance_recommendation": "Rebalance recommendation",
+    "total_drift": "Total drift",
+    "historical_comparison": "Historical comparison",
 }
 
 

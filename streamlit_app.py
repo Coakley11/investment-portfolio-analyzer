@@ -744,6 +744,12 @@ def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str],
     st.session_state.health_result_fingerprint = fp
     st.session_state.health_settings_fingerprint = settings_fp
     try:
+        from applied_math_context import record_rebalance_from_health
+
+        record_rebalance_from_health(st.session_state, health)
+    except Exception:
+        pass
+    try:
         from investment_workflow import mark_analysis_complete, record_workflow_health_status
 
         mark_analysis_complete(st)
