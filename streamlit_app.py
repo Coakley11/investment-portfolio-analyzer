@@ -1763,6 +1763,10 @@ except ImportError:
     )
 _active_tab = st.session_state["investment_active_tab"]
 
+from suite_analytical_question import render_suite_applied_math_insight
+
+render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+
 if _active_tab == _main_tab_labels[0]:
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
