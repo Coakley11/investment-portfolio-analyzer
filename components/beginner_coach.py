@@ -95,7 +95,7 @@ def render_beginner_analysis_pipeline() -> None:
     """Simple visual explanation of how historical data flows through the app."""
     st.markdown("#### How the analysis works")
     steps = [
-        ("1", "Select a historical analysis period", "Use **Start** and **End** in the sidebar."),
+        ("1", "Select a historical lookback period", "Use **Historical Lookback Start / End** in the sidebar."),
         (
             "2",
             "The app studies how your investments behaved",
@@ -134,7 +134,8 @@ def render_beginner_analysis_pipeline() -> None:
             unsafe_allow_html=True,
         )
     st.caption(
-        "Your investment dates are separate from this historical window — see sidebar **Start** / **End** help."
+        "Historical lookback dates are separate from your planning horizon — see "
+        "**Historical lookback vs planning horizon** below."
     )
 
 
@@ -304,6 +305,12 @@ def render_beginner_goal_tab(*, change_goal_mode: bool = False) -> None:
         unsafe_allow_html=True,
     )
     render_goal_cards(change_goal_mode=change_goal_mode)
+    try:
+        from components.ui_helpers import render_beginner_lookback_vs_horizon_education
+
+        render_beginner_lookback_vs_horizon_education()
+    except ImportError:
+        pass
     with st.expander("Current economic environment (optional)", expanded=False):
         try:
             from components.beginner_macro import render_beginner_macro_panel

@@ -1,5 +1,7 @@
 # Investment date range / horizon audit (2026-06-07)
 
+> **Superseded by full audit:** [`investment-metric-transparency-audit-2026-06-08.md`](investment-metric-transparency-audit-2026-06-08.md) — includes date-range map, metric table, macro dependency map, UI mockups, and implementation order.
+
 **Scope:** Code-level audit only — no formula changes. Clarifies what controls mean today and proposed UI wording.
 
 ## Two different concepts (currently conflated in UI)

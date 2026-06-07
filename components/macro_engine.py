@@ -19,7 +19,11 @@ def macro_assumptions_from_session() -> core.ForwardMacroAssumptions:
 
 
 def health_settings_fingerprint() -> str:
-    """Fingerprint for objective + macro + bond constraint — invalidates health cache when changed."""
+    """Fingerprint for objective + macro + bond constraint + lookback — invalidates health cache when changed."""
+    start = st.session_state.get("analysis_start_date")
+    end = st.session_state.get("analysis_end_date")
+    start_s = start.isoformat() if hasattr(start, "isoformat") else str(start or "")
+    end_s = end.isoformat() if hasattr(end, "isoformat") else str(end or "")
     return "|".join(
         [
             str(st.session_state.get("health_rate_env", "Stable Rates")),
@@ -29,6 +33,8 @@ def health_settings_fingerprint() -> str:
             str(st.session_state.get("health_regime", "Expansion")),
             str(st.session_state.get("health_objective", "balanced growth")),
             str(st.session_state.get("health_bond_min", 0)),
+            start_s,
+            end_s,
         ]
     )
 

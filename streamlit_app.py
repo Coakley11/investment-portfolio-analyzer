@@ -77,6 +77,7 @@ from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
     APP_DISCLAIMER as UI_DISCLAIMER,
+    HISTORICAL_LOOKBACK_DATE_HELP,
     HISTORICAL_PERIOD_DATE_INPUT_HELP,
     HISTORICAL_PERIOD_HELP_ADVANCED,
     HISTORICAL_PERIOD_HELP_BEGINNER,
@@ -85,7 +86,11 @@ from components.ui_helpers import (
     is_beginner_mode,
     metric_help,
     refresh_market_data_sidebar,
+    render_beginner_lookback_vs_horizon_education,
+    render_historical_metrics_banner,
     render_historical_period_sidebar_help,
+    render_historical_window_summary,
+    render_macro_assumptions_banner,
     what_why_do,
 )
 
@@ -896,17 +901,17 @@ def metrics_row_primary(m: core.ExtendedPortfolioMetrics, initial: float, settin
     beginner = is_beginner_mode(settings)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
-        "Average Yearly Return" if beginner else "Annual Return",
+        "Average Yearly Return (Historical)" if beginner else "Historical Annualized Return",
         _pct(m.annual_return),
         help=h["annual_return"],
     )
     c2.metric(
-        "How Bumpy (Volatility)" if beginner else "Volatility",
+        "Typical Ups & Downs (Historical)" if beginner else "Historical Annualized Volatility",
         _pct(m.volatility),
         help=h["volatility"],
     )
     c3.metric(
-        "Risk/Reward Score" if beginner else "Sharpe Ratio",
+        "Risk/Reward Score (Historical)" if beginner else "Historical Sharpe Ratio",
         f"{m.sharpe_ratio:.2f}",
         help=h["sharpe"],
     )
@@ -923,7 +928,7 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
     beginner = is_beginner_mode(settings)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
-        "Worst Drop" if beginner else "Max Drawdown",
+        "Worst Drop (Historical)" if beginner else "Historical Maximum Drawdown",
         _pct(m.max_drawdown),
         help=h["drawdown"],
     )
@@ -1063,28 +1068,22 @@ def render_sidebar() -> dict:
             st.rerun()
 
     st.sidebar.divider()
-    st.sidebar.markdown("### Analysis Settings")
-    end_default = dt.date.today()
-    start_default = end_default - dt.timedelta(days=365 * 5)
-    date_help = (
-        HISTORICAL_PERIOD_HELP_BEGINNER
-        if beginner
-        else HISTORICAL_PERIOD_HELP_ADVANCED
-    )
-    date_input_help = HISTORICAL_PERIOD_DATE_INPUT_HELP if beginner else date_help
+    st.sidebar.markdown("### Historical Lookback")
+    st.sidebar.caption(HISTORICAL_LOOKBACK_DATE_HELP)
     ca, cb = st.sidebar.columns(2)
     with ca:
         start_date = st.date_input(
-            "Start",
-            value=start_default,
-            help=date_input_help,
+            "Historical Lookback Start",
+            key="analysis_start_date",
+            help=HISTORICAL_LOOKBACK_DATE_HELP,
         )
     with cb:
         end_date = st.date_input(
-            "End",
-            value=end_default,
-            help=date_input_help,
+            "Historical Lookback End",
+            key="analysis_end_date",
+            help=HISTORICAL_LOOKBACK_DATE_HELP,
         )
+    render_historical_window_summary(start=start_date, end=end_date)
     render_historical_period_sidebar_help(beginner=beginner)
 
     risk_free = st.sidebar.slider(
@@ -1383,6 +1382,7 @@ def render_overview_tab(
                 st.info("Run **Analyze Portfolio** first to see dollar-based rebalance guidance.")
 
         if _ov_active == _ov_subtab_labels[4]:
+            render_historical_metrics_banner()
             metrics_row_primary(metrics, settings["initial_value"], settings)
             if st.toggle("Show more detail numbers", value=False, key="overview_show_extended_metrics"):
                 metrics_row_extended(metrics, settings)
@@ -1425,7 +1425,7 @@ def render_overview_tab(
     elif health_status == "settings_stale":
         stale = st.session_state.get("health_result")
         if stale:
-            st.warning("Action plan may be outdated — macro or objective settings changed. Click **Analyze Portfolio** to refresh.")
+            st.warning("Action plan may be outdated — macro, objective, or historical lookback changed. Click **Analyze Portfolio** to refresh.")
             objective = st.session_state.get("health_objective", "balanced growth")
             render_action_plan(
                 stale.action_plan,
@@ -1550,6 +1550,7 @@ def render_overview_tab(
             "They help you compare options and set expectations about risk.",
             "Focus on return vs. how bumpy the ride was. Use Refresh Market Data monthly.",
         )
+    render_historical_metrics_banner()
     metrics_row_primary(metrics, settings["initial_value"], settings)
     if not beginner:
         metrics_row_extended(metrics, settings)
@@ -2111,6 +2112,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
             "Analyze Portfolio",
             "Run a one-click checkup on this tab. Results stay tied to your current holdings in both modes.",
         )
+        render_historical_metrics_banner()
         if st.button("Analyze Portfolio", type="primary", key="beg_analyze", use_container_width=True):
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
@@ -2163,6 +2165,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
             "Risk Analysis",
             "Correlation, concentration, scenarios, and macro regimes.",
         )
+        render_historical_metrics_banner()
         if st.button("Run Risk & Macro Analysis", key="run_risk_macro_btn"):
             st.session_state.run_risk_macro = True
         if not st.session_state.get("run_risk_macro", False):
@@ -2235,6 +2238,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             "Click **Refresh Portfolio Health** below, then open the **Recommendations** sub-tab.",
         )
         render_macro_assumptions_guide(expanded=False)
+    render_historical_metrics_banner()
     if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         st.session_state.run_health = True
@@ -2242,10 +2246,11 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
     health_status = get_health_cache_status(tickers, weights)
     if health_status == "settings_stale" and st.session_state.get("run_health"):
         st.warning(
-            "⚠️ **Objective or macro settings changed** since the last health run. "
+            "⚠️ **Objective, macro, or historical lookback settings changed** since the last health run. "
             "Analysis will refresh automatically below."
         )
 
+    render_macro_assumptions_banner()
     macro_expander = st.expander("Macro & objective settings", expanded=not beginner_mode)
     with macro_expander:
         h1, h2, h3 = st.columns(3)
@@ -2794,6 +2799,8 @@ if _active_tab == _main_tab_labels[7] and _require_analytics("Monte Carlo"):
             mc_fwd_vol = None
             if mc_assumption_mode.startswith("Forward"):
                 forward_mc = get_forward_projection(
+                    start=settings["start"],
+                    end=settings["end"],
                     metrics=metrics,
                     mean_returns=mean_rets.copy(),
                     cov=cov.values.copy(),
@@ -2896,6 +2903,8 @@ if _active_tab == _main_tab_labels[8] and _require_analytics("Optimization"):
         opt_cov = cov
         if opt_assumption_mode.startswith("Forward"):
             forward_opt = get_forward_projection(
+                start=settings["start"],
+                end=settings["end"],
                 metrics=metrics,
                 mean_returns=mean_rets.copy(),
                 cov=cov.values.copy(),
@@ -2951,6 +2960,8 @@ if _active_tab == _main_tab_labels[9]:
         )
         section_header("Efficient Frontier", HELP["efficient_frontier"])
         forward_frontier = get_forward_projection(
+            start=settings["start"],
+            end=settings["end"],
             metrics=metrics,
             mean_returns=mean_rets.copy(),
             cov=cov.values.copy(),

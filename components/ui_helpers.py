@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from typing import Any
+
 import streamlit as st
 
 APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
@@ -29,9 +32,32 @@ HISTORICAL_PERIOD_HELP_ADVANCED = (
     "use daily returns from this range as the historical baseline."
 )
 
-HISTORICAL_PERIOD_DATE_INPUT_HELP = (
-    "Historical analysis period — which past market data feeds returns, risk, "
-    "correlations, health, and forward tools. Not your investment date."
+HISTORICAL_LOOKBACK_DATE_HELP = (
+    "These dates define the historical market data used for return, volatility, "
+    "correlation, and risk calculations."
+)
+
+HISTORICAL_PERIOD_DATE_INPUT_HELP = HISTORICAL_LOOKBACK_DATE_HELP
+
+HISTORICAL_METRICS_BANNER_BODY = (
+    "The return, volatility, Sharpe ratio, drawdown, and correlation metrics below are "
+    "calculated using the selected historical lookback period and current portfolio weights.\n\n"
+    "Macro assumptions do **not** change these historical metrics."
+)
+
+MACRO_ASSUMPTIONS_BANNER_AFFECTS = (
+    "Health Score",
+    "Recommendations",
+    "Forward Projections",
+    "Monte Carlo (Forward Mode)",
+    "Frontier / Optimizer (Forward Mode)",
+)
+
+MACRO_ASSUMPTIONS_BANNER_UNAFFECTED = (
+    "Historical Return",
+    "Historical Volatility",
+    "Historical Sharpe Ratio",
+    "Historical Drawdown",
 )
 
 BEGINNER_METRIC_HELP = {
@@ -95,14 +121,87 @@ def coach_card(title: str, body: str) -> None:
     )
 
 
+def historical_window_years(start: dt.date, end: dt.date) -> float:
+    if end <= start:
+        return 0.0
+    return (end - start).days / 365.25
+
+
+def format_historical_window_label(start: dt.date, end: dt.date) -> str:
+    years = historical_window_years(start, end)
+    return f"{start.strftime('%b %Y')} → {end.strftime('%b %Y')} ({years:.1f} years)"
+
+
+def render_historical_window_summary(*, start: dt.date, end: dt.date, container: Any | None = None) -> None:
+    """Active lookback summary near sidebar date controls."""
+    target = container or st.sidebar
+    label = format_historical_window_label(start, end)
+    target.markdown(
+        f"""
+        <div style="background:rgba(77,163,255,0.08);border:1px solid rgba(77,163,255,0.35);
+        border-radius:8px;padding:0.55rem 0.7rem;margin:0.35rem 0 0.5rem 0;">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;">
+        Historical Window</div>
+        <div style="font-weight:600;color:#e2e8f0;font-size:0.92rem;margin-top:0.15rem;">{label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_historical_metrics_banner(*, container: Any | None = None) -> None:
+    """Banner on Overview, Analyze, and Portfolio Health for historical headline metrics."""
+    target = container or st
+    target.markdown("#### Historical Metrics")
+    target.info(HISTORICAL_METRICS_BANNER_BODY)
+
+
+def render_macro_assumptions_banner(*, container: Any | None = None) -> None:
+    """Explain what macro settings affect vs historical metrics."""
+    target = container or st
+    affects = "\n".join(f"- ✓ {item}" for item in MACRO_ASSUMPTIONS_BANNER_AFFECTS)
+    unaffected = "\n".join(f"- ✗ {item}" for item in MACRO_ASSUMPTIONS_BANNER_UNAFFECTED)
+    target.markdown("#### Macro Assumptions")
+    target.markdown(
+        f"These settings affect:\n{affects}\n\nThese settings do **not** affect:\n{unaffected}"
+    )
+
+
+def render_beginner_lookback_vs_horizon_education(*, container: Any | None = None) -> None:
+    """Beginner Coach note: historical lookback vs planning horizon."""
+    target = container or st
+    with target.expander("Historical lookback vs planning horizon", expanded=False):
+        st.markdown(
+            """
+            **Historical Lookback** — What happened in the past.
+
+            Use sidebar **Historical Lookback Start / End** to choose which past market data
+            feeds return, volatility, and risk calculations.
+
+            **Planning Horizon** — How far into the future you want to project.
+
+            Use goal or planning sliders (for example **Years until you need the money**)
+            for forward suggestions — not the sidebar dates.
+
+            **Example**
+
+            - Lookback: **2015–2025**
+            - Planning horizon: **10 years**
+
+            This means: use the last 10 years of market history as the baseline when
+            estimating or projecting the next 10 years (Monte Carlo, forward macro, etc.).
+            """
+        )
+
+
 def render_historical_period_sidebar_help(*, beginner: bool) -> None:
-    """Sidebar help for Start/End dates — tooltip text lives on the date inputs."""
+    """Sidebar help for historical lookback dates."""
     if beginner:
-        with st.sidebar.expander("Historical analysis period — what do these dates mean?", expanded=False):
+        with st.sidebar.expander("Historical lookback — what do these dates mean?", expanded=False):
             st.markdown(HISTORICAL_PERIOD_HELP_BEGINNER)
     else:
         st.sidebar.caption(
-            "Start/End define the historical baseline for analytics, health, forward macro, "
+            "Historical lookback dates define the baseline for analytics, health, forward macro, "
             "Monte Carlo, optimizer, and frontier."
         )
 
