@@ -4,7 +4,7 @@ Build Continue / resume deep links for suite Streamlit apps.
 Query params (read by suite_resume_launch in each app):
   suite_resume  — resume item key (e.g. song:pick-123, compare:Judge:Soto)
   suite_page    — target page/tab label
-  suite_pick_key, suite_song, suite_display_key, suite_section_focus — music shortcuts
+  suite_pick_key, suite_song, suite_display_key, suite_instrument, suite_section_focus — music shortcuts
   suite_holdings_fp — investment portfolio fingerprint
   suite_player_a, suite_player_b — baseball comparison players
   suite_team — NBA favorite team
@@ -36,6 +36,8 @@ _NBA_PAGE_BY_RESUME: tuple[tuple[str, str], ...] = (
 
 _BASEBALL_PAGE_BY_RESUME: tuple[tuple[str, str], ...] = (
     ("compare:", "Comparison Tool"),
+    ("trendcompare:", "Trend Value"),
+    ("trend:", "Trend Value"),
     ("baseball:draft", "Draft Simulation"),
     ("baseball:draft_prep", "Draft Simulation"),
     ("bb:draft", "Draft Simulation"),
@@ -89,6 +91,11 @@ def _normalize_music_page(page: str, resume_key: str) -> str:
 
 def _parse_compare_resume(resume_key: str) -> tuple[str, str]:
     rk = str(resume_key or "").strip()
+    if rk.startswith("trendcompare:"):
+        parts = rk.split(":", 2)
+        if len(parts) >= 3:
+            return parts[1].strip(), parts[2].strip()
+        return "", ""
     if not rk.startswith("compare:"):
         return "", ""
     parts = rk.split(":", 2)
@@ -173,6 +180,9 @@ def build_resume_action_url(
         display_key = str(m.get("display_key") or "").strip()
         if display_key:
             params["suite_display_key"] = display_key[:40]
+        instrument = str(m.get("instrument") or "").strip()
+        if instrument:
+            params["suite_instrument"] = instrument[:40]
         section = str(
             m.get("practice_focus_section") or m.get("focus") or ""
         ).strip()
@@ -187,6 +197,11 @@ def build_resume_action_url(
             params["suite_player_a"] = pa[:120]
         if pb:
             params["suite_player_b"] = pb[:120]
+        trend_player = str(m.get("player") or "").strip()
+        if not trend_player and rk.startswith("trend:"):
+            trend_player = rk.split(":", 1)[-1].strip()
+        if trend_player:
+            params["suite_trend_player"] = trend_player[:120]
     elif app_key == "investment":
         hfp = str(m.get("holdings_fingerprint") or m.get("holdings_fp") or "").strip()
         if hfp:
@@ -210,6 +225,24 @@ def build_resume_action_url(
         lesson = str(m.get("lesson") or m.get("next_lesson") or "").strip()
         if lesson:
             params["suite_lesson"] = lesson[:120]
+        question = str(m.get("question") or "").strip()
+        if question:
+            params["suite_ai_question"] = question[:500]
+        source_app = str(m.get("source_app") or "").strip()
+        if source_app:
+            params["suite_ai_source_app"] = source_app[:40]
+        source_page = str(m.get("source_page") or "").strip()
+        if source_page:
+            params["suite_ai_source_page"] = source_page[:80]
+        area = str(m.get("quant_area") or m.get("area") or "").strip()
+        if area:
+            params["suite_ai_area"] = area[:40]
+        ctx = str(m.get("context_summary") or "").strip()
+        ctx_json = str(m.get("context_json") or "").strip()
+        if ctx_json:
+            params["suite_ai_context"] = ctx_json[:800]
+        elif ctx:
+            params["suite_ai_context"] = ctx[:400]
 
     if not params:
         return f"{base}/"
@@ -239,6 +272,18 @@ def resume_metrics_from_item_key(app: str, item_key: str, *, subtitle: str = "")
             page = "Draft Simulation"
         elif "trade" in key.lower():
             page = "Fantasy Lineup Assistant"
+        elif key.startswith("trend:"):
+            metrics["player"] = key.split(":", 1)[-1].strip()
+            page = "Trend Value"
+        elif key.startswith("trendcompare:"):
+            pa, pb = _parse_compare_resume(key)
+            if pa:
+                metrics["player_a"] = pa
+            if pb:
+                metrics["player_b"] = pb
+            if pa and pb:
+                metrics["players"] = [pa, pb]
+            page = "Trend Value"
         elif "proj" in key.lower():
             page = "ML Projections"
     elif app_key == "investment":
@@ -259,5 +304,57 @@ def resume_metrics_from_item_key(app: str, item_key: str, *, subtitle: str = "")
             page = "🧠 Matchup Intelligence"
         elif key.startswith("nba:playoff:"):
             page = "🏆 Playoff Bracket"
+    elif app_key == "applied_intelligence":
+        if key.startswith("ai:question:"):
+            page = "Solve a Problem"
+            qid = key.split(":", 2)[-1].strip() if key.count(":") >= 2 else ""
+            if qid:
+                metrics["question_id"] = qid
+                metrics["dedupe_fingerprint"] = qid
+            if subtitle:
+                if "__ctx_json__:" in subtitle:
+                    q_part, _, ctx_part = subtitle.partition("\n__ctx_json__:")
+                    metrics["question"] = q_part.strip()
+                    try:
+                        import json
+
+                        parsed = json.loads(ctx_part)
+                        if isinstance(parsed, dict):
+                            metrics["context"] = parsed
+                            metrics["context_json"] = ctx_part
+                    except Exception:
+                        pass
+                elif subtitle.startswith("Question:"):
+                    first_line, _, rest = subtitle.partition("\n")
+                    metrics["question"] = first_line.replace("Question:", "", 1).strip()
+                    metrics["context_summary"] = rest.strip() or subtitle
+                else:
+                    metrics["question"] = subtitle.split("\n", 1)[0].strip()[:500]
+                    if "\n" in subtitle:
+                        metrics["context_summary"] = subtitle
+                ctx: dict[str, Any] = dict(metrics.get("context") or {})
+                if not ctx:
+                    for line in subtitle.splitlines():
+                        stripped = line.strip().lstrip("•").strip()
+                        if ":" in stripped:
+                            label, _, val = stripped.partition(":")
+                            label_key = label.strip().lower().replace(" ", "_")
+                            val = val.strip()
+                            if label_key == "source_app":
+                                ctx["source_app"] = val
+                                metrics.setdefault("source_app", val.lower())
+                            elif label_key == "page":
+                                ctx["page"] = val
+                                metrics.setdefault("source_page", val)
+                            elif val:
+                                ctx[label_key] = val
+                if ctx and "context" not in metrics:
+                    metrics["context"] = ctx
+                    try:
+                        import json
+
+                        metrics["context_json"] = json.dumps(ctx, ensure_ascii=False)
+                    except Exception:
+                        pass
 
     return page, metrics
