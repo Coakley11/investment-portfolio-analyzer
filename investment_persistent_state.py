@@ -563,8 +563,23 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint"):
             continue
         if key == "holdings_df":
+            st.session_state["_suite_inv_holdings_from_saved_blob"] = True
             if val:
-                st.session_state.holdings_df = pd.DataFrame(val)
+                try:
+                    df = pd.DataFrame(val)
+                except Exception:
+                    st.session_state.holdings_df = pd.DataFrame()
+                    st.session_state["_suite_inv_holdings_restore_issue"] = "invalid_saved_holdings"
+                    continue
+                if df.empty:
+                    st.session_state.holdings_df = df
+                    st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
+                else:
+                    st.session_state.holdings_df = df
+                    st.session_state.pop("_suite_inv_holdings_restore_issue", None)
+            else:
+                st.session_state.holdings_df = pd.DataFrame()
+                st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
             continue
         if key in ("analysis_start_date", "analysis_end_date") and isinstance(val, str):
             try:
@@ -587,6 +602,8 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
 
     if "holdings_df" not in st.session_state:
         st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+        st.session_state.pop("_suite_inv_holdings_from_saved_blob", None)
+        st.session_state.pop("_suite_inv_holdings_restore_issue", None)
 
     try:
         from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
@@ -1097,6 +1114,12 @@ def render_persistence_debug_content(st: Any) -> None:
     st.code("\n".join(mode_switch_and_autosave_trace_lines(st)), language=None)
     st.markdown("**Restore diagnostics**")
     st.code("\n".join(restore_diagnostics_lines(st)), language=None)
+    holdings_issue = ss.get("_suite_inv_holdings_restore_issue")
+    if holdings_issue:
+        st.warning(
+            f"Saved holdings restore issue (developer): **{holdings_issue}** — "
+            "portfolio was not replaced with SPY/BND defaults."
+        )
     st.markdown("**Account scope**")
     st.code("\n".join(_persistence_account_lines(st)), language=None)
     import_err = ss.get("_suite_persist_import_error")

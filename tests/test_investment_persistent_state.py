@@ -100,7 +100,19 @@ def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
     assert st.session_state["_suite_inv_debug_last_mode_switch"]["autosave_triggered"] is True
 
 
-def test_investment_cloud_resync_detects_experience_drift():
+def test_apply_state_empty_holdings_blob_not_default_portfolio():
+    st = _FakeSt()
+    ips.apply_investment_disk_state(st, {"holdings_df": []})
+    assert st.session_state.holdings_df.empty
+    assert st.session_state.get("_suite_inv_holdings_restore_issue") == "empty_saved_holdings"
+    assert st.session_state.get("_suite_inv_holdings_from_saved_blob") is True
+
+
+def test_apply_state_no_holdings_key_uses_factory_default():
+    st = _FakeSt()
+    ips.apply_investment_disk_state(st, {"experience": "Advanced Mode"})
+    assert not st.session_state.holdings_df.empty
+    assert len(st.session_state.holdings_df) >= 1
     st = _FakeSt()
     st.session_state["experience"] = "Beginner Mode"
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
