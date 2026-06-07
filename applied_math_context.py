@@ -85,6 +85,13 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     tab = str(session_state.get("investment_active_tab") or page or "").strip()
     ctx: dict[str, Any] = {"page": tab}
 
+    hr = session_state.get("health_result")
+    if hr is not None and not session_state.get("_ami_rebalance_drift"):
+        try:
+            record_rebalance_from_health(session_state, hr)
+        except Exception:
+            pass
+
     exp = session_state.get("investment_experience") or session_state.get("experience_mode")
     if exp:
         ctx["experience_mode"] = str(exp)
@@ -174,4 +181,14 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
         for k, v in extra.items():
             if v is not None and v != "":
                 ctx[k] = v
+
+    try:
+        from components.macro_engine import macro_assumption_summary
+
+        macro = macro_assumption_summary()
+        if macro:
+            ctx.setdefault("macro_summary", macro)
+            ctx.setdefault("macro_outlook", macro)
+    except Exception:
+        pass
     return ctx
