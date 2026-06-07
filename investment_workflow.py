@@ -38,6 +38,7 @@ WORKFLOW_STATE_BLOB_KEY = "workflow_state"
 _WORKFLOW_INTENT_KEY = "_workflow_intent"
 _WORKFLOW_STALE_STEPS_KEY = "_workflow_stale_steps"
 _WORKFLOW_CHANGE_SNAPSHOT_KEY = "_workflow_change_snapshot"
+_WORKFLOW_LAST_ACTION_KEY = "_workflow_last_action"
 _HOLDINGS_TRACK_KEY = "_workflow_holdings_fp"
 _HEALTH_STATUS_KEY = "_workflow_health_status"
 _HEALTH_VIEWED_FP_KEY = "_workflow_health_reviewed_fp"
@@ -91,6 +92,86 @@ def _mark_downstream_stale(ss: Any, from_step: WorkflowStep) -> None:
     elif from_step == "analysis":
         stale.update({"health", "recommendations"})
     ss[_WORKFLOW_STALE_STEPS_KEY] = stale
+
+
+def record_workflow_action(action: str, st_obj: Any | None = None, **detail: Any) -> None:
+    """Record the last user-driven workflow transition (developer trace)."""
+    import datetime as dt
+
+    ss = _sess(st_obj)
+    ss[_WORKFLOW_LAST_ACTION_KEY] = {
+        "action": action,
+        "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        **detail,
+    }
+
+
+def confirm_portfolio_step(st_obj: Any | None = None, *, holdings_df: pd.DataFrame | None = None) -> None:
+    """
+    User explicitly confirmed holdings — portfolio step complete; downstream must rerun.
+    """
+    from components.beginner_navigation import _holdings_fingerprint
+
+    ss = _sess(st_obj)
+    ss["portfolio_built"] = True
+    ss["guide_portfolio_loaded"] = True
+    if holdings_df is not None and not holdings_df.empty:
+        fp = _holdings_fingerprint(holdings_df)
+        ss["_portfolio_confirmed_fp"] = fp
+        ss[_HOLDINGS_TRACK_KEY] = fp
+    _clear_downstream_completion(ss)
+    _clear_analysis_cache(ss)
+    _clear_stale_steps(ss, "portfolio")
+    _mark_downstream_stale(ss, "portfolio")
+    record_workflow_health_status("missing", st_obj)
+    ss.pop(_WORKFLOW_INTENT_KEY, None)
+    record_workflow_action("confirm_portfolio", st_obj)
+    _autosave_after_workflow_change(st_obj)
+
+
+def workflow_state_trace(st_obj: Any | None = None, *, beginner: bool = True) -> dict[str, Any]:
+    """Live values that drive checklist colors (developer diagnostics)."""
+    from components.beginner_navigation import _holdings_fingerprint
+
+    ss = _sess(st_obj)
+    active_tab = ss.get("investment_active_tab")
+    df = ss.get("holdings_df")
+    holdings_fp = ""
+    if isinstance(df, pd.DataFrame):
+        holdings_fp = _holdings_fingerprint(df)
+    checklist = workflow_checklist(st_obj)
+    visuals = workflow_step_visual_states(st_obj, beginner=beginner, active_tab=str(active_tab or ""))
+    return {
+        "investment_active_tab": active_tab,
+        "beginner_goal_card": ss.get("beginner_goal_card"),
+        "guide_goal_choice": ss.get("guide_goal_choice"),
+        "health_objective": ss.get("health_objective"),
+        "preset_applied": ss.get("preset_applied"),
+        "portfolio_built": ss.get("portfolio_built"),
+        "portfolio_analyzed": ss.get("portfolio_analyzed"),
+        "portfolio_health_reviewed": ss.get("portfolio_health_reviewed"),
+        "recommendations_displayed": ss.get("recommendations_displayed"),
+        "workflow_stale_steps": sorted(_stale_steps_set(ss)),
+        "workflow_health_status": ss.get(_HEALTH_STATUS_KEY),
+        "workflow_intent": ss.get(_WORKFLOW_INTENT_KEY),
+        "holdings_fingerprint": holdings_fp,
+        "health_result_fingerprint": ss.get("health_result_fingerprint"),
+        "portfolio_confirmed_fp": ss.get("_portfolio_confirmed_fp"),
+        "checklist": checklist,
+        "visual_states": visuals,
+        "last_action": ss.get(_WORKFLOW_LAST_ACTION_KEY),
+    }
+
+
+def render_workflow_state_trace(st_obj: Any, *, beginner: bool = True) -> None:
+    """Developer panel: show state machine inputs and resulting colors."""
+    if not developer_diagnostics_enabled(st_obj):
+        return
+    import json
+
+    trace = workflow_state_trace(st_obj, beginner=beginner)
+    st.markdown("**Workflow state trace (colors)**")
+    st.code(json.dumps(trace, indent=2, default=str), language="json")
 
 
 def _clear_stale_steps(ss: Any, *steps: WorkflowCoreKey) -> None:
@@ -563,6 +644,7 @@ def invalidate_workflow_from(step: WorkflowStep, st_obj: Any | None = None) -> N
         ss["recommendations_displayed"] = False
         _mark_downstream_stale(ss, step)
     _sync_health_status_after_invalidate(step, st_obj)
+    record_workflow_action(f"invalidate_from_{step}", st_obj)
     _autosave_after_workflow_change(st_obj)
 
 
@@ -580,6 +662,7 @@ def begin_goal_change_workflow(st_obj: Any, *, beginner: bool) -> None:
     invalidate_workflow_from("goal", st_obj)
     ss[_WORKFLOW_INTENT_KEY] = "change_goal"
     request_workflow_tab_navigation("goal", beginner=beginner, st_obj=st_obj)
+    record_workflow_action("open_goal", st_obj)
     dbg = dict(ss.get(_GOAL_CHANGE_DEBUG_KEY) or {})
     dbg["change_goal_clicked_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     ss[_GOAL_CHANGE_DEBUG_KEY] = dbg
@@ -637,6 +720,7 @@ def record_goal_selection(
     }
     clear_workflow_intent(st_obj)
     _clear_stale_steps(ss, "goal")
+    record_workflow_action("select_goal", st_obj, goal=goal_title, preset=preset)
     persist_plan_after_goal_selection(st_obj)
     _refresh_goal_change_debug_snapshot(st_obj, goal_selected=True)
 
@@ -645,7 +729,10 @@ def mark_analysis_complete(st_obj: Any | None = None) -> None:
     """Call when a fresh health evaluation is cached."""
     ss = _sess(st_obj)
     ss["portfolio_analyzed"] = True
+    if ss.get("health_result_fingerprint"):
+        record_workflow_health_status("fresh", st_obj)
     _clear_stale_steps(ss, "analyze")
+    record_workflow_action("analyze_portfolio", st_obj, fingerprint=ss.get("health_result_fingerprint"))
     _autosave_after_workflow_change(st_obj)
 
 
@@ -1162,7 +1249,10 @@ def workflow_step_visual_states(
             and (checklist["portfolio"] or stale)
         )
         if active_step == key:
-            states[key] = "current"
+            if not checklist[key] or is_stale:
+                states[key] = "current"
+            else:
+                states[key] = "complete"
             continue
         if checklist[key] and not is_stale:
             states[key] = "complete"
@@ -1191,6 +1281,7 @@ def mark_health_reviewed_for_portfolio(
     mark_health_reviewed(st_obj)
     ss[_HEALTH_VIEWED_FP_KEY] = fp
     _clear_stale_steps(ss, "health")
+    record_workflow_action("review_health", st_obj, fingerprint=fp)
     _autosave_after_workflow_change(st_obj)
 
 
@@ -1205,6 +1296,7 @@ def mark_recommendations_if_current(st_obj: Any | None = None) -> None:
     mark_recommendations_viewed(st_obj)
     ss[_REC_VIEWED_FP_KEY] = fp
     _clear_stale_steps(ss, "recommendations")
+    record_workflow_action("view_recommendations", st_obj, fingerprint=fp)
     _autosave_after_workflow_change(st_obj)
 
 

@@ -213,13 +213,11 @@ def validate_state_option(st: Any, key: str, options: list[str] | tuple[str, ...
 
 
 def ensure_experience_mode(st: Any) -> None:
-    """Seed the sidebar radio from persisted mode before the widget renders (never overwrite a valid widget value)."""
+    """Seed the sidebar radio from persisted mode only when the widget key is unset."""
     ss = st.session_state
-    widget = ss.get(EXPERIENCE_KEY)
-    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
-    if widget in EXPERIENCE_OPTIONS:
-        ss[PERSISTED_EXPERIENCE_KEY] = widget
+    if ss.get(EXPERIENCE_KEY) in EXPERIENCE_OPTIONS:
         return
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
     if persisted in EXPERIENCE_OPTIONS:
         ss[EXPERIENCE_KEY] = persisted
     else:
@@ -257,7 +255,13 @@ def sync_experience_after_widget(st: Any) -> None:
         "active": current_experience_mode(st),
     }
     switch_evt["post_widget_experience"] = mode
+    ss["_suite_inv_debug_experience_post_click"] = {
+        "widget": ss.get(EXPERIENCE_KEY),
+        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
+        "active": current_experience_mode(st),
+    }
     if mode_change:
+        ss["_suite_inv_experience_user_choice"] = mode
         ss[_PENDING_EXPERIENCE_KEY] = mode
         ss[f"_suite_persist_local_dirty::{APP_ID}"] = True
         switch_evt["local_dirty_set"] = True
@@ -406,9 +410,11 @@ def reconcile_investment_cloud_drift_if_needed(st: Any) -> bool:
     """
     Re-apply cloud ``full_session`` when in-memory state drifted (cross-device refresh).
 
-    Safe to call every script run; skipped when local edits or mode change are in flight.
+    Called once per session at bootstrap only — not every rerun (would overwrite local widget edits).
     """
     ss = st.session_state
+    if ss.get("_suite_inv_cloud_reconcile_done"):
+        return False
     if _local_experience_change_in_flight(st):
         return False
     dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
@@ -574,11 +580,15 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)
+    user_choice = st.session_state.get("_suite_inv_experience_user_choice")
     if _local_experience_change_in_flight(st):
         pending = st.session_state.get(_PENDING_EXPERIENCE_KEY)
         preserve_exp = pending if pending in EXPERIENCE_OPTIONS else current_experience_mode(st)
         st.session_state[EXPERIENCE_KEY] = preserve_exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = preserve_exp
+    elif user_choice in EXPERIENCE_OPTIONS:
+        st.session_state[EXPERIENCE_KEY] = user_choice
+        st.session_state[PERSISTED_EXPERIENCE_KEY] = user_choice
     elif exp in EXPERIENCE_OPTIONS:
         st.session_state[EXPERIENCE_KEY] = exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = exp
@@ -907,6 +917,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 ss[dirty_key] = False
             if trigger == "mode_change" and (saved_disk or saved_cloud):
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
+                if readback_exp in EXPERIENCE_OPTIONS:
+                    ss["_suite_inv_experience_user_choice"] = readback_exp
             elif mode_saved_to_cloud:
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
             readback_ts = event.get("cloud_readback_ts")
@@ -1044,6 +1056,9 @@ def experience_mode_trace_lines(st: Any) -> list[str]:
         f"disk timestamp: {ss.get('_suite_persist_debug_disk_ts')!r}",
         f"local dirty: {ss.get('_suite_persist_local_dirty::investment')!r}",
         f"restore ran: {ss.get('_suite_inv_debug_restore_ran')!r}",
+        f"cloud resync ran: {ss.get('_suite_inv_cloud_resync_ran')!r}",
+        f"user experience choice: {ss.get('_suite_inv_experience_user_choice')!r}",
+        f"end-of-sidebar trace: {ss.get('_suite_inv_debug_experience_end_of_sidebar')!r}",
     ]
 
 
@@ -1155,11 +1170,12 @@ def render_persistence_debug_content(st: Any) -> None:
     if restore_err:
         st.warning(f"Persistence restore error: {restore_err}")
     try:
-        from investment_workflow import workflow_persist_audit
+        from investment_workflow import workflow_persist_audit, render_workflow_state_trace
 
         st.markdown("**Workflow full_session audit (live vs saved)**")
         audit = workflow_persist_audit(st)
         st.code("\n".join(f"{k}: {v}" for k, v in audit.items()), language=None)
+        render_workflow_state_trace(st, beginner=current_experience_mode(st) == EXPERIENCE_OPTIONS[0])
     except ImportError:
         pass
     if cloud_err:

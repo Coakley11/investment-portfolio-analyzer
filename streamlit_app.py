@@ -143,11 +143,9 @@ def _fallback_ensure_analysis_date_defaults(st_obj: Any) -> None:
 
 def _fallback_ensure_experience_mode(st_obj: Any) -> None:
     ss = st_obj.session_state
-    widget = ss.get(EXPERIENCE_KEY)
-    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
-    if widget in EXPERIENCE_OPTIONS:
-        ss[PERSISTED_EXPERIENCE_KEY] = widget
+    if ss.get(EXPERIENCE_KEY) in EXPERIENCE_OPTIONS:
         return
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
     if persisted in EXPERIENCE_OPTIONS:
         ss[EXPERIENCE_KEY] = persisted
     else:
@@ -225,8 +223,8 @@ if _PERSISTENCE_OK:
     try:
         if not st.session_state.get("_suite_inv_persistence_bootstrapped"):
             restore_investment_disk_state_once(st)
+            reconcile_investment_cloud_drift_if_needed(st)
             st.session_state["_suite_inv_persistence_bootstrapped"] = True
-        reconcile_investment_cloud_drift_if_needed(st)
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()
@@ -995,10 +993,24 @@ def render_sidebar() -> dict:
         label_visibility="collapsed",
     )
     sync_experience_after_widget(st)
+    st.session_state["_suite_inv_debug_experience_end_of_sidebar"] = {
+        "widget": st.session_state.get(EXPERIENCE_KEY),
+        "persisted": st.session_state.get(PERSISTED_EXPERIENCE_KEY),
+        "user_choice": st.session_state.get("_suite_inv_experience_user_choice"),
+        "active": experience,
+        "restore_ran": st.session_state.get("_suite_inv_debug_restore_ran"),
+        "cloud_resync_ran": st.session_state.get("_suite_inv_cloud_resync_ran"),
+    }
     beginner = experience == "Beginner Mode"
 
     if beginner:
         render_beginner_sidebar_checklist()
+        try:
+            from investment_workflow import render_workflow_state_trace
+
+            render_workflow_state_trace(st, beginner=True)
+        except ImportError:
+            pass
 
     refresh_market_data_sidebar()
 
@@ -1038,13 +1050,14 @@ def render_sidebar() -> dict:
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
             st.session_state.preset_applied = portfolio_preset
             if beginner:
-                from components.beginner_navigation import OBJECTIVE_TO_PRESET, mark_portfolio_built, sync_beginner_goal_keys_from_portfolio
+                from components.beginner_navigation import OBJECTIVE_TO_PRESET, sync_beginner_goal_keys_from_portfolio
 
                 for objective, preset_name in OBJECTIVE_TO_PRESET.items():
                     if preset_name == portfolio_preset:
                         st.session_state.health_objective = objective
                         break
-                mark_portfolio_built()
+                st.session_state.guide_portfolio_loaded = False
+                st.session_state.portfolio_built = False
                 sync_beginner_goal_keys_from_portfolio(st)
             st.session_state.pop("health_summary", None)
             st.rerun()
@@ -1254,10 +1267,9 @@ def _render_recommendation_engine(
         st.session_state.holdings_df = rec_df
         st.session_state.pop("health_summary", None)
         try:
-            from components.beginner_navigation import mark_portfolio_built, _holdings_fingerprint
+            from components.beginner_navigation import mark_portfolio_built
 
-            mark_portfolio_built()
-            st.session_state["_portfolio_confirmed_fp"] = _holdings_fingerprint(rec_df)
+            mark_portfolio_built(st, holdings_df=rec_df)
         except Exception:
             pass
         st.success("Applied to Portfolio Inputs.")
@@ -1756,6 +1768,12 @@ if _active_tab == _main_tab_labels[0]:
         render_getting_started_guide(beginner_mode=False)
 
 if _active_tab == _main_tab_labels[2]:
+    try:
+        from investment_workflow import record_workflow_action
+
+        record_workflow_action("open_portfolio", st)
+    except ImportError:
+        pass
     section_header(
         "Portfolio Inputs",
         "Enter fund tickers (like SPY) and what percent of your portfolio each one is." if beginner_mode
@@ -1814,19 +1832,11 @@ if _active_tab == _main_tab_labels[2]:
             use_container_width=True,
             key="confirm_portfolio_holdings",
         ):
-            mark_portfolio_built(st)
-            st.session_state["_portfolio_confirmed_fp"] = _fp
-            st.session_state.pop("_workflow_intent", None)
+            mark_portfolio_built(st, holdings_df=edited)
             try:
                 from investment_activity import log_portfolio_created
 
                 log_portfolio_created(st, holdings_count=len(edited.dropna(subset=["Ticker"])))
-            except Exception:
-                pass
-            try:
-                from investment_persistent_state import autosave_investment_state
-
-                autosave_investment_state(st)
             except Exception:
                 pass
             st.rerun()
@@ -2312,8 +2322,8 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                     st.session_state.pop("health_result_fingerprint", None)
                 st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[suggested_preset])
                 st.session_state.preset_applied = suggested_preset
-                st.session_state.guide_portfolio_loaded = True
-                mark_portfolio_built()
+                st.session_state.guide_portfolio_loaded = False
+                st.session_state.portfolio_built = False
                 try:
                     from investment_activity import log_portfolio_created
 

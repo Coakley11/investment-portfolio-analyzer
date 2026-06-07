@@ -205,8 +205,19 @@ def _portfolio_built(st_obj: Any | None = None) -> bool:
     return bool(_sess(st_obj).get("portfolio_built"))
 
 
-def mark_portfolio_built(st_obj: Any | None = None) -> None:
-    _sess(st_obj).portfolio_built = True
+def mark_portfolio_built(st_obj: Any | None = None, *, holdings_df: pd.DataFrame | None = None) -> None:
+    try:
+        from investment_workflow import confirm_portfolio_step
+
+        df = holdings_df
+        if df is None:
+            ss = _sess(st_obj)
+            raw = ss.get("holdings_df")
+            if isinstance(raw, pd.DataFrame):
+                df = raw
+        confirm_portfolio_step(st_obj, holdings_df=df)
+    except ImportError:
+        _sess(st_obj).portfolio_built = True
 
 
 def _checklist_state(st_obj: Any | None = None) -> dict[str, bool]:

@@ -108,7 +108,7 @@ class TestWorkflowTrust(unittest.TestCase):
         visuals = workflow_step_visual_states(
             st, beginner=True, active_tab=BEGINNER_TAB_LABELS[0]
         )
-        self.assertEqual(visuals["goal"], "current")
+        self.assertEqual(visuals["goal"], "complete")
         self.assertEqual(visuals["portfolio"], "stale")
         self.assertEqual(visuals["analyze"], "stale")
 

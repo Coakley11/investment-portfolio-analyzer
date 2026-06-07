@@ -74,14 +74,14 @@ def test_ensure_experience_mode_seeds_widget_from_persisted_copy():
     assert st.session_state["experience"] == "Advanced Mode"
 
 
-def test_ensure_experience_mode_widget_wins_when_both_set():
-    """Widget selection must win over stale persisted copy on rerun."""
+def test_ensure_experience_mode_leaves_widget_untouched_when_set():
+    """Streamlit widget key must not be overwritten before the radio renders."""
     st = _FakeSt()
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
     st.session_state["experience"] = "Beginner Mode"
     ips.ensure_experience_mode(st)
     assert st.session_state["experience"] == "Beginner Mode"
-    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Beginner Mode"
+    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Advanced Mode"
 
 
 def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
@@ -159,6 +159,33 @@ def test_investment_cloud_resync_false_when_aligned():
     )
     assert needed is False
     assert detail == ""
+
+
+def test_sync_experience_mode_change_sets_user_choice(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
+
+    def _fake_autosave(st_obj, *, end_of_run=False, trigger="unknown"):
+        pass
+
+    monkeypatch.setattr(ips, "autosave_investment_state", _fake_autosave)
+    ips.sync_experience_after_widget(st)
+    assert st.session_state["_suite_inv_experience_user_choice"] == "Advanced Mode"
+    assert st.session_state["experience"] == "Advanced Mode"
+
+
+def test_apply_state_respects_user_choice_over_cloud():
+    st = _FakeSt()
+    st.session_state["_suite_inv_experience_user_choice"] = "Advanced Mode"
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "experience": "Beginner Mode",
+            "_suite_persisted_experience": "Beginner Mode",
+        },
+    )
+    assert st.session_state["experience"] == "Advanced Mode"
 
 
 def test_sync_experience_mode_change_sets_pending_and_dirty(monkeypatch):
