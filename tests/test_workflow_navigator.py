@@ -66,16 +66,17 @@ class TestWorkflowTrust(unittest.TestCase):
         self.assertFalse(state["analyze"])
         self.assertFalse(state["health"])
 
-    def test_goal_invalidate_keeps_portfolio_checked(self) -> None:
+    def test_goal_invalidate_makes_portfolio_stale(self) -> None:
         st = _FakeSt()
         ss = st.session_state
         ss["guide_goal_choice"] = "Save for retirement"
         ss["preset_applied"] = "Retirement"
+        ss["guide_portfolio_loaded"] = True
         ss["portfolio_built"] = True
         invalidate_workflow_from("goal", st)
         state = workflow_checklist(st)
         self.assertTrue(state["goal"])
-        self.assertTrue(state["portfolio"])
+        self.assertFalse(state["portfolio"])
         self.assertFalse(state["analyze"])
 
     def test_needs_analytics_false_on_goal_tab(self) -> None:
@@ -107,9 +108,31 @@ class TestWorkflowTrust(unittest.TestCase):
         visuals = workflow_step_visual_states(
             st, beginner=True, active_tab=BEGINNER_TAB_LABELS[0]
         )
-        self.assertEqual(visuals["goal"], "complete")
-        self.assertEqual(visuals["portfolio"], "complete")
+        self.assertEqual(visuals["goal"], "current")
+        self.assertEqual(visuals["portfolio"], "stale")
         self.assertEqual(visuals["analyze"], "stale")
+
+    def test_open_portfolio_tab_shows_current_not_complete(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss["guide_goal_choice"] = "Grow my money long term"
+        ss["preset_applied"] = "Balanced"
+        ss["portfolio_built"] = False
+        visuals = workflow_step_visual_states(
+            st, beginner=True, active_tab=BEGINNER_TAB_LABELS[2]
+        )
+        self.assertEqual(visuals["portfolio"], "current")
+        self.assertNotEqual(visuals["portfolio"], "complete")
+
+    def test_preset_loaded_without_confirm_is_not_portfolio_complete(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss["guide_goal_choice"] = "Grow my money long term"
+        ss["preset_applied"] = "Balanced"
+        ss["guide_portfolio_loaded"] = True
+        ss["portfolio_built"] = False
+        state = workflow_checklist(st)
+        self.assertFalse(state["portfolio"])
 
     def test_change_goal_intent_shows_goal_current_on_goal_tab(self) -> None:
         st = _FakeSt()

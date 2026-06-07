@@ -544,7 +544,7 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         _WF_BLOB = "workflow_state"
 
     for key, val in state.items():
-        if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint"):
+        if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint", EXPERIENCE_KEY, PERSISTED_EXPERIENCE_KEY):
             continue
         if key == "holdings_df":
             st.session_state["_suite_inv_holdings_from_saved_blob"] = True
@@ -574,20 +574,14 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)
-    widget_mode = st.session_state.get(EXPERIENCE_KEY)
-    preserve_exp: str | None = None
     if _local_experience_change_in_flight(st):
-        preserve_exp = current_experience_mode(st)
-    elif widget_mode in EXPERIENCE_OPTIONS:
-        # Streamlit radio already has the user's selection — do not overwrite from disk/cloud.
-        st.session_state[PERSISTED_EXPERIENCE_KEY] = widget_mode
-        preserve_exp = widget_mode
-    if exp in EXPERIENCE_OPTIONS and preserve_exp is None:
-        st.session_state[EXPERIENCE_KEY] = exp
-        st.session_state[PERSISTED_EXPERIENCE_KEY] = exp
-    elif preserve_exp in EXPERIENCE_OPTIONS:
+        pending = st.session_state.get(_PENDING_EXPERIENCE_KEY)
+        preserve_exp = pending if pending in EXPERIENCE_OPTIONS else current_experience_mode(st)
         st.session_state[EXPERIENCE_KEY] = preserve_exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = preserve_exp
+    elif exp in EXPERIENCE_OPTIONS:
+        st.session_state[EXPERIENCE_KEY] = exp
+        st.session_state[PERSISTED_EXPERIENCE_KEY] = exp
 
     if "holdings_df" not in st.session_state:
         st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
@@ -676,10 +670,48 @@ def _record_session_sync_debug(st: Any) -> None:
     }
 
 
+def _overlay_cloud_experience_if_authoritative(
+    st: Any,
+    cloud_state: dict[str, Any] | None,
+    cloud_ts: str | None,
+    disk_ts: str | None,
+) -> None:
+    """When disk wins restore but cloud has a newer/equal experience, apply cloud mode."""
+    if _local_experience_change_in_flight(st):
+        return
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    if st.session_state.get(dirty_key):
+        return
+    if not isinstance(cloud_state, dict) or not cloud_state:
+        return
+    cloud = _normalize_restored_state(cloud_state)
+    cloud_exp = cloud.get(EXPERIENCE_KEY)
+    if cloud_exp not in EXPERIENCE_OPTIONS:
+        return
+    if current_experience_mode(st) == cloud_exp:
+        return
+    pick = str(st.session_state.get("_suite_persist_debug_pick_source") or "")
+    try:
+        from suite_cloud_state import parse_persist_timestamp
+
+        cloud_epoch = parse_persist_timestamp(cloud_ts)
+        disk_epoch = parse_persist_timestamp(disk_ts)
+    except ImportError:
+        cloud_epoch = 0.0
+        disk_epoch = 0.0
+    if pick == "disk" and cloud_epoch >= disk_epoch:
+        st.session_state[EXPERIENCE_KEY] = cloud_exp
+        st.session_state[PERSISTED_EXPERIENCE_KEY] = cloud_exp
+        st.session_state["_suite_inv_debug_experience_overlay"] = cloud_exp
+
+
 def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_cloud_experience"] = None
     st.session_state["_suite_inv_debug_disk_experience"] = None
     st.session_state["_suite_inv_debug_disk_file_exists"] = state_file_path(APP_ID).is_file()
+
+    cloud_state: dict[str, Any] | None = None
+    cloud_ts: str | None = None
 
     try:
         from suite_cloud_state import load_cloud_full_session, probe_cloud_restore_diagnostics
@@ -722,9 +754,13 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     )
     if not restored and not st.session_state.get("_suite_disk_state_restored::investment"):
         ensure_experience_mode(st)
-        st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
-    elif restored:
-        st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
+    _overlay_cloud_experience_if_authoritative(
+        st,
+        cloud_state if isinstance(cloud_state, dict) else None,
+        cloud_ts,
+        st.session_state.get("_suite_persist_debug_disk_ts"),
+    )
+    st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
     _record_session_sync_debug(st)
     apply_suite_investment_resume(st)
     return restored
@@ -830,10 +866,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         if restored_fp and fp != restored_fp:
             ss[dirty_key] = True
 
-        if ss.get(fp_key) == fp:
+        if ss.get(fp_key) == fp and trigger != "mode_change":
             event["outcome"] = "skipped_fp_unchanged"
-            if trigger == "mode_change":
-                ss[dirty_key] = True
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
             ss["_suite_inv_debug_last_autosave_event"] = event
             return

@@ -191,3 +191,75 @@ def test_sync_experience_skips_autosave_when_mode_unchanged(monkeypatch):
     switch = st.session_state["_suite_inv_debug_last_mode_switch"]
     assert switch["autosave_triggered"] is False
     assert switch["autosave_skip_reason"] == "prev_equals_mode"
+
+
+def test_apply_state_overrides_widget_with_cloud_experience():
+    """Cross-device restore must apply cloud mode even when widget already has a value."""
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "experience": "Advanced Mode",
+            "_suite_persisted_experience": "Advanced Mode",
+        },
+    )
+    assert st.session_state["experience"] == "Advanced Mode"
+    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Advanced Mode"
+
+
+def test_apply_state_preserves_widget_when_pending_local_mode_change():
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["_suite_inv_pending_experience_mode"] = "Advanced Mode"
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "experience": "Beginner Mode",
+            "_suite_persisted_experience": "Beginner Mode",
+        },
+    )
+    assert st.session_state["experience"] == "Advanced Mode"
+    assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Advanced Mode"
+
+
+def test_autosave_mode_change_does_not_skip_when_fp_unchanged(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+
+    import hashlib
+    import json
+
+    state = ips.build_investment_disk_state(st)
+    blob = json.dumps(state, sort_keys=True, default=str)
+    fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+    st.session_state["_suite_autosave_fp::investment"] = fp
+
+    saved = {"disk": 0, "cloud": 0}
+
+    def _fake_save_disk(app_id, payload):
+        saved["disk"] += 1
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved["cloud"] += 1
+
+    def _fake_load_cloud(app_id):
+        return payload_copy(state), "2026-06-07T12:00:00Z"
+
+    def payload_copy(s):
+        import copy
+        return copy.deepcopy(s)
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    ips.autosave_investment_state(st, trigger="mode_change")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["outcome"] != "skipped_fp_unchanged"
+    assert saved["disk"] == 1 or saved["cloud"] == 1

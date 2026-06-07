@@ -1083,7 +1083,7 @@ def workflow_checklist(st_obj: Any | None = None) -> dict[str, bool]:
     fp = ss.get("health_result_fingerprint")
 
     goal_done = _goal_step_complete(st_obj)
-    portfolio_done = _portfolio_built(st_obj) or bool(ss.get("portfolio_built"))
+    portfolio_done = _portfolio_built(st_obj)
 
     analyze_done = bool(ss.get("portfolio_analyzed")) and fresh
     health_done = (
@@ -1153,9 +1153,6 @@ def workflow_step_visual_states(
         if intent == "change_goal" and key == "goal":
             states[key] = "current" if active_step == "goal" else "stale"
             continue
-        if checklist[key]:
-            states[key] = "complete"
-            continue
         is_stale = key in stale or (
             key == "analyze"
             and status in ("portfolio_stale", "settings_stale")
@@ -1166,6 +1163,9 @@ def workflow_step_visual_states(
         )
         if active_step == key:
             states[key] = "current"
+            continue
+        if checklist[key] and not is_stale:
+            states[key] = "complete"
         elif is_stale:
             states[key] = "stale"
         elif i <= first_open:

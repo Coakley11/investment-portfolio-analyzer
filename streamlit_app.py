@@ -225,8 +225,8 @@ if _PERSISTENCE_OK:
     try:
         if not st.session_state.get("_suite_inv_persistence_bootstrapped"):
             restore_investment_disk_state_once(st)
-            reconcile_investment_cloud_drift_if_needed(st)
             st.session_state["_suite_inv_persistence_bootstrapped"] = True
+        reconcile_investment_cloud_drift_if_needed(st)
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()
@@ -829,6 +829,8 @@ def evaluate_portfolio_health_if_needed(
             bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
         )
     cache_health_summary(health, tickers, weights)
+    st.session_state.run_health = False
+    st.session_state["_workflow_analysis_just_completed"] = True
     return health
 
 
@@ -1326,7 +1328,6 @@ def render_overview_tab(
                     request_core_step_navigation("analyze", beginner=True)
                 except ImportError:
                     pass
-                st.rerun()
 
         if _ov_active == _ov_subtab_labels[1]:
             what_why_do(
@@ -1450,7 +1451,12 @@ def render_overview_tab(
     if st.button("Analyze Portfolio", type="primary", key="overview_analyze_btn"):
         st.session_state.run_health = True
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
-        st.rerun()
+        try:
+            from investment_workflow import request_core_step_navigation
+
+            request_core_step_navigation("analyze", beginner=False)
+        except ImportError:
+            pass
 
     st.markdown("---")
     section_header(
@@ -2104,7 +2110,6 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
                 request_core_step_navigation("analyze", beginner=True)
             except ImportError:
                 pass
-            st.rerun()
         _beg_health = evaluate_portfolio_health_if_needed(
             settings=settings,
             tickers=tickers,
@@ -2126,6 +2131,8 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
             )
             sync_workflow_health_status(tickers, weights)
             st.success("Analysis complete for your current portfolio. Open **⑤ Portfolio Health** for the full score and recommendations.")
+            if st.session_state.pop("_workflow_analysis_just_completed", False):
+                st.rerun()
         else:
             pp.render_professional_empty(
                 st,
@@ -2372,6 +2379,8 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             bench_rets=bench_rets,
         )
         sync_workflow_health_status(tickers, weights)
+        if st.session_state.pop("_workflow_analysis_just_completed", False):
+            st.rerun()
 
     if health is not None:
         _health_debug_loaded = True

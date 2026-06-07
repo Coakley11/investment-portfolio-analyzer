@@ -232,7 +232,7 @@ def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool =
                 if card["preset"] in core.PORTFOLIO_PRESETS:
                     st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[card["preset"]])
                     st.session_state.preset_applied = card["preset"]
-                    st.session_state.guide_portfolio_loaded = True
+                    st.session_state.guide_portfolio_loaded = False
                     try:
                         from investment_activity import log_goal_selected, log_portfolio_created
 

@@ -201,10 +201,8 @@ def _holdings_fingerprint(df: pd.DataFrame) -> str:
 
 
 def _portfolio_built(st_obj: Any | None = None) -> bool:
-    ss = _sess(st_obj)
-    if ss.get("preset_applied") or ss.get("guide_portfolio_loaded"):
-        return True
-    return bool(ss.get("portfolio_built"))
+    """Portfolio step is complete only after explicit user confirmation."""
+    return bool(_sess(st_obj).get("portfolio_built"))
 
 
 def mark_portfolio_built(st_obj: Any | None = None) -> None:
