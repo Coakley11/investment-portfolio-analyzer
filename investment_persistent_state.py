@@ -365,13 +365,8 @@ def investment_cloud_resync_needed(
 
     if not _local_experience_change_in_flight(st):
         cloud_exp = cloud.get(EXPERIENCE_KEY)
-        if (
-            cloud_exp in EXPERIENCE_OPTIONS
-            and widget in EXPERIENCE_OPTIONS
-            and persisted in EXPERIENCE_OPTIONS
-            and widget == persisted
-            and cloud_exp != widget
-        ):
+        live_exp = current_experience_mode(st)
+        if cloud_exp in EXPERIENCE_OPTIONS and live_exp != cloud_exp:
             reasons.append("experience")
 
     for key in (
@@ -421,6 +416,61 @@ def investment_cloud_resync_needed(
 
     detail = ",".join(reasons)
     return bool(reasons), detail
+
+
+def reconcile_investment_cloud_drift_if_needed(st: Any) -> bool:
+    """
+    Re-apply cloud ``full_session`` when in-memory state drifted (cross-device refresh).
+
+    Safe to call every script run; skipped when local edits or mode change are in flight.
+    """
+    ss = st.session_state
+    if _local_experience_change_in_flight(st):
+        return False
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    if ss.get(dirty_key):
+        return False
+    try:
+        from suite_cloud_state import load_cloud_full_session
+        from suite_user_persistence import _applied_cloud_ts_key
+
+        cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
+        if not isinstance(cloud_state, dict) or not cloud_state:
+            return False
+        needed, detail = investment_cloud_resync_needed(st, cloud_state, cloud_ts)
+        if not needed:
+            return False
+        apply_investment_disk_state(st, cloud_state)
+        if cloud_ts:
+            ss[_applied_cloud_ts_key(APP_ID)] = cloud_ts
+        ss["_suite_inv_debug_cloud_reconcile"] = detail or "drift"
+        _record_session_sync_debug(st)
+        return True
+    except Exception:
+        return False
+
+
+def _end_of_run_autosave_blocked(st: Any) -> tuple[bool, str]:
+    """Block end-of-run autosave when cloud has newer authoritative state than memory."""
+    ss = st.session_state
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    if ss.get(dirty_key) or _local_experience_change_in_flight(st):
+        return False, ""
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
+        if isinstance(cloud_state, dict) and cloud_state:
+            needed, detail = investment_cloud_resync_needed(st, cloud_state, cloud_ts)
+            if needed:
+                return True, detail or "cloud drift"
+    except Exception:
+        pass
+    cloud_exp = ss.get("_suite_inv_debug_cloud_experience")
+    attempt = current_experience_mode(st)
+    if cloud_exp in EXPERIENCE_OPTIONS and attempt != cloud_exp:
+        return True, "experience mismatch vs cloud peek"
+    return False, ""
 
 
 def _record_restore_debug(st: Any, restored_blob: dict[str, Any]) -> None:
@@ -734,6 +784,19 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
     attempt_mode = current_experience_mode(st)
     if end_of_run:
         ss["_suite_inv_debug_eor_autosave_attempt_mode"] = attempt_mode
+        blocked, block_reason = _end_of_run_autosave_blocked(st)
+        if blocked:
+            event = {
+                "at": _utc_now_iso(),
+                "trigger": trigger,
+                "end_of_run": True,
+                "mode_at_autosave": attempt_mode,
+                "outcome": "skipped_eor_cloud_drift",
+                "skip_reason": block_reason,
+            }
+            _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
+            ss["_suite_inv_debug_last_autosave_event"] = event
+            return
     else:
         ss["_suite_inv_debug_autosave_attempt_mode"] = attempt_mode
 

@@ -118,6 +118,7 @@ try:
         ensure_experience_mode,
         ensure_investment_active_tab,
         finalize_persistence_debug,
+        reconcile_investment_cloud_drift_if_needed,
         render_persistence_debug_sidebar,
         restore_investment_disk_state_once,
         sync_experience_after_widget,
@@ -133,6 +134,7 @@ except Exception as _persist_import_exc:
 if _PERSISTENCE_OK:
     try:
         restore_investment_disk_state_once(st)
+        reconcile_investment_cloud_drift_if_needed(st)
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()
