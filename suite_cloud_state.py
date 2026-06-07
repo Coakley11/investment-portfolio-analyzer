@@ -27,12 +27,36 @@ class RestorePickResult:
     disk_ts: str | None
 
 _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
-    "music": ("suite_resume", "suite_page", "suite_pick_key", "suite_song"),
-    "baseball": ("suite_page",),
+    "music": (
+        "suite_resume",
+        "suite_page",
+        "suite_pick_key",
+        "suite_song",
+        "suite_display_key",
+        "suite_instrument",
+        "suite_section_focus",
+    ),
+    "baseball": ("suite_resume", "suite_page", "suite_trend_player", "suite_player_a", "suite_player_b"),
     "investment": ("suite_page",),
     "nba": ("suite_resume", "suite_page", "suite_team"),
-    "future_lens": ("suite_resume", "suite_page", "suite_sim"),
-    "applied_intelligence": ("suite_page", "suite_lesson"),
+    "future_lens": (
+        "suite_resume",
+        "suite_page",
+        "suite_sim",
+        "suite_fl_domain",
+        "suite_fl_area",
+        "suite_fl_timeline_year",
+        "suite_fl_sim_year",
+        "suite_fl_view",
+    ),
+    "applied_intelligence": (
+        "suite_page",
+        "suite_lesson",
+        "suite_ai_question",
+        "suite_ai_question_id",
+        "suite_ai_source_app",
+        "suite_ai_context",
+    ),
 }
 
 
@@ -187,28 +211,6 @@ def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
         return {}, str(row.get("updated_at") or "") or None
     except Exception:
         return {}, None
-
-
-def clear_cloud_full_session(app_id: str) -> bool:
-    """Remove persisted ``metrics.full_session`` so refresh cannot restore old workflow state."""
-    try:
-        from suite_storage_config import cloud_storage_enabled
-    except ImportError:
-        return False
-    if not cloud_storage_enabled():
-        return True
-    try:
-        import suite_storage as storage
-
-        storage.save_current_state(
-            app_id,
-            page="",
-            summary="Reset to defaults",
-            metrics={FULL_SESSION_KEY: {}},
-        )
-        return True
-    except Exception:
-        return False
 
 
 def save_cloud_full_session(

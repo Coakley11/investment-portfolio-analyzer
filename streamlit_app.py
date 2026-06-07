@@ -966,12 +966,21 @@ def render_sidebar() -> dict:
         pass
     from suite_analytical_question import render_applied_math_sidebar_entry
 
+    _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
+    try:
+        from applied_math_context import build_investment_applied_math_context
+
+        _inv_ami_ctx = build_investment_applied_math_context(_inv_tab, st.session_state)
+    except Exception:
+        _inv_ami_ctx = None
+
     render_applied_math_sidebar_entry(
         st,
         source_app="investment",
-        source_page=str(st.session_state.get("investment_active_tab") or "Overview"),
+        source_page=_inv_tab,
         session_state=st.session_state,
         developer_mode=_inv_dev,
+        context_extra=_inv_ami_ctx,
     )
     pp.render_sidebar_toggle(st)
     if _PERSISTENCE_OK:
