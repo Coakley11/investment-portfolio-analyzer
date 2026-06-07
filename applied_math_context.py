@@ -192,3 +192,78 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     except Exception:
         pass
     return ctx
+
+
+def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, Any]:
+    """Serializable snapshot for Return Insight page restore."""
+    from datetime import datetime, timezone
+
+    tab = str(session_state.get("investment_active_tab") or page or "").strip()
+    widget_params: dict[str, Any] = {}
+    entity_params: dict[str, Any] = {"tab": tab, "page": tab}
+    filter_params: dict[str, Any] = {}
+
+    objective = str(
+        session_state.get("portfolio_objective") or session_state.get("investment_objective") or ""
+    ).strip()
+    if objective:
+        entity_params["objective"] = objective
+        widget_params["portfolio_objective"] = objective
+
+    exp = session_state.get("investment_experience") or session_state.get("experience_mode")
+    if exp:
+        filter_params["experience_mode"] = str(exp)
+
+    df = session_state.get("holdings_df")
+    tickers: list[str] = []
+    try:
+        import pandas as pd
+
+        if isinstance(df, pd.DataFrame) and not df.empty and "Ticker" in df.columns:
+            tickers = [str(t).strip() for t in df["Ticker"].dropna().tolist() if str(t).strip()]
+            if tickers:
+                entity_params["holdings"] = tickers[:12]
+                entity_params["holdings_fingerprint"] = "|".join(tickers[:12])
+    except Exception:
+        pass
+
+    hr = session_state.get("health_result")
+    if hr is not None:
+        score = getattr(hr, "score", None) if not isinstance(hr, dict) else hr.get("score")
+        if score is not None:
+            entity_params["health_score"] = score
+
+    return {
+        "source_app": "investment",
+        "source_page": tab,
+        "page_params": {"page": tab, "tab": tab},
+        "entity_params": entity_params,
+        "widget_params": widget_params,
+        "filter_params": filter_params,
+        "chart_params": {},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def apply_source_state_to_session(session_state: dict[str, Any], source_state: dict[str, Any]) -> None:
+    """Map stored source_state into Investment session restore keys."""
+    if not source_state:
+        return
+    ent = dict(source_state.get("entity_params") or {})
+    wp = dict(source_state.get("widget_params") or {})
+    tab = str(
+        source_state.get("source_page")
+        or source_state.get("page_params", {}).get("tab")
+        or source_state.get("page_params", {}).get("page")
+        or ""
+    ).strip()
+    if tab:
+        session_state["_suite_investment_page"] = tab
+        session_state["investment_active_tab"] = tab
+    hfp = ent.get("holdings_fingerprint")
+    if hfp:
+        session_state["_suite_holdings_fp"] = str(hfp)
+    for k, v in wp.items():
+        if v is not None:
+            session_state[k] = v
+

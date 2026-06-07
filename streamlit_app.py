@@ -973,9 +973,10 @@ def render_sidebar() -> dict:
     from suite_analytical_question import render_applied_math_sidebar_entry
 
     try:
-        from applied_math_context import build_investment_applied_math_context
+        from applied_math_context import build_investment_applied_math_context, build_source_state
     except Exception:
         build_investment_applied_math_context = None  # type: ignore[misc, assignment]
+        build_source_state = None  # type: ignore[misc, assignment]
 
     _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
     render_applied_math_sidebar_entry(
@@ -987,6 +988,11 @@ def render_sidebar() -> dict:
         context_extra_builder=(
             lambda: build_investment_applied_math_context(_inv_tab, st.session_state)
             if build_investment_applied_math_context
+            else None
+        ),
+        source_state_builder=(
+            lambda: build_source_state(_inv_tab, st.session_state)
+            if build_source_state
             else None
         ),
     )
