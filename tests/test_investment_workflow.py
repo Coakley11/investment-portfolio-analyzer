@@ -54,11 +54,12 @@ class TestInvalidateWorkflow(unittest.TestCase):
         self.assertFalse(ss["recommendations_displayed"])
         self.assertNotIn("health_result", ss)
 
-    def test_goal_change_clears_analysis_keeps_goal_portfolio(self) -> None:
+    def test_goal_change_clears_analysis_and_requires_portfolio_reconfirm(self) -> None:
         st = _FakeSt()
         ss = st.session_state
         ss["health_objective"] = "balanced growth"
         ss["preset_applied"] = "Balanced"
+        ss["portfolio_built"] = True
         ss["portfolio_analyzed"] = True
 
         invalidate_workflow_from("goal", st)
@@ -66,6 +67,8 @@ class TestInvalidateWorkflow(unittest.TestCase):
         self.assertEqual(ss["health_objective"], "balanced growth")
         self.assertEqual(ss["preset_applied"], "Balanced")
         self.assertFalse(ss["portfolio_analyzed"])
+        self.assertFalse(ss["portfolio_built"])
+        self.assertIn("portfolio", ss.get("_workflow_stale_steps", set()))
 
     def test_reconcile_stale_fingerprint(self) -> None:
         st = _FakeSt()

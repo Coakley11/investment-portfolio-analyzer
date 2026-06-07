@@ -235,18 +235,9 @@ def ensure_experience_mode(st: Any) -> None:
 
 
 def _local_experience_change_in_flight(st: Any) -> bool:
-    """True when the user just changed mode locally and cloud must not overwrite it yet."""
-    ss = st.session_state
-    widget = ss.get(EXPERIENCE_KEY)
-    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
-    pending = ss.get(_PENDING_EXPERIENCE_KEY)
-    if pending in EXPERIENCE_OPTIONS:
-        return True
-    return (
-        widget in EXPERIENCE_OPTIONS
-        and persisted in EXPERIENCE_OPTIONS
-        and widget != persisted
-    )
+    """True when a local mode change is pending cloud save (do not overwrite from cloud yet)."""
+    pending = st.session_state.get(_PENDING_EXPERIENCE_KEY)
+    return pending in EXPERIENCE_OPTIONS
 
 
 def sync_experience_after_widget(st: Any) -> None:
@@ -882,7 +873,9 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 ss[dirty_key] = True
             else:
                 ss[dirty_key] = False
-            if mode_saved_to_cloud:
+            if trigger == "mode_change" and (saved_disk or saved_cloud):
+                ss.pop(_PENDING_EXPERIENCE_KEY, None)
+            elif mode_saved_to_cloud:
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
             readback_ts = event.get("cloud_readback_ts")
             if saved_cloud and readback_ts:

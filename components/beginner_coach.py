@@ -273,7 +273,6 @@ def render_goal_cards(*, key_prefix: str = "goal_card", change_goal_mode: bool =
                     st.session_state.run_health = False
                     st.session_state.pop("health_result", None)
                     st.session_state.pop("health_result_fingerprint", None)
-                mark_portfolio_built(st)
                 try:
                     from investment_workflow import persist_plan_after_goal_selection
 

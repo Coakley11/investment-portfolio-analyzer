@@ -322,7 +322,11 @@ def restore_once(
     except Exception:
         pass
 
-    st.session_state[applied_cloud_key] = cloud_ts
+    if from_cloud:
+        st.session_state[applied_cloud_key] = cloud_ts
+    elif pick_source == "disk" and disk_ts:
+        st.session_state[applied_cloud_key] = disk_ts
+
     st.session_state[dirty_key] = False
 
     if from_cloud:

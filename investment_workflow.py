@@ -85,7 +85,7 @@ def _stale_steps_set(ss: Any) -> set[str]:
 def _mark_downstream_stale(ss: Any, from_step: WorkflowStep) -> None:
     stale = _stale_steps_set(ss)
     if from_step == "goal":
-        stale.update({"analyze", "health", "recommendations"})
+        stale.update({"portfolio", "analyze", "health", "recommendations"})
     elif from_step == "portfolio":
         stale.update({"analyze", "health", "recommendations"})
     elif from_step == "analysis":
@@ -545,20 +545,25 @@ def invalidate_workflow_from(step: WorkflowStep, st_obj: Any | None = None) -> N
     """
     Invalidate workflow completion from ``step`` onward.
 
-    - ``goal``: clear analysis / health / recommendations (keep goal & portfolio complete).
-    - ``portfolio``: same downstream clear (keep goal & portfolio complete).
+    - ``goal``: clear downstream completion; portfolio must be re-confirmed for the new goal.
+    - ``portfolio``: same downstream clear (keep goal & portfolio complete after confirm).
     - ``analysis``: clear health & recommendations only.
     """
     ss = _sess(st_obj)
     if step in ("goal", "portfolio"):
         _clear_downstream_completion(ss)
         _clear_analysis_cache(ss)
+        if step == "goal":
+            ss["portfolio_built"] = False
+            ss["guide_portfolio_loaded"] = False
+            ss.pop("_portfolio_confirmed_fp", None)
         _mark_downstream_stale(ss, step)
     elif step == "analysis":
         ss["portfolio_health_reviewed"] = False
         ss["recommendations_displayed"] = False
         _mark_downstream_stale(ss, step)
     _sync_health_status_after_invalidate(step, st_obj)
+    _autosave_after_workflow_change(st_obj)
 
 
 def begin_goal_change_workflow(st_obj: Any, *, beginner: bool) -> None:

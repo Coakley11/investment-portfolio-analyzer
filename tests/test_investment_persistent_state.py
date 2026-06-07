@@ -124,7 +124,20 @@ def test_apply_state_no_holdings_key_uses_factory_default():
     assert "experience" in detail
 
 
-def test_investment_cloud_resync_skips_experience_during_local_mode_change():
+def test_investment_cloud_resync_skips_experience_during_pending_local_mode_change():
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["_suite_inv_pending_experience_mode"] = "Beginner Mode"
+    needed, detail = ips.investment_cloud_resync_needed(
+        st,
+        {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
+    )
+    assert needed is False
+    assert "experience" not in detail
+
+
+def test_investment_cloud_resync_detects_experience_when_only_widget_persisted_mismatch():
     st = _FakeSt()
     st.session_state["experience"] = "Beginner Mode"
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
@@ -132,8 +145,8 @@ def test_investment_cloud_resync_skips_experience_during_local_mode_change():
         st,
         {"experience": "Advanced Mode", "_suite_persisted_experience": "Advanced Mode"},
     )
-    assert needed is False
-    assert "experience" not in detail
+    assert needed is True
+    assert "experience" in detail
 
 
 def test_investment_cloud_resync_false_when_aligned():
