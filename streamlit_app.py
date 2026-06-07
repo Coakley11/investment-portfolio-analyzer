@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib
 import io
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -108,10 +109,91 @@ except Exception:
 
 _PERSISTENCE_OK = False
 
+# Safe defaults when investment_persistent_state fails to import (must never crash sidebar).
+EXPERIENCE_KEY = "experience"
+EXPERIENCE_OPTIONS = ("Beginner Mode", "Advanced Mode")
+PERSISTED_EXPERIENCE_KEY = "_suite_persisted_experience"
+INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
+
+
+def _fallback_validate_state_option(
+    st_obj: Any,
+    key: str,
+    options: list[str] | tuple[str, ...],
+    default: str | None = None,
+) -> None:
+    opts = list(options)
+    if not opts:
+        return
+    fallback = default if default is not None and default in opts else opts[0]
+    if key not in st_obj.session_state:
+        st_obj.session_state[key] = fallback
+    elif st_obj.session_state[key] not in opts:
+        st_obj.session_state[key] = fallback
+
+
+def _fallback_ensure_analysis_date_defaults(st_obj: Any) -> None:
+    end_default = dt.date.today()
+    start_default = end_default - dt.timedelta(days=365 * 5)
+    if "analysis_start_date" not in st_obj.session_state:
+        st_obj.session_state["analysis_start_date"] = start_default
+    if "analysis_end_date" not in st_obj.session_state:
+        st_obj.session_state["analysis_end_date"] = end_default
+
+
+def _fallback_ensure_experience_mode(st_obj: Any) -> None:
+    ss = st_obj.session_state
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
+    widget = ss.get(EXPERIENCE_KEY)
+    if persisted in EXPERIENCE_OPTIONS and widget not in EXPERIENCE_OPTIONS:
+        ss[EXPERIENCE_KEY] = persisted
+    elif widget in EXPERIENCE_OPTIONS:
+        ss[PERSISTED_EXPERIENCE_KEY] = widget
+    default = persisted if persisted in EXPERIENCE_OPTIONS else EXPERIENCE_OPTIONS[0]
+    _fallback_validate_state_option(st_obj, EXPERIENCE_KEY, EXPERIENCE_OPTIONS, default)
+
+
+def _fallback_sync_experience_after_widget(st_obj: Any) -> None:
+    ss = st_obj.session_state
+    mode = ss.get(EXPERIENCE_KEY)
+    if mode in EXPERIENCE_OPTIONS:
+        ss[PERSISTED_EXPERIENCE_KEY] = mode
+
+
+def _fallback_ensure_investment_active_tab(
+    st_obj: Any,
+    tab_labels: list[str],
+    *,
+    beginner_mode: bool = False,
+) -> None:
+    del beginner_mode
+    if tab_labels:
+        _fallback_validate_state_option(
+            st_obj, INVESTMENT_ACTIVE_TAB_KEY, tab_labels, tab_labels[0]
+        )
+
+
+def _fallback_noop_persistence(_st: Any, **_kwargs: Any) -> None:
+    pass
+
+
+validate_state_option = _fallback_validate_state_option
+ensure_analysis_date_defaults = _fallback_ensure_analysis_date_defaults
+ensure_experience_mode = _fallback_ensure_experience_mode
+sync_experience_after_widget = _fallback_sync_experience_after_widget
+ensure_investment_active_tab = _fallback_ensure_investment_active_tab
+autosave_investment_state = _fallback_noop_persistence
+default_reset_investment_session = _fallback_noop_persistence
+finalize_persistence_debug = _fallback_noop_persistence
+reconcile_investment_cloud_drift_if_needed = _fallback_noop_persistence
+restore_investment_disk_state_once = _fallback_noop_persistence
+render_persistence_debug_sidebar = _fallback_noop_persistence
+
 try:
     from investment_persistent_state import (
         EXPERIENCE_KEY,
         EXPERIENCE_OPTIONS,
+        INVESTMENT_ACTIVE_TAB_KEY,
         autosave_investment_state,
         default_reset_investment_session,
         ensure_analysis_date_defaults,
@@ -130,6 +212,12 @@ try:
 except Exception as _persist_import_exc:
     _PERSISTENCE_OK = False
     st.session_state["_suite_persist_import_error"] = str(_persist_import_exc)
+
+    def render_reset_controls(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def show_persistence_messages(*_args: Any, **_kwargs: Any) -> None:
+        return None
 
 if _PERSISTENCE_OK:
     try:
