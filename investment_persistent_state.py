@@ -213,25 +213,18 @@ def validate_state_option(st: Any, key: str, options: list[str] | tuple[str, ...
 
 
 def ensure_experience_mode(st: Any) -> None:
-    """Seed the sidebar radio from persisted/cloud mode before the widget renders."""
+    """Seed the sidebar radio from persisted mode before the widget renders (never overwrite a valid widget value)."""
     ss = st.session_state
-    ss["_suite_inv_debug_experience_pre_ensure"] = {
-        "widget": ss.get(EXPERIENCE_KEY),
-        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
-    }
-    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
     widget = ss.get(EXPERIENCE_KEY)
-    if persisted in EXPERIENCE_OPTIONS and widget not in EXPERIENCE_OPTIONS:
-        ss[EXPERIENCE_KEY] = persisted
-    elif widget in EXPERIENCE_OPTIONS:
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
+    if widget in EXPERIENCE_OPTIONS:
         ss[PERSISTED_EXPERIENCE_KEY] = widget
-    default = persisted if persisted in EXPERIENCE_OPTIONS else EXPERIENCE_OPTIONS[0]
-    validate_state_option(st, EXPERIENCE_KEY, EXPERIENCE_OPTIONS, default)
-    ss[PERSISTED_EXPERIENCE_KEY] = ss[EXPERIENCE_KEY]
-    ss["_suite_inv_debug_experience_post_ensure"] = {
-        "widget": ss.get(EXPERIENCE_KEY),
-        "persisted": ss.get(PERSISTED_EXPERIENCE_KEY),
-    }
+        return
+    if persisted in EXPERIENCE_OPTIONS:
+        ss[EXPERIENCE_KEY] = persisted
+    else:
+        ss[EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
+        ss[PERSISTED_EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
 
 
 def _local_experience_change_in_flight(st: Any) -> bool:
@@ -580,10 +573,15 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             continue
         st.session_state[key] = copy.deepcopy(val)
 
-    exp = state.get(EXPERIENCE_KEY)
+    exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)
+    widget_mode = st.session_state.get(EXPERIENCE_KEY)
     preserve_exp: str | None = None
     if _local_experience_change_in_flight(st):
         preserve_exp = current_experience_mode(st)
+    elif widget_mode in EXPERIENCE_OPTIONS:
+        # Streamlit radio already has the user's selection — do not overwrite from disk/cloud.
+        st.session_state[PERSISTED_EXPERIENCE_KEY] = widget_mode
+        preserve_exp = widget_mode
     if exp in EXPERIENCE_OPTIONS and preserve_exp is None:
         st.session_state[EXPERIENCE_KEY] = exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = exp

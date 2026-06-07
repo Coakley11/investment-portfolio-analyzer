@@ -143,14 +143,16 @@ def _fallback_ensure_analysis_date_defaults(st_obj: Any) -> None:
 
 def _fallback_ensure_experience_mode(st_obj: Any) -> None:
     ss = st_obj.session_state
-    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
     widget = ss.get(EXPERIENCE_KEY)
-    if persisted in EXPERIENCE_OPTIONS and widget not in EXPERIENCE_OPTIONS:
-        ss[EXPERIENCE_KEY] = persisted
-    elif widget in EXPERIENCE_OPTIONS:
+    persisted = ss.get(PERSISTED_EXPERIENCE_KEY)
+    if widget in EXPERIENCE_OPTIONS:
         ss[PERSISTED_EXPERIENCE_KEY] = widget
-    default = persisted if persisted in EXPERIENCE_OPTIONS else EXPERIENCE_OPTIONS[0]
-    _fallback_validate_state_option(st_obj, EXPERIENCE_KEY, EXPERIENCE_OPTIONS, default)
+        return
+    if persisted in EXPERIENCE_OPTIONS:
+        ss[EXPERIENCE_KEY] = persisted
+    else:
+        ss[EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
+        ss[PERSISTED_EXPERIENCE_KEY] = EXPERIENCE_OPTIONS[0]
 
 
 def _fallback_sync_experience_after_widget(st_obj: Any) -> None:
@@ -221,8 +223,10 @@ except Exception as _persist_import_exc:
 
 if _PERSISTENCE_OK:
     try:
-        restore_investment_disk_state_once(st)
-        reconcile_investment_cloud_drift_if_needed(st)
+        if not st.session_state.get("_suite_inv_persistence_bootstrapped"):
+            restore_investment_disk_state_once(st)
+            reconcile_investment_cloud_drift_if_needed(st)
+            st.session_state["_suite_inv_persistence_bootstrapped"] = True
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()

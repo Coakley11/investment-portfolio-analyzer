@@ -75,7 +75,7 @@ def test_ensure_experience_mode_seeds_widget_from_persisted_copy():
 
 
 def test_ensure_experience_mode_widget_wins_when_both_set():
-    """Documents init bug: stale widget key overrides restored persisted copy."""
+    """Widget selection must win over stale persisted copy on rerun."""
     st = _FakeSt()
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
     st.session_state["experience"] = "Beginner Mode"
