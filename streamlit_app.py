@@ -964,14 +964,27 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
+    try:
+        from investment_persistence_trace import bump_pr1_render_pass
+
+        bump_pr1_render_pass(st)
+    except Exception:
+        pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
     st.sidebar.caption("**PR1 probe:** `investment-persistence-trace-pr1-v1` · commit `3b81e3d`")
-    try:
-        from investment_persistence_trace import render_pr1_verification_sidebar
+    if _PERSISTENCE_OK:
+        try:
+            from investment_persistence_trace import render_persistence_trace_sidebar
 
-        render_pr1_verification_sidebar(st, persistence_ok=_PERSISTENCE_OK)
-    except Exception as _pr1_verify_exc:
-        st.sidebar.warning(f"PR1 verification panel failed: {_pr1_verify_exc}")
+            render_persistence_trace_sidebar(st, persistence_ok=_PERSISTENCE_OK)
+        except Exception as _pr1_trace_exc:
+            st.session_state["_pr1_trace_sidebar_error"] = str(_pr1_trace_exc)
+        try:
+            from investment_persistence_trace import render_investment_diagnostics_controls
+
+            render_investment_diagnostics_controls(st, persistence_ok=_PERSISTENCE_OK)
+        except Exception as _pr1_diag_exc:
+            st.session_state["_pr1_diag_checkbox_error"] = str(_pr1_diag_exc)
     try:
         from suite_command_center_link import render_command_center_sidebar_link
 
@@ -985,44 +998,37 @@ def render_sidebar() -> dict:
         _inv_dev = developer_access_available(st)
     except Exception:
         pass
-    from suite_analytical_question import render_applied_math_sidebar_entry
-
     try:
-        from applied_math_context import build_investment_applied_math_context, build_source_state
-    except Exception:
-        build_investment_applied_math_context = None  # type: ignore[misc, assignment]
-        build_source_state = None  # type: ignore[misc, assignment]
+        from suite_analytical_question import render_applied_math_sidebar_entry
 
-    _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
-    render_applied_math_sidebar_entry(
-        st,
-        source_app="investment",
-        source_page=_inv_tab,
-        session_state=st.session_state,
-        developer_mode=_inv_dev,
-        context_extra_builder=(
-            lambda: build_investment_applied_math_context(_inv_tab, st.session_state)
-            if build_investment_applied_math_context
-            else None
-        ),
-        source_state_builder=(
-            lambda: build_source_state(_inv_tab, st.session_state)
-            if build_source_state
-            else None
-        ),
-    )
+        try:
+            from applied_math_context import build_investment_applied_math_context, build_source_state
+        except Exception:
+            build_investment_applied_math_context = None  # type: ignore[misc, assignment]
+            build_source_state = None  # type: ignore[misc, assignment]
+
+        _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
+        render_applied_math_sidebar_entry(
+            st,
+            source_app="investment",
+            source_page=_inv_tab,
+            session_state=st.session_state,
+            developer_mode=_inv_dev,
+            context_extra_builder=(
+                lambda: build_investment_applied_math_context(_inv_tab, st.session_state)
+                if build_investment_applied_math_context
+                else None
+            ),
+            source_state_builder=(
+                lambda: build_source_state(_inv_tab, st.session_state)
+                if build_source_state
+                else None
+            ),
+        )
+    except Exception as _ami_sidebar_exc:
+        st.session_state["_pr1_ami_sidebar_error"] = str(_ami_sidebar_exc)
     pp.render_sidebar_toggle(st)
     if _PERSISTENCE_OK:
-        try:
-            from investment_persistence_trace import (
-                render_investment_diagnostics_controls,
-                render_persistence_trace_sidebar,
-            )
-
-            render_investment_diagnostics_controls(st, persistence_ok=_PERSISTENCE_OK)
-            render_persistence_trace_sidebar(st, persistence_ok=_PERSISTENCE_OK)
-        except Exception:
-            pass
         try:
             from investment_workflow import developer_access_available, render_developer_sidebar_controls
 
@@ -1161,6 +1167,18 @@ def render_sidebar() -> dict:
             value=2000,
             help="Lower values run faster. 2,000 is default institutional setting.",
         )
+
+    if _PERSISTENCE_OK:
+        try:
+            from investment_persistence_trace import (
+                ensure_pr1_trace_snapshot,
+                render_pr1_verification_sidebar,
+            )
+
+            ensure_pr1_trace_snapshot(st, persistence_ok=_PERSISTENCE_OK)
+            render_pr1_verification_sidebar(st, persistence_ok=_PERSISTENCE_OK)
+        except Exception as _pr1_verify_exc:
+            st.sidebar.warning(f"PR1 verification panel failed: {_pr1_verify_exc}")
 
     return {
         "start": start_date.isoformat(),

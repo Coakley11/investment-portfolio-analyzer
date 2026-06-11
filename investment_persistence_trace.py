@@ -222,6 +222,13 @@ def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> 
         return False
 
 
+def bump_pr1_render_pass(st: Any) -> int:
+    """Increment per-script-run counter so verification reflects the current run."""
+    n = int(st.session_state.get("_pr1_render_pass", 0) or 0) + 1
+    st.session_state["_pr1_render_pass"] = n
+    return n
+
+
 def render_investment_diagnostics_controls(st: Any, *, persistence_ok: bool | None = None) -> None:
     """Always-visible PR1 checkbox (Streamlit Cloud may not pass ``?dev=1`` to query_params)."""
     if not persistence_ok:
@@ -234,6 +241,13 @@ def render_investment_diagnostics_controls(st: Any, *, persistence_ok: bool | No
             "Also auto-enabled during PR1 baseline when persistence is loaded."
         ),
     )
+
+
+def ensure_pr1_trace_snapshot(st: Any, *, persistence_ok: bool | None = None) -> None:
+    """Refresh trace data without creating duplicate sidebar widgets."""
+    if not investment_trace_enabled(st, persistence_ok=persistence_ok):
+        return
+    snapshot_full_trace(st, persistence_ok=persistence_ok)
 
 
 def get_trace(st: Any) -> dict[str, Any]:
@@ -858,22 +872,45 @@ def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = No
         st.text(f"developer_access_available: {dev_access}")
         st.text(f"developer_diagnostics_enabled: {dev_diag}")
         st.text(f"investment_trace_enabled: {trace_enabled}")
-        st.markdown("**Call flags**")
+        st.markdown("**Call flags (this run)**")
+        st.text(f"render_pass: {ss.get('_pr1_render_pass', 0)}")
         st.text(f"render_persistence_trace_sidebar called: {ss.get('_pr1_trace_sidebar_called', False)}")
+        st.text(f"trace_ui_render_pass: {ss.get('_pr1_trace_ui_render_pass', 0)}")
         st.text(f"snapshot_full_trace ran: {ss.get('_pr1_snapshot_full_trace_ran', False)}")
+        skipped = ss.get("_pr1_trace_sidebar_skipped")
+        if skipped:
+            st.text(f"trace skipped: {skipped}")
         init_err = ss.get("_pr1_init_developer_mode_error")
         if init_err:
             st.warning(f"init_developer_mode_from_query error: {init_err}")
+        trace_err = ss.get("_pr1_trace_sidebar_error")
+        if trace_err:
+            st.warning(f"trace sidebar error: {trace_err}")
+        checkbox_err = ss.get("_pr1_diag_checkbox_error")
+        if checkbox_err:
+            st.warning(f"diagnostics checkbox error: {checkbox_err}")
+        ami_err = ss.get("_pr1_ami_sidebar_error")
+        if ami_err:
+            st.warning(f"applied math sidebar error: {ami_err}")
         persist_import = ss.get("_suite_persist_import_error")
         if persist_import:
             st.warning(f"Persistence import error: {persist_import}")
 
 
 def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
-    st.session_state["_pr1_trace_sidebar_called"] = True
+    """Render PR1 trace UI once per script run; snapshot may refresh on later calls."""
+    ss = st.session_state
+    ss["_pr1_trace_sidebar_called"] = True
+    render_pass = int(ss.get("_pr1_render_pass", 0) or 0)
     if not investment_trace_enabled(st, persistence_ok=persistence_ok):
-        st.session_state["_pr1_trace_sidebar_skipped"] = "investment_trace_enabled=False"
+        ss["_pr1_trace_sidebar_skipped"] = "investment_trace_enabled=False"
         return
+    ss.pop("_pr1_trace_sidebar_skipped", None)
+    if ss.get("_pr1_trace_ui_render_pass") == render_pass and render_pass > 0:
+        ensure_pr1_trace_snapshot(st, persistence_ok=persistence_ok)
+        return
+    if render_pass > 0:
+        ss["_pr1_trace_ui_render_pass"] = render_pass
 
     trace = snapshot_full_trace(st, persistence_ok=persistence_ok)
 

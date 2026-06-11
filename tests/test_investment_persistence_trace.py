@@ -37,6 +37,23 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         self.assertFalse(investment_trace_enabled(st, persistence_ok=False))
         self.assertEqual(INVESTMENT_PERSIST_DEPLOY_VERSION, "investment-persistence-trace-pr1-v1")
 
+    def test_render_pass_dedupes_trace_ui(self) -> None:
+        from investment_persistence_trace import (
+            bump_pr1_render_pass,
+            render_persistence_trace_sidebar,
+        )
+
+        st = self._st()
+        st.sidebar = MagicMock()
+        st.sidebar.expander = MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=st), __exit__=MagicMock()))
+        bump_pr1_render_pass(st)
+        render_persistence_trace_sidebar(st, persistence_ok=True)
+        self.assertEqual(st.session_state.get("_pr1_trace_ui_render_pass"), 1)
+        self.assertTrue(st.session_state.get("_pr1_trace_sidebar_called"))
+        self.assertTrue(st.session_state.get("_pr1_snapshot_full_trace_ran"))
+        render_persistence_trace_sidebar(st, persistence_ok=True)
+        self.assertEqual(st.session_state.get("_pr1_trace_ui_render_pass"), 1)
+
     def test_pr1_checkbox_enables_trace_when_baseline_inactive(self) -> None:
         from investment_persistence_trace import (
             PR1_DIAG_CHECKBOX_KEY,
