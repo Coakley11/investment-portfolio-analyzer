@@ -897,10 +897,20 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     except ImportError:
         _WF_BLOB = "workflow_state"
 
+    ami_skip_tab = str(st.session_state.get("_skip_page_restore_for") or "").strip()
+    ami_expected_fp = str(st.session_state.get("_suite_holdings_fp") or "").strip()
+    blob_holdings_fp = str(state.get("holdings_fingerprint") or "").strip()
+
     for key, val in state.items():
         if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint", EXPERIENCE_KEY, PERSISTED_EXPERIENCE_KEY):
             continue
+        if key == INVESTMENT_ACTIVE_TAB_KEY and ami_skip_tab:
+            st.session_state["_suite_page_overwrite_source"] = "ami_return_deferred_tab"
+            continue
         if key == "holdings_df":
+            if ami_expected_fp and blob_holdings_fp and blob_holdings_fp != ami_expected_fp:
+                st.session_state["_suite_page_overwrite_source"] = "ami_return_deferred_holdings"
+                continue
             st.session_state["_suite_inv_holdings_from_saved_blob"] = True
             if val:
                 try:

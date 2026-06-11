@@ -236,6 +236,12 @@ if _PERSISTENCE_OK:
         if not st.session_state.get("_suite_inv_persistence_bootstrapped"):
             restore_investment_disk_state_once(st)
             reconcile_investment_cloud_drift_if_needed(st)
+            try:
+                from suite_resume_launch import finalize_ami_return_restore
+
+                finalize_ami_return_restore(st, "investment")
+            except Exception:
+                pass
             st.session_state["_suite_inv_persistence_bootstrapped"] = True
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)

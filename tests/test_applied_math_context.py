@@ -6,7 +6,10 @@ import unittest
 
 import pandas as pd
 
+import portfolio_core as core
+
 from applied_math_context import (
+    apply_source_state_to_session,
     build_investment_applied_math_context,
     build_source_state,
     record_rebalance_from_health,
@@ -61,6 +64,36 @@ class TestInvestmentAppliedMathContext(unittest.TestCase):
         self.assertIn("VYM:50.0:Dividend ETF", ent["holdings_fingerprint"])
         self.assertEqual(ent["objective"], "income")
         self.assertEqual(state["filter_params"].get("risk_free_pct"), 3.5)
+
+    def test_apply_source_state_restores_holdings_and_goal(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        session = {
+            "investment_active_tab": "① Choose Goal",
+            "holdings_df": pd.DataFrame(core.DEFAULT_HOLDINGS),
+        }
+        state = build_source_state(
+            "⑤ Portfolio Health",
+            {
+                "investment_active_tab": "⑤ Portfolio Health",
+                "guide_goal_choice": "Balanced growth",
+                "preset_applied": "Balanced",
+                "portfolio_built": True,
+                "holdings_df": holdings,
+            },
+        )
+        apply_source_state_to_session(session, state)
+        self.assertEqual(session["investment_active_tab"], "⑤ Portfolio Health")
+        self.assertEqual(session["guide_goal_choice"], "Balanced growth")
+        restored = session["holdings_df"]
+        self.assertEqual(len(restored), 2)
+        tickers = set(restored["Ticker"].astype(str).str.upper())
+        self.assertEqual(tickers, {"BND", "VYM"})
 
     def test_rebalance_drift_captured_from_health(self) -> None:
         class _HR:

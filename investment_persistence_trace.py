@@ -98,6 +98,9 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "return_context_keys",
     "apply_source_state_attempted",
     "apply_source_state_success",
+    "holdings_fingerprint_before_apply",
+    "holdings_fingerprint_after_apply",
+    "holdings_fingerprint_after_restore",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
@@ -589,6 +592,21 @@ def _source_state_holdings_fingerprint(source_state: dict[str, Any] | None) -> s
     return None
 
 
+def _session_holdings_fingerprint(ss: Any) -> str | None:
+    try:
+        import pandas as pd
+
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = ss.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            fp = str(_holdings_fingerprint(df)).strip()
+            return fp or None
+    except Exception:
+        pass
+    return None
+
+
 def _url_has_suite_ami_insight(url: str) -> bool:
     return "suite_ami_insight" in str(url or "")
 
@@ -641,6 +659,16 @@ def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
             ss, trace, "apply_source_state_attempted"
         ),
         "apply_source_state_success": _resolved_ami_trace_value(ss, trace, "apply_source_state_success"),
+        "holdings_fingerprint_before_apply": _resolved_ami_trace_value(
+            ss, trace, "holdings_fingerprint_before_apply"
+        ),
+        "holdings_fingerprint_after_apply": _resolved_ami_trace_value(
+            ss, trace, "holdings_fingerprint_after_apply"
+        ),
+        "holdings_fingerprint_after_restore": _resolved_ami_trace_value(
+            ss, trace, "holdings_fingerprint_after_restore"
+        )
+        or _session_holdings_fingerprint(ss),
     }
     update_trace(st, **fields)
     return fields
@@ -724,6 +752,7 @@ def record_restore_trace(st: Any) -> None:
         local_updated_at=ss.get("_suite_persist_debug_disk_ts"),
         page_overwrite_source=ss.get("_suite_page_overwrite_source"),
         _suite_investment_page=ss.get("_suite_investment_page"),
+        holdings_fingerprint_after_restore=_session_holdings_fingerprint(ss),
     )
 
 
@@ -923,13 +952,17 @@ def record_ami_apply_trace(
     source_state: dict[str, Any] | None,
     success: bool | None = None,
     error: str | None = None,
+    holdings_fp_before: str | None = None,
+    holdings_fp_after: str | None = None,
 ) -> None:
     """Record AMI return apply attempt for Test E (does not change AMI behavior)."""
     ss = st.session_state
     tab_before = ss.get("investment_active_tab")
     ctx_keys: list[str] | None = None
+    source_state_keys: list[str] | None = None
     if isinstance(source_state, dict):
         ctx_keys = sorted(str(k) for k in source_state.keys())
+        source_state_keys = ctx_keys
     hfp = _source_state_holdings_fingerprint(source_state if isinstance(source_state, dict) else None)
     fields = {
         "ami_return_detected": True,
@@ -938,9 +971,12 @@ def record_ami_apply_trace(
         "apply_source_state_error": error,
         "current_investment_tab": tab_before,
         "return_context_keys": ctx_keys,
+        "source_state_keys": source_state_keys,
         "source_app_normalized": source_state.get("source_app") if isinstance(source_state, dict) else None,
         "source_state_holdings_fingerprint": hfp,
         "return_context_created": bool(ctx_keys),
+        "holdings_fingerprint_before_apply": holdings_fp_before or None,
+        "holdings_fingerprint_after_apply": holdings_fp_after or None,
     }
     update_trace(st, **fields)
     _persist_ami_trace_backup(ss, **fields)

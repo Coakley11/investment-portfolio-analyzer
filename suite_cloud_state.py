@@ -35,9 +35,16 @@ _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
         "suite_display_key",
         "suite_instrument",
         "suite_section_focus",
+        "suite_ami_insight",
+        "suite_ai_question_id",
     ),
     "baseball": ("suite_resume", "suite_page", "suite_trend_player", "suite_player_a", "suite_player_b"),
-    "investment": ("suite_page",),
+    "investment": (
+        "suite_page",
+        "suite_ami_insight",
+        "suite_holdings_fp",
+        "suite_ai_question_id",
+    ),
     "nba": ("suite_resume", "suite_page", "suite_team"),
     "future_lens": (
         "suite_resume",
@@ -72,17 +79,125 @@ def _qp_get(st: Any, name: str) -> str:
     return str(raw).strip()
 
 
-def has_resume_query_params(st: Any, app_key: str) -> bool:
-    """True when the user opened via Continue / deep link (skip cloud restore)."""
-    key = str(app_key or "").strip()
+def _ami_resume_consumed_flag(app_key: str) -> str:
+    key = str(app_key or "").strip().lower()
     if key == "math":
         key = "applied_intelligence"
-    if st.session_state.get(f"_suite_resume_launch_{key}"):
+    return f"_ami_resume_consumed_{key}"
+
+
+def ami_return_resume_consumed(st: Any, app_key: str) -> bool:
+    """True after AMI insight was hydrated+rendered once on the source page."""
+    return bool(st.session_state.get(_ami_resume_consumed_flag(app_key)))
+
+
+def _normalize_resume_app_key(app_key: str) -> str:
+    key = str(app_key or "").strip()
+    if key == "math":
+        return "applied_intelligence"
+    return key
+
+
+def list_active_resume_query_params(st: Any, app_key: str) -> list[str]:
+    """Resume / AMI query param names currently present in the URL."""
+    key = _normalize_resume_app_key(app_key)
+    params = _RESUME_QUERY_KEYS.get(key, ("suite_resume", "suite_page"))
+    return [name for name in params if _qp_get(st, name)]
+
+
+def _ami_return_url_active(st: Any, app_key: str) -> bool:
+    """True when resume/AMI steering comes from the current URL (not stale session flags)."""
+    if list_active_resume_query_params(st, app_key):
         return True
-    for param in _RESUME_QUERY_KEYS.get(key, ("suite_resume", "suite_page")):
-        if _qp_get(st, param):
+    try:
+        from applied_math_return_insight import _active_ami_return_query_param_keys, insight_return_query_id
+
+        if insight_return_query_id(st) or _active_ami_return_query_param_keys(st):
             return True
+    except ImportError:
+        pass
     return False
+
+
+_STALE_RESUME_SESSION_FLAGS: tuple[str, ...] = (
+    "_suite_resume_launch_music",
+    "_suite_resume_launch",
+    "_suite_resume_launch_baseball",
+    "_suite_resume_launch_app",
+    "_suite_resume_launch_key",
+    "_suite_resume_launch_applied_intelligence",
+    "_suite_resume_insight_hydration_only",
+    "_suite_workspace_sync_skipped_no_apply",
+    "_skip_page_restore_for",
+    "_navigate_to_studio_page",
+    "_navigate_to_page",
+    "_suite_cloud_target_page",
+    "ami_return_force_active_page",
+    "ami_return_forced_page",
+    "_ami_insight_return_preserve",
+)
+
+
+def reconcile_stale_resume_session_flags(st: Any, app_key: str) -> list[str]:
+    """
+    Drop stale resume/AMI session flags when the URL no longer carries resume params.
+
+    Returns flag names cleared. Does not clear flags during a live URL resume/AMI return.
+    """
+    ss = st.session_state
+    if _ami_return_url_active(st, app_key):
+        return []
+    cleared: list[str] = []
+    key = _normalize_resume_app_key(app_key)
+    for flag in (*_STALE_RESUME_SESSION_FLAGS, f"_suite_resume_launch_{key}"):
+        if flag in ss:
+            ss.pop(flag, None)
+            cleared.append(flag)
+    for flag in list(ss.keys()):
+        name = str(flag)
+        if name.startswith("_suite_resume_launch_") and name not in cleared:
+            ss.pop(flag, None)
+            cleared.append(name)
+    try:
+        from applied_math_return_insight import reconcile_stale_page_navigation
+
+        reconcile_stale_page_navigation(st, app_key)
+    except ImportError:
+        pass
+    return cleared
+
+
+def should_skip_workspace_restore_for_resume(
+    st: Any,
+    app_key: str,
+    *,
+    reconcile_first: bool = True,
+) -> bool:
+    """
+    Skip cloud workspace restore only for live URL resume params or URL-driven AMI return.
+
+    Session-only ``_suite_resume_launch_*`` / ``_ami_insight_return_preserve`` flags
+    must not block cross-device page sync.
+    """
+    if ami_return_resume_consumed(st, app_key):
+        if reconcile_first:
+            reconcile_stale_resume_session_flags(st, app_key)
+        return False
+    if reconcile_first:
+        reconcile_stale_resume_session_flags(st, app_key)
+    if list_active_resume_query_params(st, app_key):
+        return True
+    try:
+        from applied_math_return_insight import ami_return_navigation_active
+
+        return ami_return_navigation_active(st, app_key)
+    except ImportError:
+        return False
+
+
+def has_resume_query_params(st: Any, app_key: str) -> bool:
+    """True when live URL resume/AMI params should defer cloud workspace restore."""
+    return should_skip_workspace_restore_for_resume(st, app_key, reconcile_first=True)
 
 
 def parse_persist_timestamp(ts: str | None) -> float:
@@ -219,19 +334,46 @@ def save_cloud_full_session(
     *,
     page: str = "",
     summary: str = "",
-) -> None:
+) -> bool:
+    """Persist full_session to Supabase. Returns True when cloud write succeeds."""
     if not state:
+        return False
+    try:
+        from suite_storage_config import cloud_storage_enabled
+    except ImportError:
+        return False
+    if not cloud_storage_enabled():
+        return False
+    try:
+        storage, _ = _import_storage()
+        app_key = storage.normalize_app_key(app_id)
+        storage.save_current_state(
+            app_key,
+            page=page or "",
+            summary=summary or "Last session",
+            metrics={FULL_SESSION_KEY: copy.deepcopy(state)},
+        )
+        return True
+    except Exception:
+        return False
+
+
+def clear_cloud_full_session(app_id: str) -> None:
+    """Remove persisted full_session blob from cloud (reset flows)."""
+    try:
+        from suite_storage_config import cloud_storage_enabled
+    except ImportError:
+        return
+    if not cloud_storage_enabled():
         return
     try:
-        from suite_account import sync_local_state_to_cloud
-
-        sync_local_state_to_cloud(
-            app_id,
-            {
-                "page": page,
-                "summary": summary or "Last session",
-                FULL_SESSION_KEY: state,
-            },
+        storage, _ = _import_storage()
+        app_key = storage.normalize_app_key(app_id)
+        storage.save_current_state(
+            app_key,
+            page="",
+            summary="",
+            metrics={FULL_SESSION_KEY: {}},
         )
     except Exception:
         pass
@@ -245,13 +387,15 @@ def pick_restore_session(
     *,
     local_dirty: bool = False,
     prefer_cloud_on_tie: bool = True,
+    cloud_first: bool = True,
 ) -> RestorePickResult:
     """
     Choose restore payload for direct open / cloud re-sync.
 
-    When ``local_dirty`` is False (fresh open, no unsaved edits on this device),
-    the newer timestamp wins; ties favor cloud for cross-device sync.
-    When ``local_dirty`` is True, keep local disk over remote cloud.
+    When ``local_dirty`` is False and ``cloud_first`` is True (default), cloud
+    ``full_session`` is the cross-device source of truth whenever it exists.
+    Local disk is a per-device cache used only when cloud is empty/unavailable
+    or this device has unsaved local edits.
     """
     cloud_epoch = _parse_ts(cloud_ts)
     disk_epoch = _parse_ts(disk_ts)
@@ -268,6 +412,15 @@ def pick_restore_session(
             disk_state,
             "disk",
             "local unsaved edits",
+            cloud_ts,
+            disk_ts,
+        )
+
+    if cloud_first and cloud_state:
+        return RestorePickResult(
+            cloud_state,
+            "cloud",
+            "cloud-first workspace sync",
             cloud_ts,
             disk_ts,
         )
@@ -299,8 +452,15 @@ def session_page_summary(app_id: str, state: dict[str, Any]) -> tuple[str, str]:
         page = str(state.get("active_page") or "")
         return page, page or "Baseball session"
     if app_key == "music":
+        meta = state.get("music_workspace_state") if isinstance(state.get("music_workspace_state"), dict) else {}
         core = state.get("core") if isinstance(state.get("core"), dict) else state
-        page = str((core or {}).get("studio_page") or (core or {}).get("page") or state.get("studio_page") or "")
+        page = str(
+            meta.get("studio_page")
+            or (core or {}).get("studio_page")
+            or (core or {}).get("page")
+            or state.get("studio_page")
+            or ""
+        )
         song = str((core or {}).get("song") or state.get("song") or "")
         return page, song or page or "Music session"
     if app_key == "investment":

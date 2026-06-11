@@ -258,6 +258,10 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
         entity_params["preset_applied"] = str(preset)
     if session_state.get("portfolio_built"):
         entity_params["portfolio_built"] = True
+    for goal_key in ("beginner_goal_card", "guide_goal_choice", "health_objective"):
+        val = session_state.get(goal_key)
+        if val is not None and val != "":
+            entity_params[goal_key] = val
 
     df = session_state.get("holdings_df")
     tickers: list[str] = []
@@ -273,6 +277,7 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
             hfp = str(_holdings_fingerprint(df)).strip()
             if hfp:
                 entity_params["holdings_fingerprint"] = hfp
+            entity_params["holdings_df"] = df.to_dict(orient="records")
     except Exception:
         pass
 
@@ -317,12 +322,30 @@ def ensure_investment_source_state(page: str, session_state: dict[str, Any]) -> 
     }
 
 
+def _apply_holdings_df_from_entity(session_state: dict[str, Any], ent: dict[str, Any]) -> bool:
+    """Restore ``holdings_df`` from AMI source_state entity_params when present."""
+    raw = ent.get("holdings_df")
+    if not raw:
+        return False
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(raw)
+        if df.empty or "Ticker" not in df.columns:
+            return False
+        session_state["holdings_df"] = df
+        return True
+    except Exception:
+        return False
+
+
 def apply_source_state_to_session(session_state: dict[str, Any], source_state: dict[str, Any]) -> None:
     """Map stored source_state into Investment session restore keys."""
     if not source_state:
         return
     ent = dict(source_state.get("entity_params") or {})
     wp = dict(source_state.get("widget_params") or {})
+    fp = dict(source_state.get("filter_params") or {})
     tab = str(
         source_state.get("source_page")
         or source_state.get("page_params", {}).get("tab")
@@ -332,10 +355,18 @@ def apply_source_state_to_session(session_state: dict[str, Any], source_state: d
     if tab:
         session_state["_suite_investment_page"] = tab
         session_state["investment_active_tab"] = tab
+        session_state["_skip_page_restore_for"] = tab
     hfp = ent.get("holdings_fingerprint")
     if hfp:
         session_state["_suite_holdings_fp"] = str(hfp)
+    _apply_holdings_df_from_entity(session_state, ent)
+    for key in ("beginner_goal_card", "guide_goal_choice", "preset_applied", "health_objective", "portfolio_built"):
+        if key in ent and ent[key] is not None and ent[key] != "":
+            session_state[key] = ent[key]
     for k, v in wp.items():
         if v is not None:
+            session_state[k] = v
+    for k, v in fp.items():
+        if v is not None and v != "":
             session_state[k] = v
 

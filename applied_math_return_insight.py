@@ -145,6 +145,38 @@ def insight_return_query_id(st: Any) -> str:
     return _query_param(st, "suite_ami_insight")
 
 
+def _active_ami_return_query_param_keys(st: Any) -> list[str]:
+    """AMI return query params present on the current URL."""
+    names = ("suite_ami_insight", "suite_page", "suite_holdings_fp", "suite_ai_question_id")
+    return [name for name in names if _query_param(st, name)]
+
+
+def ami_return_navigation_active(st: Any, app_key: str) -> bool:
+    """True when Investment (or other source app) is loading from an AMI return URL."""
+    key = str(app_key or "").strip().lower()
+    if key == "math":
+        key = "applied_intelligence"
+    if insight_return_query_id(st):
+        return key == "investment" or bool(st.session_state.get(SESSION_RETURN_CONTEXT_KEY))
+    if _active_ami_return_query_param_keys(st):
+        return key == "investment"
+    return bool(st.session_state.get(SESSION_RETURN_CONTEXT_KEY)) and key == "investment"
+
+
+def _session_holdings_fingerprint(session_state: Any) -> str:
+    try:
+        import pandas as pd
+
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = session_state.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return str(_holdings_fingerprint(df)).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def ami_resume_consumed(st: Any, app_key: str) -> bool:
     try:
         from suite_cloud_state import ami_return_resume_consumed
@@ -617,11 +649,19 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
         elif app == "investment":
             from applied_math_context import apply_source_state_to_session
 
+            fp_before = _session_holdings_fingerprint(ss)
             apply_source_state_to_session(ss, source_state)
+            fp_after = _session_holdings_fingerprint(ss)
             try:
                 from investment_persistence_trace import record_ami_apply_trace
 
-                record_ami_apply_trace(st, source_state=source_state, success=True)
+                record_ami_apply_trace(
+                    st,
+                    source_state=source_state,
+                    success=True,
+                    holdings_fp_before=fp_before,
+                    holdings_fp_after=fp_after,
+                )
             except Exception:
                 pass
     except Exception as exc:
@@ -629,7 +669,14 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
             try:
                 from investment_persistence_trace import record_ami_apply_trace
 
-                record_ami_apply_trace(st, source_state=source_state, success=False, error=str(exc))
+                record_ami_apply_trace(
+                    st,
+                    source_state=source_state,
+                    success=False,
+                    error=str(exc),
+                    holdings_fp_before=_session_holdings_fingerprint(ss),
+                    holdings_fp_after=_session_holdings_fingerprint(ss),
+                )
             except Exception:
                 pass
         log.warning("apply_return_source_state failed for %s: %s", app, exc)
