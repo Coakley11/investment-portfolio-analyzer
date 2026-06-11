@@ -125,21 +125,69 @@ def coach_card(title: str, body: str) -> None:
     )
 
 
-def historical_window_years(start: dt.date, end: dt.date) -> float:
-    if end <= start:
+HISTORICAL_WINDOW_UNAVAILABLE = "Historical Window: unavailable"
+
+
+def normalize_historical_date(value: Any) -> dt.date | None:
+    """Coerce persisted/widget dates to ``datetime.date`` (ISO str, Timestamp, datetime)."""
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    to_pydatetime = getattr(value, "to_pydatetime", None)
+    if callable(to_pydatetime):
+        try:
+            return to_pydatetime().date()
+        except (TypeError, ValueError, AttributeError):
+            return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return dt.date.fromisoformat(raw[:10])
+        except ValueError:
+            pass
+        try:
+            import pandas as pd
+
+            parsed = pd.to_datetime(raw, errors="coerce")
+            if parsed is not pd.NaT and parsed == parsed:  # type: ignore[comparison-overlap]
+                return parsed.to_pydatetime().date()
+        except Exception:
+            return None
+    return None
+
+
+def historical_window_years(start: Any, end: Any) -> float | None:
+    start_d = normalize_historical_date(start)
+    end_d = normalize_historical_date(end)
+    if start_d is None or end_d is None:
+        return None
+    if end_d <= start_d:
         return 0.0
-    return (end - start).days / 365.25
+    return (end_d - start_d).days / 365.25
 
 
-def format_historical_window_label(start: dt.date, end: dt.date) -> str:
-    years = historical_window_years(start, end)
-    return f"{start.strftime('%b %Y')} → {end.strftime('%b %Y')} ({years:.1f} years)"
+def format_historical_window_label(start: Any, end: Any) -> str:
+    start_d = normalize_historical_date(start)
+    end_d = normalize_historical_date(end)
+    if start_d is None or end_d is None:
+        return "unavailable"
+    years = historical_window_years(start_d, end_d)
+    if years is None:
+        return "unavailable"
+    return f"{start_d.strftime('%b %Y')} → {end_d.strftime('%b %Y')} ({years:.1f} years)"
 
 
-def render_historical_window_summary(*, start: dt.date, end: dt.date, container: Any | None = None) -> None:
+def render_historical_window_summary(*, start: Any, end: Any, container: Any | None = None) -> None:
     """Active lookback summary near sidebar date controls."""
     target = container or st.sidebar
     label = format_historical_window_label(start, end)
+    if label == "unavailable":
+        label = HISTORICAL_WINDOW_UNAVAILABLE
     target.markdown(
         f"""
         <div style="background:rgba(77,163,255,0.08);border:1px solid rgba(77,163,255,0.35);

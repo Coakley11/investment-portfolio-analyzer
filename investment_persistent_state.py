@@ -600,13 +600,43 @@ def notify_pending_insight_change(
         autosave_investment_state(st, trigger=source)
 
 
+def _coerce_persisted_analysis_date(val: Any) -> dt.date | None:
+    """Normalize restored sidebar lookback dates to ``datetime.date``."""
+    if val is None:
+        return None
+    if isinstance(val, dt.datetime):
+        return val.date()
+    if isinstance(val, dt.date):
+        return val
+    to_pydatetime = getattr(val, "to_pydatetime", None)
+    if callable(to_pydatetime):
+        try:
+            return to_pydatetime().date()
+        except (TypeError, ValueError, AttributeError):
+            return None
+    if isinstance(val, str):
+        try:
+            return dt.date.fromisoformat(val.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
 def ensure_analysis_date_defaults(st: Any) -> None:
     end_default = dt.date.today()
     start_default = end_default - dt.timedelta(days=365 * 5)
-    if "analysis_start_date" not in st.session_state:
-        st.session_state["analysis_start_date"] = start_default
-    if "analysis_end_date" not in st.session_state:
-        st.session_state["analysis_end_date"] = end_default
+    for key, default in (
+        ("analysis_start_date", start_default),
+        ("analysis_end_date", end_default),
+    ):
+        if key not in st.session_state:
+            st.session_state[key] = default
+            continue
+        coerced = _coerce_persisted_analysis_date(st.session_state[key])
+        if coerced is not None:
+            st.session_state[key] = coerced
+        elif st.session_state[key] is not None:
+            st.session_state[key] = default
 
 
 def ensure_investment_active_tab(st: Any, tab_labels: list[str], *, beginner_mode: bool = False) -> None:
@@ -889,11 +919,10 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
                 st.session_state.holdings_df = pd.DataFrame()
                 st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
             continue
-        if key in ("analysis_start_date", "analysis_end_date") and isinstance(val, str):
-            try:
-                st.session_state[key] = dt.date.fromisoformat(val)
-            except ValueError:
-                continue
+        if key in ("analysis_start_date", "analysis_end_date"):
+            coerced = _coerce_persisted_analysis_date(val)
+            if coerced is not None:
+                st.session_state[key] = coerced
             continue
         st.session_state[key] = copy.deepcopy(val)
 
