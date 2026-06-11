@@ -1014,6 +1014,16 @@ def render_sidebar() -> dict:
     pp.render_sidebar_toggle(st)
     if _PERSISTENCE_OK:
         try:
+            from investment_persistence_trace import (
+                render_investment_diagnostics_controls,
+                render_persistence_trace_sidebar,
+            )
+
+            render_investment_diagnostics_controls(st, persistence_ok=_PERSISTENCE_OK)
+            render_persistence_trace_sidebar(st, persistence_ok=_PERSISTENCE_OK)
+        except Exception:
+            pass
+        try:
             from investment_workflow import developer_access_available, render_developer_sidebar_controls
 
             render_developer_sidebar_controls(st)
@@ -1023,12 +1033,6 @@ def render_sidebar() -> dict:
 
                 if developer_diagnostics_enabled(st):
                     render_persistence_debug_sidebar(st)
-                try:
-                    from investment_persistence_trace import render_persistence_trace_sidebar
-
-                    render_persistence_trace_sidebar(st, persistence_ok=_PERSISTENCE_OK)
-                except Exception:
-                    pass
         except ImportError:
             pass
     st.sidebar.markdown("### Experience")
@@ -3111,12 +3115,13 @@ try:
     if _PERSISTENCE_OK and not pp.skip_background_persistence(st):
         autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
-    try:
-        from investment_persistence_trace import snapshot_full_trace
+except Exception:
+    pass
+try:
+    from investment_persistence_trace import investment_trace_enabled, snapshot_full_trace
 
+    if _PERSISTENCE_OK and investment_trace_enabled(st, persistence_ok=_PERSISTENCE_OK):
         snapshot_full_trace(st, persistence_ok=_PERSISTENCE_OK)
-    except Exception:
-        pass
 except Exception:
     pass
 

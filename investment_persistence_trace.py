@@ -9,6 +9,7 @@ from typing import Any
 INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-persistence-trace-pr1-v1"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
+PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
 
 DEPLOY_TRACE_LABELS: tuple[str, ...] = (
     "deploy_version",
@@ -200,13 +201,39 @@ def init_developer_mode_from_query(st: Any) -> None:
         st.session_state["_pr1_init_developer_mode_error"] = str(exc)
 
 
-def investment_trace_enabled(st: Any) -> bool:
+def pr1_baseline_trace_active(*, persistence_ok: bool | None = None) -> bool:
+    """PR1 baseline: show trace when persistence loaded and deploy marker matches (no ``?dev=1``)."""
+    return bool(persistence_ok) and INVESTMENT_PERSIST_DEPLOY_VERSION == "investment-persistence-trace-pr1-v1"
+
+
+def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> bool:
+    """True when PR1 baseline, sidebar checkbox, or developer diagnostics are active."""
+    if pr1_baseline_trace_active(persistence_ok=persistence_ok):
+        return True
+    if st.session_state.get(PR1_DIAG_CHECKBOX_KEY):
+        return True
+    if st.session_state.get("investment_show_dev_diagnostics"):
+        return True
     try:
         from investment_workflow import developer_diagnostics_enabled
 
         return bool(developer_diagnostics_enabled(st))
     except ImportError:
-        return bool(st.session_state.get("investment_show_dev_diagnostics"))
+        return False
+
+
+def render_investment_diagnostics_controls(st: Any, *, persistence_ok: bool | None = None) -> None:
+    """Always-visible PR1 checkbox (Streamlit Cloud may not pass ``?dev=1`` to query_params)."""
+    if not persistence_ok:
+        return
+    st.sidebar.checkbox(
+        "Enable Investment diagnostics",
+        key=PR1_DIAG_CHECKBOX_KEY,
+        help=(
+            "Show Investment persistence trace and Test A–E copy blocks. "
+            "Also auto-enabled during PR1 baseline when persistence is loaded."
+        ),
+    )
 
 
 def get_trace(st: Any) -> dict[str, Any]:
@@ -809,9 +836,10 @@ def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = No
         dev_access = f"import error: {exc}"
         dev_diag = f"import error: {exc}"
     try:
-        trace_enabled = bool(investment_trace_enabled(st))
+        trace_enabled = bool(investment_trace_enabled(st, persistence_ok=persistence_ok))
     except Exception as exc:
         trace_enabled = f"error: {exc}"
+    pr1_baseline = pr1_baseline_trace_active(persistence_ok=persistence_ok)
 
     with st.sidebar.expander("PR1 deploy verification (temp)", expanded=True):
         st.caption(f"**Deploy marker:** `{INVESTMENT_PERSIST_DEPLOY_VERSION}`")
@@ -825,6 +853,8 @@ def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = No
         st.text(f"init_developer_mode_from_query ran: {ss.get('_pr1_init_developer_mode_ran', False)}")
         st.text(f"dev query matched at init: {ss.get('_pr1_dev_query_matched', False)}")
         st.text(f"investment_show_dev_diagnostics: {ss.get('investment_show_dev_diagnostics', False)}")
+        st.text(f"pr1_baseline_trace_active: {pr1_baseline}")
+        st.text(f"investment_pr1_diagnostics_enabled: {ss.get(PR1_DIAG_CHECKBOX_KEY, False)}")
         st.text(f"developer_access_available: {dev_access}")
         st.text(f"developer_diagnostics_enabled: {dev_diag}")
         st.text(f"investment_trace_enabled: {trace_enabled}")
@@ -841,7 +871,7 @@ def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = No
 
 def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
     st.session_state["_pr1_trace_sidebar_called"] = True
-    if not investment_trace_enabled(st):
+    if not investment_trace_enabled(st, persistence_ok=persistence_ok):
         st.session_state["_pr1_trace_sidebar_skipped"] = "investment_trace_enabled=False"
         return
 

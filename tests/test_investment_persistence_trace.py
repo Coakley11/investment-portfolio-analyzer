@@ -23,6 +23,32 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         init_developer_mode_from_query(st)
         self.assertTrue(st.session_state.get("investment_show_dev_diagnostics"))
 
+    def test_pr1_baseline_trace_active_without_dev_query(self) -> None:
+        from investment_persistence_trace import (
+            INVESTMENT_PERSIST_DEPLOY_VERSION,
+            investment_trace_enabled,
+            pr1_baseline_trace_active,
+        )
+
+        self.assertTrue(pr1_baseline_trace_active(persistence_ok=True))
+        self.assertFalse(pr1_baseline_trace_active(persistence_ok=False))
+        st = self._st()
+        self.assertTrue(investment_trace_enabled(st, persistence_ok=True))
+        self.assertFalse(investment_trace_enabled(st, persistence_ok=False))
+        self.assertEqual(INVESTMENT_PERSIST_DEPLOY_VERSION, "investment-persistence-trace-pr1-v1")
+
+    def test_pr1_checkbox_enables_trace_when_baseline_inactive(self) -> None:
+        from investment_persistence_trace import (
+            PR1_DIAG_CHECKBOX_KEY,
+            investment_trace_enabled,
+            pr1_baseline_trace_active,
+        )
+
+        st = self._st({PR1_DIAG_CHECKBOX_KEY: True})
+        # Simulate a future deploy marker by disabling baseline via persistence_ok=False.
+        self.assertFalse(pr1_baseline_trace_active(persistence_ok=False))
+        self.assertTrue(investment_trace_enabled(st, persistence_ok=False))
+
     def test_snapshot_tab_trace_uses_label_strings(self) -> None:
         from investment_persistence_trace import snapshot_tab_trace
 
