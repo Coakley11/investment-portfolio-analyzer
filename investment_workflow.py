@@ -126,7 +126,12 @@ def confirm_portfolio_step(st_obj: Any | None = None, *, holdings_df: pd.DataFra
     record_workflow_health_status("missing", st_obj)
     ss.pop(_WORKFLOW_INTENT_KEY, None)
     record_workflow_action("confirm_portfolio", st_obj)
-    _autosave_after_workflow_change(st_obj)
+    try:
+        from investment_persistent_state import notify_portfolio_change
+
+        notify_portfolio_change(st_obj, source="confirm_portfolio")
+    except Exception:
+        _autosave_after_workflow_change(st_obj)
 
 
 def workflow_state_trace(st_obj: Any | None = None, *, beginner: bool = True) -> dict[str, Any]:
@@ -766,6 +771,12 @@ def track_holdings_dataframe(df: pd.DataFrame, st_obj: Any | None = None) -> Non
         invalidate_workflow_from("portfolio", st_obj)
         if ss.get(_WORKFLOW_INTENT_KEY) != "rebuild_portfolio":
             ss[_WORKFLOW_INTENT_KEY] = "rebuild_portfolio"
+        try:
+            from investment_persistent_state import notify_portfolio_change
+
+            notify_portfolio_change(st_obj, source="holdings_editor")
+        except Exception:
+            pass
     ss[_HOLDINGS_TRACK_KEY] = fp
 
 

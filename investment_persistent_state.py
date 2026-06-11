@@ -24,11 +24,14 @@ _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
 _TAB_CHANGE_LOG_KEY = "_suite_inv_tab_change_log"
 _GLOBAL_SETTINGS_LOG_KEY = "_suite_inv_global_settings_log"
+_PORTFOLIO_CHANGE_LOG_KEY = "_suite_inv_portfolio_change_log"
 _PENDING_EXPERIENCE_KEY = "_suite_inv_pending_experience_mode"
 _LAST_PERSISTED_TAB_KEY = "_suite_inv_last_persisted_tab"
 _LAST_PERSISTED_GLOBAL_KEY = "_suite_inv_last_persisted_global"
+_LAST_PERSISTED_PORTFOLIO_FP_KEY = "_suite_inv_last_persisted_portfolio_fp"
 _TAB_PAGE_DIRTY_KEY = "_suite_inv_tab_page_dirty"
 _GLOBAL_PAGE_DIRTY_KEY = "_suite_inv_global_page_dirty"
+_PORTFOLIO_PAGE_DIRTY_KEY = "_suite_inv_portfolio_page_dirty"
 _PORTFOLIO_VALUE_USER_SET_KEY = "_suite_inv_portfolio_value_user_set"
 _MAX_DIAG_LOG_ENTRIES = 8
 
@@ -494,6 +497,86 @@ def sync_global_settings_after_widgets(st: Any) -> None:
     notify_global_settings_change(st, source="sidebar_widgets")
 
 
+def portfolio_fingerprint_from_session(ss: Any) -> str:
+    """Holdings fingerprint from live session (Test D save/readback)."""
+    try:
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = ss.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return str(_holdings_fingerprint(df))
+    except Exception:
+        pass
+    return str(ss.get("holdings_fingerprint") or "").strip()
+
+
+def seed_last_persisted_portfolio_from_state(st: Any, state: dict[str, Any] | None) -> None:
+    if not isinstance(state, dict):
+        return
+    fp = str(state.get("holdings_fingerprint") or "").strip()
+    if not fp:
+        records = state.get("holdings_df")
+        if isinstance(records, list) and records:
+            try:
+                from components.beginner_navigation import _holdings_fingerprint
+
+                fp = str(_holdings_fingerprint(pd.DataFrame(records)))
+            except Exception:
+                fp = ""
+    if fp:
+        st.session_state[_LAST_PERSISTED_PORTFOLIO_FP_KEY] = fp
+
+
+def notify_portfolio_change(
+    st: Any,
+    *,
+    source: str = "unknown",
+    trigger_save: bool = True,
+) -> bool:
+    """
+    Device A save path for Test D holdings — immediate ``portfolio_change`` autosave.
+    """
+    ss = st.session_state
+    current_fp = portfolio_fingerprint_from_session(ss)
+    prev = str(ss.get(_LAST_PERSISTED_PORTFOLIO_FP_KEY) or "").strip()
+    changed = bool(current_fp) and current_fp != prev
+    switch_evt: dict[str, Any] = {
+        "at": _utc_now_iso(),
+        "source": source,
+        "prev_holdings_fingerprint": prev or None,
+        "new_holdings_fingerprint": current_fp or None,
+        "portfolio_change_detected": changed,
+    }
+    if not changed:
+        switch_evt["autosave_triggered"] = False
+        switch_evt["autosave_skip_reason"] = "prev_equals_portfolio_fp"
+        _append_diag_log(st, _PORTFOLIO_CHANGE_LOG_KEY, switch_evt)
+        ss["_suite_inv_debug_last_portfolio_change"] = switch_evt
+        return False
+
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    ss[dirty_key] = True
+    ss[_PORTFOLIO_PAGE_DIRTY_KEY] = True
+    switch_evt["local_dirty_set"] = True
+    _append_diag_log(st, _PORTFOLIO_CHANGE_LOG_KEY, switch_evt)
+    ss["_suite_inv_debug_last_portfolio_change"] = switch_evt
+
+    if trigger_save:
+        switch_evt["autosave_triggered"] = True
+        autosave_investment_state(st, trigger="portfolio_change")
+        last = ss.get("_suite_inv_debug_last_autosave_event")
+        if isinstance(last, dict):
+            switch_evt["autosave_outcome"] = last.get("outcome")
+            switch_evt["saved_holdings_fingerprint"] = last.get("payload_holdings_fingerprint")
+            switch_evt["cloud_readback_holdings_fingerprint"] = last.get(
+                "cloud_readback_holdings_fingerprint"
+            )
+        ss["_suite_inv_debug_last_portfolio_change"] = switch_evt
+    else:
+        switch_evt["autosave_triggered"] = False
+    return True
+
+
 def ensure_analysis_date_defaults(st: Any) -> None:
     end_default = dt.date.today()
     start_default = end_default - dt.timedelta(days=365 * 5)
@@ -838,6 +921,7 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     if restored_tab is not None and str(restored_tab).strip():
         st.session_state[_LAST_PERSISTED_TAB_KEY] = str(restored_tab).strip()
     seed_last_persisted_global_from_state(st, state)
+    seed_last_persisted_portfolio_from_state(st, state)
 
 
 def _record_session_sync_debug(st: Any) -> None:
@@ -1086,6 +1170,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         event["blob_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)
         event["payload_global_portfolio_value"] = state.get("sidebar_portfolio_value")
         event["payload_risk_free_pct"] = state.get("risk_free_pct")
+        event["payload_holdings_fingerprint"] = state.get("holdings_fingerprint")
+        event["blob_holdings_fingerprint"] = state.get("holdings_fingerprint")
 
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
@@ -1101,6 +1187,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             "mode_change",
             "tab_change",
             "global_setting_change",
+            "portfolio_change",
         ):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
@@ -1122,6 +1209,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 event["cloud_readback_tab"] = cloud_state.get(INVESTMENT_ACTIVE_TAB_KEY)
                 event["cloud_readback_portfolio_value"] = cloud_state.get("sidebar_portfolio_value")
                 event["cloud_readback_risk_free_pct"] = cloud_state.get("risk_free_pct")
+                event["cloud_readback_holdings_fingerprint"] = cloud_state.get("holdings_fingerprint")
             event["cloud_readback_ts"] = cloud_ts
         except Exception as exc:
             event["cloud_save_error"] = str(exc)
@@ -1147,11 +1235,22 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 and readback_tab == attempt_tab
             )
             global_saved_to_cloud = trigger == "global_setting_change" and saved_cloud
+            readback_hfp = event.get("cloud_readback_holdings_fingerprint")
+            attempt_hfp = state.get("holdings_fingerprint")
+            portfolio_saved_to_cloud = (
+                trigger == "portfolio_change"
+                and saved_cloud
+                and readback_hfp
+                and attempt_hfp
+                and readback_hfp == attempt_hfp
+            )
             if trigger == "mode_change" and not mode_saved_to_cloud:
                 ss[dirty_key] = True
             elif trigger == "tab_change" and not tab_saved_to_cloud:
                 ss[dirty_key] = True
             elif trigger == "global_setting_change" and not global_saved_to_cloud:
+                ss[dirty_key] = True
+            elif trigger == "portfolio_change" and not portfolio_saved_to_cloud:
                 ss[dirty_key] = True
             else:
                 ss[dirty_key] = False
@@ -1163,6 +1262,12 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             if global_saved_to_cloud or (saved_disk or saved_cloud):
                 seed_last_persisted_global_from_state(st, state)
                 ss.pop(_GLOBAL_PAGE_DIRTY_KEY, None)
+            if portfolio_saved_to_cloud or (
+                (saved_disk or saved_cloud) and attempt_hfp
+            ):
+                seed_last_persisted_portfolio_from_state(st, state)
+                if portfolio_saved_to_cloud:
+                    ss.pop(_PORTFOLIO_PAGE_DIRTY_KEY, None)
             if trigger == "mode_change" and (saved_disk or saved_cloud):
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
                 if readback_exp in EXPERIENCE_OPTIONS:

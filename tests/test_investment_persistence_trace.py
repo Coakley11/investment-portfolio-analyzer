@@ -216,6 +216,26 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         self.assertEqual(rows["source_app_normalized"], "investment")
         self.assertIn("source_app", rows["return_context_keys"])
 
+    def test_record_ami_launch_trace_sets_launch_fields(self) -> None:
+        from investment_persistence_trace import collect_test_e_trace_rows, record_ami_launch_trace
+
+        st = self._st({"investment_active_tab": "⑤ Portfolio Health"})
+        source_state = {
+            "source_app": "investment",
+            "source_page": "⑤ Portfolio Health",
+            "entity_params": {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"},
+        }
+        record_ami_launch_trace(
+            st,
+            source_state=source_state,
+            action_url="https://example.com/?suite_resume=1",
+        )
+        trace = st.session_state["_investment_persist_trace"]
+        rows = collect_test_e_trace_rows(st, trace)
+        self.assertTrue(rows["ami_launch_detected"])
+        self.assertTrue(rows["source_state_created"])
+        self.assertTrue(rows["return_url_generated"])
+
     def test_record_save_trace_captures_autosave_event(self) -> None:
         from investment_persistence_trace import record_save_trace
 

@@ -79,6 +79,10 @@ FILTER_TRACE_LABELS: tuple[str, ...] = (
 )
 
 AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
+    "ami_launch_detected",
+    "source_state_created",
+    "return_context_created",
+    "return_url_generated",
     "ami_return_detected",
     "source_app_normalized",
     "current_investment_tab",
@@ -107,6 +111,7 @@ SAVE_TRACE_LABELS: tuple[str, ...] = (
     "saved_experience",
     "saved_portfolio_value",
     "saved_holdings_fingerprint",
+    "cloud_readback_holdings_fingerprint",
 )
 
 TEST_A_TRACE_LABELS: tuple[str, ...] = (
@@ -166,6 +171,8 @@ TEST_D_TRACE_LABELS: tuple[str, ...] = (
     "local_updated_at",
     "holdings_fingerprint",
     "holdings_row_count",
+    "saved_holdings_fingerprint",
+    "cloud_readback_holdings_fingerprint",
     "preset_applied",
     "selected_portfolio",
     "health_objective",
@@ -549,6 +556,10 @@ def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
         pass
 
     fields = {
+        "ami_launch_detected": trace.get("ami_launch_detected"),
+        "source_state_created": trace.get("source_state_created"),
+        "return_context_created": trace.get("return_context_created"),
+        "return_url_generated": trace.get("return_url_generated"),
         "ami_return_detected": ami_detected,
         "source_app_normalized": ss.get("source_app_normalized")
         or (return_ctx or {}).get("source_app")
@@ -556,7 +567,7 @@ def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
         else ss.get("source_app_normalized"),
         "current_investment_tab": trace.get("current_investment_tab") or ss.get("investment_active_tab"),
         "final_investment_tab": ss.get("investment_active_tab"),
-        "return_context_keys": ctx_keys or None,
+        "return_context_keys": ctx_keys or trace.get("return_context_keys") or None,
         "apply_source_state_attempted": trace.get("apply_source_state_attempted"),
         "apply_source_state_success": trace.get("apply_source_state_success"),
     }
@@ -700,7 +711,74 @@ def record_save_trace(
         saved_experience=evt.get("blob_experience"),
         saved_portfolio_value=payload_pv or blob_pv or evt.get("blob_portfolio_value"),
         saved_holdings_fingerprint=blob_fp or evt.get("blob_holdings_fingerprint"),
+        cloud_readback_holdings_fingerprint=evt.get("cloud_readback_holdings_fingerprint"),
     )
+
+
+def record_ami_launch_trace(
+    st: Any,
+    *,
+    source_state: dict[str, Any] | None = None,
+    action_url: str = "",
+) -> None:
+    """Record AMI launch from Investment sidebar (Test E diagnostics; no behavior change)."""
+    ss = st.session_state
+    has_source = isinstance(source_state, dict) and bool(source_state)
+    ctx_keys: list[str] | None = None
+    if has_source:
+        ctx_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
+    update_trace(
+        st,
+        ami_launch_detected=True,
+        source_state_created=has_source,
+        return_url_generated=bool(str(action_url or "").strip()),
+        source_app_normalized=(source_state or {}).get("source_app") if has_source else "investment",
+        return_context_keys=ctx_keys,
+        current_investment_tab=ss.get("investment_active_tab"),
+    )
+
+
+def record_ami_insight_store_trace(
+    st: Any,
+    *,
+    source_app: str,
+    return_context: dict[str, Any] | None = None,
+    source_state: dict[str, Any] | None = None,
+    return_url: str = "",
+) -> None:
+    """Record insight store + return URL build (Test E diagnostics; investment only)."""
+    if str(source_app or "").strip().lower() != "investment":
+        return
+    rc = return_context if isinstance(return_context, dict) else source_state
+    has_rc = isinstance(rc, dict) and bool(rc)
+    update_trace(
+        st,
+        return_context_created=has_rc,
+        return_url_generated=bool(str(return_url or "").strip()) or None,
+        return_context_keys=sorted(str(k) for k in rc.keys()) if has_rc else None,
+    )
+
+
+def record_ami_return_hydrate_trace(
+    st: Any,
+    *,
+    source_state: dict[str, Any] | None = None,
+    insight_id: str = "",
+) -> None:
+    """Record AMI return URL hydration on Investment load (Test E diagnostics)."""
+    has_state = isinstance(source_state, dict) and bool(source_state)
+    ctx_keys: list[str] | None = None
+    if has_state:
+        ctx_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
+    update_trace(
+        st,
+        ami_return_detected=True,
+        return_context_created=has_state,
+        return_context_keys=ctx_keys,
+        current_investment_tab=st.session_state.get("investment_active_tab"),
+    )
+    if insight_id:
+        update_trace(st, ami_insight_id=insight_id)
 
 
 def record_ami_apply_trace(
@@ -813,6 +891,8 @@ def collect_test_d_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
     rows = _base_compare_rows(st, trace)
     for label in PORTFOLIO_TRACE_LABELS:
         rows[label] = trace.get(label)
+    rows["saved_holdings_fingerprint"] = trace.get("saved_holdings_fingerprint")
+    rows["cloud_readback_holdings_fingerprint"] = trace.get("cloud_readback_holdings_fingerprint")
     rows["restore_decision"] = trace.get("restore_decision")
     rows["page_overwrite_source"] = trace.get("page_overwrite_source")
     return rows

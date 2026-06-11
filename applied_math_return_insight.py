@@ -544,6 +544,13 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     if isinstance(source_state, dict) and source_state:
         st.session_state[SESSION_RETURN_CONTEXT_KEY] = dict(source_state)
         apply_return_source_state(st, app_key, source_state)
+        if str(app_key or "").strip().lower() == "investment":
+            try:
+                from investment_persistence_trace import record_ami_return_hydrate_trace
+
+                record_ami_return_hydrate_trace(st, source_state=source_state, insight_id=iid)
+            except Exception:
+                pass
     elif st.session_state.get(SESSION_RETURN_PAGE_KEY):
         page = st.session_state[SESSION_RETURN_PAGE_KEY]
         st.session_state["_navigate_to_page"] = page

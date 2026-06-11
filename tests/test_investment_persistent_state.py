@@ -411,6 +411,70 @@ def test_autosave_global_setting_change_writes_portfolio_and_risk_free(monkeypat
     assert event["cloud_readback_risk_free_pct"] == 3.5
 
 
+def test_notify_portfolio_change_triggers_autosave(monkeypatch):
+    st = _FakeSt()
+    st.session_state["holdings_df"] = pd.DataFrame(
+        [{"Ticker": "VTI", "Weight (%)": 100.0, "Asset Type": "Equity"}]
+    )
+    ips.seed_last_persisted_portfolio_from_state(st, ips.build_investment_disk_state(st))
+    st.session_state["holdings_df"] = pd.DataFrame(
+        [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ]
+    )
+    triggers: list[str] = []
+
+    monkeypatch.setattr(
+        ips,
+        "autosave_investment_state",
+        lambda *a, **k: triggers.append(k.get("trigger", "unknown")),
+    )
+    changed = ips.notify_portfolio_change(st, source="test")
+    assert changed is True
+    assert triggers == ["portfolio_change"]
+    assert st.session_state["_suite_persist_local_dirty::investment"] is True
+
+
+def test_autosave_portfolio_change_writes_holdings_fingerprint_readback(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["holdings_df"] = pd.DataFrame(
+        [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ]
+    )
+
+    import copy
+
+    saved_payloads: list[dict] = []
+
+    def _fake_save_disk(app_id, payload):
+        saved_payloads.append(copy.deepcopy(payload))
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved_payloads.append(copy.deepcopy(payload))
+
+    def _fake_load_cloud(app_id):
+        return copy.deepcopy(saved_payloads[-1]), "2026-06-11T15:00:00Z"
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    ips.autosave_investment_state(st, trigger="portfolio_change")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["outcome"] != "skipped_fp_unchanged"
+    expected_fp = event["payload_holdings_fingerprint"]
+    assert "VYM:50.0:Dividend ETF" in expected_fp
+    assert "BND:50.0:Bonds" in expected_fp
+    assert event["cloud_readback_holdings_fingerprint"] == expected_fp
+
+
 def test_apply_state_sets_last_persisted_tab():
     from components.beginner_navigation import BEGINNER_TAB_LABELS
 

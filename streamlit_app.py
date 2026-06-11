@@ -1008,6 +1008,21 @@ def render_sidebar() -> dict:
             build_source_state = None  # type: ignore[misc, assignment]
 
         _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
+
+        def _record_investment_ami_launch() -> None:
+            try:
+                from investment_persistence_trace import record_ami_launch_trace
+
+                result = st.session_state.get("_last_analytical_question")
+                if isinstance(result, dict):
+                    record_ami_launch_trace(
+                        st,
+                        source_state=result.get("source_state"),
+                        action_url=str(result.get("action_url") or ""),
+                    )
+            except Exception:
+                pass
+
         render_applied_math_sidebar_entry(
             st,
             source_app="investment",
@@ -1024,6 +1039,7 @@ def render_sidebar() -> dict:
                 if build_source_state
                 else None
             ),
+            on_after_send=_record_investment_ami_launch,
         )
     except Exception as _ami_sidebar_exc:
         st.session_state["_pr1_ami_sidebar_error"] = str(_ami_sidebar_exc)
@@ -1119,6 +1135,13 @@ def render_sidebar() -> dict:
                 pass
             st.session_state.holdings_df = pd.DataFrame(core.PORTFOLIO_PRESETS[portfolio_preset])
             st.session_state.preset_applied = portfolio_preset
+            if _PERSISTENCE_OK:
+                try:
+                    from investment_persistent_state import notify_portfolio_change
+
+                    notify_portfolio_change(st, source="apply_preset")
+                except Exception:
+                    pass
             if beginner:
                 from components.beginner_navigation import OBJECTIVE_TO_PRESET, sync_beginner_goal_keys_from_portfolio
 
