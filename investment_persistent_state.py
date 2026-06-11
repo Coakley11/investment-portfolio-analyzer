@@ -22,7 +22,10 @@ PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-production-cleanup-v1"
 
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
+_TAB_CHANGE_LOG_KEY = "_suite_inv_tab_change_log"
 _PENDING_EXPERIENCE_KEY = "_suite_inv_pending_experience_mode"
+_LAST_PERSISTED_TAB_KEY = "_suite_inv_last_persisted_tab"
+_TAB_PAGE_DIRTY_KEY = "_suite_inv_tab_page_dirty"
 _MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
@@ -285,6 +288,85 @@ def sync_experience_after_widget(st: Any) -> None:
         switch_evt["autosave_skip_reason"] = "prev_equals_mode"
     _append_diag_log(st, _MODE_SWITCH_LOG_KEY, switch_evt)
     ss["_suite_inv_debug_last_mode_switch"] = switch_evt
+
+
+def _last_persisted_tab(ss: Any) -> str | None:
+    raw = ss.get(_LAST_PERSISTED_TAB_KEY)
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    return None
+
+
+def notify_investment_tab_change(
+    st: Any,
+    tab: str,
+    *,
+    source: str = "unknown",
+    trigger_save: bool = True,
+) -> bool:
+    """
+    Device A save path: mark tab/page dirty and autosave when ``investment_active_tab`` changes.
+
+    Mirrors ``sync_experience_after_widget`` — immediate ``tab_change`` save bypasses
+    end-of-run cloud-drift block and unchanged-fingerprint skip.
+    """
+    ss = st.session_state
+    new_tab = str(tab or "").strip()
+    if not new_tab:
+        return False
+
+    prev = _last_persisted_tab(ss)
+    if ss.get(INVESTMENT_ACTIVE_TAB_KEY) != new_tab:
+        ss[INVESTMENT_ACTIVE_TAB_KEY] = new_tab
+        ss[_LEGACY_TAB_KEY] = new_tab
+
+    tab_change = prev != new_tab
+    switch_evt: dict[str, Any] = {
+        "at": _utc_now_iso(),
+        "source": source,
+        "prev_persisted_tab": prev,
+        "new_tab": new_tab,
+        "widget_tab": ss.get(INVESTMENT_ACTIVE_TAB_KEY),
+        "tab_change_detected": tab_change,
+    }
+    if not tab_change:
+        switch_evt["autosave_triggered"] = False
+        switch_evt["autosave_skip_reason"] = "prev_equals_tab"
+        _append_diag_log(st, _TAB_CHANGE_LOG_KEY, switch_evt)
+        ss["_suite_inv_debug_last_tab_change"] = switch_evt
+        return False
+
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    ss[dirty_key] = True
+    ss[_TAB_PAGE_DIRTY_KEY] = True
+    switch_evt["local_dirty_set"] = True
+    switch_evt["tab_page_dirty"] = True
+    _append_diag_log(st, _TAB_CHANGE_LOG_KEY, switch_evt)
+    ss["_suite_inv_debug_last_tab_change"] = switch_evt
+
+    if trigger_save:
+        switch_evt["autosave_triggered"] = True
+        autosave_investment_state(st, trigger="tab_change")
+        last = ss.get("_suite_inv_debug_last_autosave_event")
+        if isinstance(last, dict):
+            switch_evt["autosave_outcome"] = last.get("outcome")
+            switch_evt["saved_tab"] = last.get("blob_tab") or last.get("cloud_readback_tab")
+            switch_evt["cloud_readback_tab"] = last.get("cloud_readback_tab")
+        ss["_suite_inv_debug_last_tab_change"] = switch_evt
+    else:
+        switch_evt["autosave_triggered"] = False
+    return True
+
+
+def sync_investment_active_tab_after_widget(st: Any) -> None:
+    """Autosave when the section radio changes ``investment_active_tab`` (Advanced fallback path)."""
+    ss = st.session_state
+    tab = ss.get(INVESTMENT_ACTIVE_TAB_KEY)
+    if not tab:
+        return
+    prev = _last_persisted_tab(ss)
+    if prev != str(tab).strip():
+        notify_investment_tab_change(st, str(tab), source="section_radio")
 
 
 def ensure_analysis_date_defaults(st: Any) -> None:
@@ -627,6 +709,9 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         pass
 
     st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
+    restored_tab = state.get(INVESTMENT_ACTIVE_TAB_KEY) or state.get(_LEGACY_TAB_KEY)
+    if restored_tab is not None and str(restored_tab).strip():
+        st.session_state[_LAST_PERSISTED_TAB_KEY] = str(restored_tab).strip()
 
 
 def _record_session_sync_debug(st: Any) -> None:
@@ -872,6 +957,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         state = build_investment_disk_state(st)
         event["blob_experience"] = state.get(EXPERIENCE_KEY)
         event["blob_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
+        event["blob_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)
 
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
@@ -883,7 +969,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         if restored_fp and fp != restored_fp:
             ss[dirty_key] = True
 
-        if ss.get(fp_key) == fp and trigger != "mode_change":
+        if ss.get(fp_key) == fp and trigger not in ("mode_change", "tab_change"):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
             ss["_suite_inv_debug_last_autosave_event"] = event
@@ -901,6 +987,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             if cloud_state:
                 event["cloud_readback_experience"] = cloud_state.get(EXPERIENCE_KEY)
                 event["cloud_readback_persisted"] = cloud_state.get(PERSISTED_EXPERIENCE_KEY)
+                event["cloud_readback_tab"] = cloud_state.get(INVESTMENT_ACTIVE_TAB_KEY)
             event["cloud_readback_ts"] = cloud_ts
         except Exception as exc:
             event["cloud_save_error"] = str(exc)
@@ -913,15 +1000,29 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             ss[fp_key] = fp
             ss[restored_fp_key] = fp
             readback_exp = event.get("cloud_readback_experience")
+            readback_tab = event.get("cloud_readback_tab")
+            attempt_tab = state.get(INVESTMENT_ACTIVE_TAB_KEY)
             mode_saved_to_cloud = (
                 trigger == "mode_change"
                 and saved_cloud
                 and readback_exp == attempt_mode
             )
+            tab_saved_to_cloud = (
+                trigger == "tab_change"
+                and saved_cloud
+                and readback_tab == attempt_tab
+            )
             if trigger == "mode_change" and not mode_saved_to_cloud:
+                ss[dirty_key] = True
+            elif trigger == "tab_change" and not tab_saved_to_cloud:
                 ss[dirty_key] = True
             else:
                 ss[dirty_key] = False
+            if tab_saved_to_cloud and attempt_tab:
+                ss[_LAST_PERSISTED_TAB_KEY] = str(attempt_tab)
+                ss.pop(_TAB_PAGE_DIRTY_KEY, None)
+            elif (saved_disk or saved_cloud) and attempt_tab:
+                ss[_LAST_PERSISTED_TAB_KEY] = str(attempt_tab)
             if trigger == "mode_change" and (saved_disk or saved_cloud):
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
                 if readback_exp in EXPERIENCE_OPTIONS:

@@ -1810,6 +1810,12 @@ except ImportError:
         horizontal=True,
         label_visibility="collapsed",
     )
+    try:
+        from investment_persistent_state import sync_investment_active_tab_after_widget
+
+        sync_investment_active_tab_after_widget(st)
+    except Exception:
+        pass
 _active_tab = st.session_state["investment_active_tab"]
 
 from suite_analytical_question import render_suite_applied_math_insight

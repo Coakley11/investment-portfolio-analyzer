@@ -96,6 +96,7 @@ SAVE_TRACE_LABELS: tuple[str, ...] = (
     "cloud_write_error",
     "last_save_cloud",
     "saved_tab",
+    "cloud_readback_tab",
     "saved_experience",
     "saved_portfolio_value",
     "saved_holdings_fingerprint",
@@ -658,6 +659,8 @@ def record_save_trace(
         blob_pv = blob.get("sidebar_portfolio_value")
         evt = {**evt, "blob_tab": blob_tab, "blob_holdings_fingerprint": blob_fp, "blob_portfolio_value": blob_pv}
 
+    readback_tab = evt.get("cloud_readback_tab")
+    saved_tab = blob_tab or evt.get("blob_tab") or readback_tab
     update_trace(
         st,
         autosave_ran=True,
@@ -666,7 +669,8 @@ def record_save_trace(
         cloud_write_ok=evt.get("saved_cloud"),
         cloud_write_error=evt.get("cloud_save_error"),
         last_save_cloud=evt.get("cloud_readback_ts") or ss.get("_suite_persist_last_save_at"),
-        saved_tab=blob_tab or evt.get("blob_tab"),
+        saved_tab=saved_tab,
+        cloud_readback_tab=readback_tab,
         saved_experience=evt.get("blob_experience"),
         saved_portfolio_value=blob_pv or evt.get("blob_portfolio_value"),
         saved_holdings_fingerprint=blob_fp or evt.get("blob_holdings_fingerprint"),

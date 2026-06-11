@@ -931,12 +931,13 @@ def commit_investment_tab_navigation(
     Call before the workflow navigator renders so the next rerun lands on the right step.
     """
     from components.beginner_navigation import normalize_tab_label_for_mode
-    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY
+    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY, notify_investment_tab_change
 
     ss = _sess(st_obj)
     normalized = normalize_tab_label_for_mode(str(label).strip(), beginner=beginner_mode)
     ss[_PENDING_INVESTMENT_TAB_KEY] = normalized
     ss[INVESTMENT_ACTIVE_TAB_KEY] = normalized
+    notify_investment_tab_change(st_obj, normalized, source="commit_navigation")
     return normalized
 
 
@@ -1113,7 +1114,7 @@ def apply_pending_investment_tab(
     Returns True when a pending tab was applied to session state.
     """
     from components.beginner_navigation import normalize_tab_label_for_mode
-    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY
+    from investment_persistent_state import INVESTMENT_ACTIVE_TAB_KEY, notify_investment_tab_change
 
     ss = _sess(st_obj)
     pending = ss.get(_PENDING_INVESTMENT_TAB_KEY)
@@ -1125,6 +1126,7 @@ def apply_pending_investment_tab(
     ss.pop(_PENDING_INVESTMENT_TAB_KEY, None)
     if ss.get(INVESTMENT_ACTIVE_TAB_KEY) != label:
         ss[INVESTMENT_ACTIVE_TAB_KEY] = label
+        notify_investment_tab_change(st_obj, label, source="apply_pending")
     return True
 
 

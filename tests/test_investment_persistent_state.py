@@ -252,6 +252,111 @@ def test_apply_state_preserves_widget_when_pending_local_mode_change():
     assert st.session_state[ips.PERSISTED_EXPERIENCE_KEY] == "Advanced Mode"
 
 
+def test_notify_tab_change_sets_dirty_and_autosaves(monkeypatch):
+    from components.beginner_navigation import BEGINNER_TAB_LABELS
+
+    st = _FakeSt()
+    st.session_state["investment_active_tab"] = BEGINNER_TAB_LABELS[0]
+    st.session_state[ips._LAST_PERSISTED_TAB_KEY] = BEGINNER_TAB_LABELS[0]
+    triggers: list[str] = []
+
+    def _fake_autosave(st_obj, *, end_of_run=False, trigger="unknown"):
+        triggers.append(trigger)
+
+    monkeypatch.setattr(ips, "autosave_investment_state", _fake_autosave)
+    changed = ips.notify_investment_tab_change(
+        st,
+        BEGINNER_TAB_LABELS[2],
+        source="test",
+    )
+    assert changed is True
+    assert triggers == ["tab_change"]
+    assert st.session_state["_suite_persist_local_dirty::investment"] is True
+    assert st.session_state[ips._TAB_PAGE_DIRTY_KEY] is True
+    assert st.session_state["investment_active_tab"] == BEGINNER_TAB_LABELS[2]
+    evt = st.session_state["_suite_inv_debug_last_tab_change"]
+    assert evt["tab_change_detected"] is True
+    assert evt["autosave_triggered"] is True
+
+
+def test_notify_tab_change_skips_when_tab_unchanged(monkeypatch):
+    from components.beginner_navigation import BEGINNER_TAB_LABELS
+
+    st = _FakeSt()
+    st.session_state["investment_active_tab"] = BEGINNER_TAB_LABELS[2]
+    st.session_state[ips._LAST_PERSISTED_TAB_KEY] = BEGINNER_TAB_LABELS[2]
+    triggers: list[str] = []
+
+    monkeypatch.setattr(
+        ips,
+        "autosave_investment_state",
+        lambda *a, **k: triggers.append(k.get("trigger", "unknown")),
+    )
+    changed = ips.notify_investment_tab_change(st, BEGINNER_TAB_LABELS[2], source="test")
+    assert changed is False
+    assert triggers == []
+
+
+def test_autosave_tab_change_writes_tab_and_readback(monkeypatch):
+    from components.beginner_navigation import BEGINNER_TAB_LABELS
+
+    st = _FakeSt()
+    st.session_state["experience"] = "Beginner Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
+    st.session_state["investment_active_tab"] = BEGINNER_TAB_LABELS[2]
+    st.session_state[ips._LAST_PERSISTED_TAB_KEY] = BEGINNER_TAB_LABELS[0]
+
+    import copy
+    import hashlib
+    import json
+
+    old_state = ips.build_investment_disk_state(st)
+    old_state["investment_active_tab"] = BEGINNER_TAB_LABELS[0]
+    old_fp = hashlib.sha256(
+        json.dumps(old_state, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:20]
+    st.session_state["_suite_autosave_fp::investment"] = old_fp
+
+    saved_payloads: list[dict] = []
+
+    def _fake_save_disk(app_id, payload):
+        saved_payloads.append(copy.deepcopy(payload))
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved_payloads.append(copy.deepcopy(payload))
+
+    def _fake_load_cloud(app_id):
+        return copy.deepcopy(saved_payloads[-1]), "2026-06-11T12:00:00Z"
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    ips.autosave_investment_state(st, trigger="tab_change")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["outcome"] != "skipped_fp_unchanged"
+    assert event["blob_tab"] == BEGINNER_TAB_LABELS[2]
+    assert event["cloud_readback_tab"] == BEGINNER_TAB_LABELS[2]
+    assert st.session_state[ips._LAST_PERSISTED_TAB_KEY] == BEGINNER_TAB_LABELS[2]
+
+
+def test_apply_state_sets_last_persisted_tab():
+    from components.beginner_navigation import BEGINNER_TAB_LABELS
+
+    st = _FakeSt()
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "experience": "Beginner Mode",
+            "investment_active_tab": BEGINNER_TAB_LABELS[0],
+            "holdings_df": [{"Ticker": "SPY", "Weight (%)": 100.0, "Asset Type": "Equity"}],
+        },
+    )
+    assert st.session_state[ips._LAST_PERSISTED_TAB_KEY] == BEGINNER_TAB_LABELS[0]
+
+
 def test_autosave_mode_change_does_not_skip_when_fp_unchanged(monkeypatch):
     st = _FakeSt()
     st.session_state["experience"] = "Advanced Mode"
