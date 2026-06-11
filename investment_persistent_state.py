@@ -33,6 +33,12 @@ _TAB_PAGE_DIRTY_KEY = "_suite_inv_tab_page_dirty"
 _GLOBAL_PAGE_DIRTY_KEY = "_suite_inv_global_page_dirty"
 _PORTFOLIO_PAGE_DIRTY_KEY = "_suite_inv_portfolio_page_dirty"
 _PORTFOLIO_VALUE_USER_SET_KEY = "_suite_inv_portfolio_value_user_set"
+_AMI_PERSIST_SESSION_KEYS = (
+    "_ami_pending_insight",
+    "insight_source_tab",
+    "source_investment_tab",
+    "_ami_return_page",
+)
 _MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
@@ -577,6 +583,23 @@ def notify_portfolio_change(
     return True
 
 
+def notify_pending_insight_change(
+    st: Any,
+    *,
+    source: str = "insight_hydrate",
+    trigger_save: bool = True,
+) -> None:
+    """Persist pending AMI insight into ``full_session`` for cross-device phone refresh."""
+    ss = st.session_state
+    pending = ss.get("_ami_pending_insight")
+    if not isinstance(pending, dict) or not (pending.get("conclusion") or pending.get("question")):
+        return
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    ss[dirty_key] = True
+    if trigger_save:
+        autosave_investment_state(st, trigger=source)
+
+
 def ensure_analysis_date_defaults(st: Any) -> None:
     end_default = dt.date.today()
     start_default = end_default - dt.timedelta(days=365 * 5)
@@ -705,6 +728,7 @@ def reconcile_investment_cloud_drift_if_needed(st: Any) -> bool:
     ss = st.session_state
     if ss.get("_suite_inv_cloud_reconcile_done"):
         return False
+    ss["_suite_inv_cloud_reconcile_done"] = True
     if _local_experience_change_in_flight(st):
         return False
     dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
@@ -823,6 +847,10 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
         state[WORKFLOW_STATE_BLOB_KEY] = build_workflow_persist_blob(st)
     except ImportError:
         pass
+    for key in _AMI_PERSIST_SESSION_KEYS:
+        val = ss.get(key)
+        if val is not None and val != "":
+            state[key] = copy.deepcopy(val)
     _snapshot_mode_debug(st, saved=mode)
     return state
 
@@ -1188,6 +1216,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             "tab_change",
             "global_setting_change",
             "portfolio_change",
+            "insight_hydrate",
+            "insight_store",
         ):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)

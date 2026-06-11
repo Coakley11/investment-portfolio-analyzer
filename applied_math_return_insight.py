@@ -15,6 +15,20 @@ INSIGHT_ITEM_TYPE = "applied_math_insight"
 SESSION_PENDING_KEY = "_ami_pending_insight"
 SESSION_RETURN_PAGE_KEY = "_ami_return_page"
 SESSION_RETURN_CONTEXT_KEY = "_ami_return_context"
+SESSION_INSIGHT_SOURCE_TAB_KEY = "insight_source_tab"
+SESSION_SOURCE_INVESTMENT_TAB_KEY = "source_investment_tab"
+INVESTMENT_INSIGHT_PANEL_TITLE = "Applied Investment Insight"
+
+_INVESTMENT_TAB_CANONICAL: dict[str, str] = {
+    "portfolio health": "Portfolio Health",
+    "⑤ portfolio health": "Portfolio Health",
+    "portfolio analytics": "Portfolio Analytics",
+    "④ analyze portfolio": "Portfolio Analytics",
+    "analyze portfolio": "Portfolio Analytics",
+    "efficient frontier": "Efficient Frontier",
+    "⑩ frontier (optional)": "Efficient Frontier",
+    "frontier (optional)": "Efficient Frontier",
+}
 
 # Pages where the insight card may appear (display-only v1).
 INSIGHT_ELIGIBLE_PAGES: dict[str, frozenset[str]] = {
@@ -54,22 +68,323 @@ def _normalize_insight_page(page: str) -> str:
     return p.strip()
 
 
-def should_render_insight_on_page(source_app: str, current_page: str, insight: dict[str, Any]) -> bool:
-    """True when pending insight belongs on this page."""
+def _normalize_investment_tab(page: str) -> str:
+    """Canonical Investment tab label for insight page scoping."""
+    p = _normalize_insight_page(page)
+    if not p:
+        return ""
+    key = p.lower().strip()
+    if key in _INVESTMENT_TAB_CANONICAL:
+        return _INVESTMENT_TAB_CANONICAL[key]
+    import re
+
+    stripped = re.sub(r"^[①②③④⑤⑥⑦⑧⑨⑩\d]+\s*", "", p).strip()
+    alias = _INVESTMENT_TAB_CANONICAL.get(stripped.lower())
+    if alias:
+        return alias
+    for label in _INVESTMENT_TAB_CANONICAL.values():
+        if label.lower() == stripped.lower() or label.lower() == key:
+            return label
+    return p
+
+
+def _investment_tabs_match(current_page: str, insight_page: str) -> bool:
+    cur = _normalize_investment_tab(current_page)
+    src = _normalize_investment_tab(insight_page)
+    if not cur or not src:
+        return False
+    return cur == src or cur.lower() == src.lower()
+
+
+def _resolve_insight_source_page(insight: dict[str, Any]) -> str:
+    """Canonical originating Investment/source page for a pending insight."""
+    raw = str(insight.get("source_page") or "").strip()
+    page = _normalize_investment_tab(raw) if raw else _normalize_insight_page(raw)
+    if page:
+        return page
+    for container_key in ("source_state", "return_context"):
+        container = insight.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for key in ("source_page", "page"):
+            candidate = str(container.get(key) or "").strip()
+            if candidate:
+                normalized = _normalize_investment_tab(candidate)
+                if normalized:
+                    return normalized
+        page_params = container.get("page_params")
+        if isinstance(page_params, dict):
+            candidate = str(page_params.get("page") or page_params.get("tab") or "").strip()
+            if candidate:
+                normalized = _normalize_investment_tab(candidate)
+                if normalized:
+                    return normalized
+        ent = container.get("entity_params")
+        if isinstance(ent, dict):
+            candidate = str(ent.get("tab") or ent.get("page") or "").strip()
+            if candidate:
+                normalized = _normalize_investment_tab(candidate)
+                if normalized:
+                    return normalized
+    return ""
+
+
+def _query_param(st: Any, name: str) -> str:
+    try:
+        raw = st.query_params.get(name)
+    except Exception:
+        return ""
+    if raw is None:
+        return ""
+    if isinstance(raw, list):
+        return str(raw[0] or "").strip()
+    return str(raw).strip()
+
+
+def insight_return_query_id(st: Any) -> str:
+    return _query_param(st, "suite_ami_insight")
+
+
+def ami_resume_consumed(st: Any, app_key: str) -> bool:
+    try:
+        from suite_cloud_state import ami_return_resume_consumed
+
+        return ami_return_resume_consumed(st, app_key)
+    except Exception:
+        key = str(app_key or "").strip().lower()
+        return bool(st.session_state.get(f"_ami_resume_consumed_{key}"))
+
+
+def _sync_investment_insight_tab_keys(
+    st: Any,
+    app_key: str,
+    *,
+    insight: dict[str, Any] | None = None,
+) -> None:
+    if str(app_key or "").strip().lower() != "investment":
+        return
+    ss = st.session_state
+    pending = insight if isinstance(insight, dict) else ss.get(SESSION_PENDING_KEY)
+    source_tab = ""
+    if isinstance(pending, dict):
+        source_tab = _resolve_insight_source_page(pending)
+    if not source_tab:
+        source_tab = str(ss.get(SESSION_RETURN_PAGE_KEY) or "").strip()
+    current = str(ss.get("investment_active_tab") or "").strip()
+    if source_tab:
+        ss[SESSION_INSIGHT_SOURCE_TAB_KEY] = source_tab
+        ss[SESSION_SOURCE_INVESTMENT_TAB_KEY] = source_tab
+    ss["current_investment_tab"] = current
+
+
+def insight_page_scope_decision(
+    source_app: str,
+    current_page: str,
+    insight: dict[str, Any],
+) -> dict[str, Any]:
+    """Strict page scope decision with skip reason (Investment uses tab equality)."""
     app = str(source_app or insight.get("source_app") or "").strip().lower()
+    cur_raw = str(current_page or "").strip()
+    insight_page = _resolve_insight_source_page(insight)
+    if app == "investment":
+        cur = _normalize_investment_tab(cur_raw)
+        eligible = INSIGHT_ELIGIBLE_PAGES.get("investment", frozenset())
+        cur_eligible = cur in eligible or any(
+            _normalize_investment_tab(x) == cur for x in eligible
+        )
+        should_render = False
+        skip_reason = ""
+        if not cur_eligible:
+            skip_reason = f"current_page_not_eligible ({cur_raw!r})"
+        elif not insight_page:
+            skip_reason = "missing_insight_source_tab"
+        elif _investment_tabs_match(cur_raw, insight_page):
+            should_render = True
+        else:
+            skip_reason = "source_tab_mismatch"
+        return {
+            "source_page_raw": str(insight.get("source_page") or "").strip() or None,
+            "source_page_normalized": insight_page or None,
+            "current_page_raw": cur_raw or None,
+            "current_page_normalized": cur or None,
+            "insight_source_tab": insight_page or None,
+            "current_investment_tab": cur_raw or None,
+            "should_render_insight_on_page": should_render,
+            "render_skip_reason": skip_reason or None,
+        }
+
     cur = _normalize_insight_page(current_page)
     eligible = INSIGHT_ELIGIBLE_PAGES.get(app, frozenset())
     if cur not in eligible and not any(_normalize_insight_page(x) == cur for x in eligible):
-        return False
-    insight_page = _normalize_insight_page(str(insight.get("source_page") or ""))
-    if insight_page:
-        if insight_page == cur:
+        return {
+            "should_render_insight_on_page": False,
+            "render_skip_reason": f"current_page_not_eligible ({cur!r})",
+        }
+    insight_page_norm = _normalize_insight_page(insight_page)
+    if not insight_page_norm:
+        return {
+            "should_render_insight_on_page": False,
+            "render_skip_reason": "missing_normalized_source_page",
+        }
+    if insight_page_norm == cur:
+        return {"should_render_insight_on_page": True, "render_skip_reason": None}
+    if "draft" in insight_page_norm.lower() and "draft" in cur.lower():
+        return {"should_render_insight_on_page": True, "render_skip_reason": None}
+    return {
+        "should_render_insight_on_page": False,
+        "render_skip_reason": f"normalized_page_mismatch (insight={insight_page_norm!r}, current={cur!r})",
+    }
+
+
+def should_render_insight_on_page(source_app: str, current_page: str, insight: dict[str, Any]) -> bool:
+    """True when pending insight belongs on this page only (strict for Investment)."""
+    return bool(
+        insight_page_scope_decision(source_app, current_page, insight).get(
+            "should_render_insight_on_page"
+        )
+    )
+
+
+def _insight_panel_title(source_app: str, insight: dict[str, Any] | None = None) -> str:
+    app = str(source_app or (insight or {}).get("source_app") or "").strip().lower()
+    if app == "investment":
+        return INVESTMENT_INSIGHT_PANEL_TITLE
+    return "Applied Math Insight"
+
+
+def _insight_from_persisted_full_session(app_key: str) -> dict[str, Any]:
+    """Load pending insight embedded in Investment ``full_session`` (disk or cloud)."""
+    app = str(app_key or "").strip().lower()
+    if not app:
+        return {}
+    try:
+        from suite_cloud_state import load_cloud_full_session
+        from suite_user_persistence import load_user_state
+
+        cloud_state, _cloud_ts = load_cloud_full_session(app)
+        disk_state, _disk_warn = load_user_state(app)
+        for state in (cloud_state, disk_state):
+            if not isinstance(state, dict):
+                continue
+            pending = state.get(SESSION_PENDING_KEY)
+            if isinstance(pending, dict) and (pending.get("conclusion") or pending.get("question")):
+                out = dict(pending)
+                out.setdefault("source_app", app)
+                if not out.get("insight_id"):
+                    out["insight_id"] = str(pending.get("insight_id") or "").strip()
+                out["_hydrate_source_hint"] = "full_session_blob"
+                return out
+    except Exception as exc:
+        log.warning("_insight_from_persisted_full_session failed: %s", exc)
+    return {}
+
+
+def load_latest_applied_math_insight_for_app(
+    source_app: str,
+    *,
+    exclude_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Most recent cloud-stored insight for a source app (cross-device)."""
+    app = str(source_app or "").strip().lower()
+    if not app:
+        return {}
+    excluded = exclude_ids or set()
+    try:
+        from suite_account import load_saved_items
+
+        store_keys = (app, "applied_intelligence")
+        if app == "investment":
+            store_keys = ("investment", "applied_intelligence")
+        for app_key in store_keys:
+            rows = load_saved_items(app=app_key, item_type=INSIGHT_ITEM_TYPE, limit=30)
+            for row in rows:
+                iid = str(row.get("item_key") or "").strip()
+                if not iid or iid in excluded:
+                    continue
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                payload_app = str(payload.get("source_app") or "").strip().lower()
+                if app == "investment" and payload_app and payload_app != "investment":
+                    continue
+                if payload_app and payload_app != app and app_key != app:
+                    continue
+                if payload.get("conclusion") or payload.get("question"):
+                    out = dict(payload)
+                    out.setdefault("insight_id", iid)
+                    out.setdefault("source_app", app)
+                    return out
+    except Exception as exc:
+        log.warning("load_latest_applied_math_insight_for_app failed: %s", exc)
+    return _insight_from_persisted_full_session(app)
+
+
+def _pending_insight_valid(st: Any) -> dict[str, Any]:
+    pending = st.session_state.get(SESSION_PENDING_KEY)
+    if not isinstance(pending, dict):
+        return {}
+    if pending.get("conclusion") or pending.get("question"):
+        return pending
+    return {}
+
+
+def insight_exists_in_cloud(source_app: str) -> bool:
+    return bool(load_latest_applied_math_insight_for_app(source_app))
+
+
+def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
+    """
+    Load pending insight from URL, session, or cloud (cross-device phone refresh).
+
+    Display-only — does not change Tests A–E persistence paths.
+    """
+    key = str(app_key or "").strip().lower()
+    ss = st.session_state
+    ss["_ami_insight_hydrate_attempted"] = True
+
+    url_iid = insight_return_query_id(st)
+    if url_iid:
+        prev = str(ss.get("_ami_hydrated_insight_id") or "").strip()
+        pending = _pending_insight_valid(st)
+        if prev != url_iid or not pending:
+            apply_ami_insight_from_query(st, key)
+        pending = _pending_insight_valid(st)
+        if pending:
+            ss["_ami_insight_hydrate_success"] = True
+            ss["_ami_insight_hydrate_source"] = "url"
+            _sync_investment_insight_tab_keys(st, key, insight=pending)
             return True
-        # Draft family: any draft page shows draft insight
-        if "draft" in insight_page.lower() and "draft" in cur.lower():
-            return True
-        return False
-    return True
+
+    pending = _pending_insight_valid(st)
+    if pending:
+        ss["_ami_insight_hydrate_success"] = True
+        ss["_ami_insight_hydrate_source"] = "session"
+        _sync_investment_insight_tab_keys(st, key, insight=pending)
+        return True
+
+    latest = load_latest_applied_math_insight_for_app(key)
+    if latest:
+        ss[SESSION_PENDING_KEY] = latest
+        source_page = _resolve_insight_source_page(latest)
+        if source_page:
+            ss[SESSION_RETURN_PAGE_KEY] = source_page
+        _sync_investment_insight_tab_keys(st, key, insight=latest)
+        ss["_ami_insight_hydrate_success"] = True
+        hydrate_src = str(latest.get("_hydrate_source_hint") or "cloud_saved_items")
+        ss["_ami_insight_hydrate_source"] = hydrate_src
+        ss["_ami_hydrated_insight_id"] = str(latest.get("insight_id") or "").strip()
+        if key == "investment" and hydrate_src == "cloud_saved_items":
+            try:
+                from investment_persistent_state import notify_pending_insight_change
+
+                notify_pending_insight_change(st, source="insight_hydrate")
+            except Exception:
+                pass
+        return True
+
+    ss["_ami_insight_hydrate_success"] = False
+    ss["_ami_insight_hydrate_source"] = "none"
+    return False
 
 
 @dataclass
@@ -370,12 +685,16 @@ def store_applied_math_insight(
         for store_app in (
             str(data.get("source_app") or "applied_intelligence"),
             "applied_intelligence",
+            "investment",
         ):
+            default_title = "Applied Math insight"
+            if str(data.get("source_app") or "").strip().lower() == "investment":
+                default_title = "Applied Investment Insight"
             remember_saved_item(
                 store_app,
                 INSIGHT_ITEM_TYPE,
                 iid,
-                title=str(data.get("conclusion") or "Applied Math insight")[:120],
+                title=str(data.get("conclusion") or default_title)[:120],
                 payload=blob,
             )
     except Exception as exc:
@@ -498,9 +817,13 @@ def stage_pending_insight(st: Any, insight: AppliedMathInsight | dict[str, Any],
     """Write insight into Streamlit session for AMI return button."""
     data = insight.to_dict() if isinstance(insight, AppliedMathInsight) else dict(insight)
     st.session_state[SESSION_PENDING_KEY] = data
-    st.session_state[SESSION_RETURN_PAGE_KEY] = data.get("source_page") or ""
+    source_page = _resolve_insight_source_page(data) or str(data.get("source_page") or "").strip()
+    st.session_state[SESSION_RETURN_PAGE_KEY] = source_page
     if return_context:
         st.session_state[SESSION_RETURN_CONTEXT_KEY] = dict(return_context)
+    app = str(data.get("source_app") or "").strip().lower()
+    if app == "investment":
+        _sync_investment_insight_tab_keys(st, app, insight=data)
 
 
 def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
@@ -527,11 +850,16 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
 
     insight = load_applied_math_insight(iid, source_app=app_key)
     if not insight:
-        insight = {"insight_id": iid, "conclusion": "Applied Math insight loaded.", "question": ""}
+        placeholder = (
+            "Applied Investment Insight loaded."
+            if str(app_key or "").strip().lower() == "investment"
+            else "Applied Math insight loaded."
+        )
+        insight = {"insight_id": iid, "conclusion": placeholder, "question": "", "source_app": app_key}
 
     st.session_state[SESSION_PENDING_KEY] = insight
     st.session_state[SESSION_RETURN_PAGE_KEY] = (
-        _qp("suite_page") or insight.get("source_page") or ""
+        _query_param(st, "suite_page") or _resolve_insight_source_page(insight) or insight.get("source_page") or ""
     )
 
     source_state = _resolve_return_source_state(
@@ -557,6 +885,14 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
         st.session_state["_skip_page_restore_for"] = page
 
     st.session_state["_ami_hydrated_insight_id"] = iid
+    if str(app_key or "").strip().lower() == "investment":
+        _sync_investment_insight_tab_keys(st, app_key, insight=insight if isinstance(insight, dict) else {})
+        try:
+            from investment_persistent_state import notify_pending_insight_change
+
+            notify_pending_insight_change(st, source="insight_hydrate")
+        except Exception:
+            pass
     return True
 
 
@@ -566,31 +902,37 @@ def clear_pending_insight(st: Any) -> None:
     st.session_state.pop(SESSION_RETURN_CONTEXT_KEY, None)
 
 
-def render_applied_math_insight_panel(st: Any) -> bool:
+def render_applied_math_insight_panel(
+    st: Any,
+    *,
+    source_app: str = "",
+    insight: dict[str, Any] | None = None,
+) -> bool:
     """Display-only insight card on source app pages. Returns True if rendered."""
-    insight = st.session_state.get(SESSION_PENDING_KEY)
-    if not isinstance(insight, dict) or not insight.get("conclusion"):
+    data = insight if isinstance(insight, dict) else st.session_state.get(SESSION_PENDING_KEY)
+    if not isinstance(data, dict) or not data.get("conclusion"):
         return False
+    app = str(source_app or data.get("source_app") or "").strip().lower()
 
     with st.container(border=True):
-        st.markdown("#### Applied Math Insight")
-        q = str(insight.get("question") or "").strip()
+        st.markdown(f"#### {_insight_panel_title(app, data)}")
+        q = str(data.get("question") or "").strip()
         if q:
             st.markdown(f"**Question:** *{q}*")
-        st.markdown(f"**Conclusion:** {insight.get('conclusion')}")
-        method = str(insight.get("method") or insight.get("model_name") or "").strip()
+        st.markdown(f"**Conclusion:** {data.get('conclusion')}")
+        method = str(data.get("method") or data.get("model_name") or "").strip()
         if method:
             st.markdown(f"**Math used:** {method}")
-        assumptions = insight.get("assumptions") or []
+        assumptions = data.get("assumptions") or []
         if assumptions:
             st.markdown("**Assumptions:**")
             for a in assumptions[:4]:
                 st.markdown(f"- {a}")
-        conf = insight.get("confidence")
+        conf = data.get("confidence")
         if conf:
-            extra = f" ({insight.get('confidence_pct')}%)" if insight.get("confidence_pct") else ""
+            extra = f" ({data.get('confidence_pct')}%)" if data.get("confidence_pct") else ""
             st.caption(f"Confidence: **{conf}**{extra}")
-        url = str(insight.get("full_analysis_url") or "").strip()
+        url = str(data.get("full_analysis_url") or "").strip()
         c1, c2 = st.columns(2)
         with c1:
             if url:
@@ -609,12 +951,57 @@ def render_suite_applied_math_insight_for_page(
     source_page: str,
 ) -> bool:
     """Render insight card when pending insight matches this page (source apps)."""
+    app = str(source_app or "").strip().lower()
+    if app == "investment":
+        hydrate_applied_math_insight_for_session(st, app)
+
     insight = st.session_state.get(SESSION_PENDING_KEY)
-    if not isinstance(insight, dict) or not insight.get("conclusion"):
+    pending_exists = isinstance(insight, dict) and bool(insight.get("conclusion") or insight.get("question"))
+    cloud_exists = insight_exists_in_cloud(app) if app == "investment" else False
+    scope = (
+        insight_page_scope_decision(app, source_page, insight)
+        if isinstance(insight, dict) and pending_exists
+        else {"should_render_insight_on_page": False, "render_skip_reason": "no_pending_insight"}
+    )
+    should_render = bool(scope.get("should_render_insight_on_page"))
+    skip_reason = str(scope.get("render_skip_reason") or "")
+
+    if app == "investment":
+        _sync_investment_insight_tab_keys(st, app, insight=insight if isinstance(insight, dict) else None)
+        try:
+            from investment_persistence_trace import record_insight_card_trace
+
+            record_insight_card_trace(
+                st,
+                insight_exists_cloud=cloud_exists,
+                pending_insight_exists=pending_exists,
+                insight_card_rendered=should_render,
+                insight_render_skipped_reason=skip_reason or None,
+                insight_source_tab=scope.get("insight_source_tab")
+                or st.session_state.get(SESSION_INSIGHT_SOURCE_TAB_KEY),
+                current_investment_tab=str(st.session_state.get("investment_active_tab") or source_page),
+                source_investment_tab=st.session_state.get(SESSION_SOURCE_INVESTMENT_TAB_KEY),
+                insight_hydrate_attempted=bool(st.session_state.get("_ami_insight_hydrate_attempted")),
+                insight_hydrate_success=bool(st.session_state.get("_ami_insight_hydrate_success")),
+                insight_hydrate_source=st.session_state.get("_ami_insight_hydrate_source"),
+            )
+        except Exception:
+            pass
+
+    if not pending_exists:
         return False
-    if not should_render_insight_on_page(source_app, source_page, insight):
+    if not should_render:
         return False
-    return render_applied_math_insight_panel(st)
+    rendered = render_applied_math_insight_panel(st, source_app=app, insight=insight)
+    if rendered and app == "investment":
+        st.session_state["_ami_insight_card_rendered"] = True
+        try:
+            from suite_cloud_state import _ami_resume_consumed_flag
+
+            st.session_state[_ami_resume_consumed_flag(app)] = True
+        except Exception:
+            pass
+    return rendered
 
 
 def render_return_to_source_button(

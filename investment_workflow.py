@@ -795,6 +795,12 @@ def reconcile_workflow_after_restore(st_obj: Any | None = None) -> None:
     if not ss.get("portfolio_analyzed") and not ss.get("health_result"):
         return
     if not ss.get("health_result"):
+        wf_fp = ss.get("health_result_fingerprint")
+        if bool(ss.get("portfolio_analyzed")) and wf_fp:
+            if ss.get(_HEALTH_STATUS_KEY) != "fresh":
+                record_workflow_health_status("fresh", st_obj)
+            _clear_stale_steps(ss, "analyze")
+            return
         if any(ss.get(k) for k in _ANALYSIS_FLAG_KEYS):
             invalidate_workflow_from("portfolio", st_obj)
         return
@@ -850,7 +856,9 @@ def _health_is_fresh(st_obj: Any | None = None) -> bool:
         return False
     if ss.get("health_result"):
         return True
-    return _restored_analysis_without_object(st_obj)
+    if _restored_analysis_without_object(st_obj):
+        return True
+    return bool(ss.get("portfolio_analyzed"))
 
 
 def goal_display_label(st_obj: Any | None = None) -> str:

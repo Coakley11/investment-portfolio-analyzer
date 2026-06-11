@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** PR1 trace live · Tests A–C **PASS** (frozen) · Test D **PASS** (portfolio cloud) · Test E **in progress** (AMI launch wiring)  
+**Status:** Deploy marker `investment-insight-hydrate-v2` (local, not yet pushed) · Tests A–C **PASS** (frozen) · Tests **D** and **E** **REOPENED** — live regressions: AMI label/hydrate, portfolio revert, workflow greens  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -18,8 +18,8 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 | **A** | Page / tab sync | `investment_active_tab`, `health_active_tab` | Set non-default tab (e.g. ③ Build Portfolio) → wait for `tab_change` save → hard refresh other device | **PASS** — frozen 2026-06-11 (PR2 scope A `c4bb94b`); re-open only on trace regression |
 | **B** | Global sidebar settings sync | `experience`, `_suite_persisted_experience`, `sidebar_portfolio_value`, `analysis_start`/`analysis_end`, `risk_free_pct`, `portfolio_preset` | Change global sidebar settings on Dell → save trace → hard refresh phone → compare Test B block | **PASS** — frozen 2026-06-11 (PR2 scope B `7dc3595`); re-open only on trace regression |
 | **C** | Page-specific filters sync | `overview_subtab`, `mc_assumption_mode`, `health_run_optimizer`, `health_bond_min`, `frontier_points`, macro keys | Set non-default filters on Dell → wait 8–10s → Test C block → phone hard refresh → compare | **PASS** — frozen 2026-06-11; re-open only on trace regression |
-| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Custom holdings → confirm `saved_holdings_fingerprint` = `cloud_readback_holdings_fingerprint` → phone hard refresh | **RE-VERIFY** — scoped `portfolio_change` autosave added; re-baseline before Test E |
-| **E** | AMI return restores investment state | `applied_math_context` source_state → session | Distinctive state on Dell → AMI round-trip → return via `?suite_ami_insight=` → Test E block | **INCONCLUSIVE** — AMI return not detected; fix D cloud portfolio first |
+| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Custom holdings (50% VYM / 50% BND) → confirm fingerprints match → phone hard refresh after AMI | **REOPENED** — 50/50 reverted to default mix post-AMI; holdings default guard + `portfolio_change` re-verify |
+| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **REOPENED** — label still generic on live (`64c4395`); phone missing insight card; §8 trace required |
 
 ---
 

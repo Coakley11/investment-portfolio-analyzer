@@ -32,12 +32,57 @@ _SOURCE_AREA: dict[str, str] = {
     "baseball": "sports",
     "nba": "sports",
     "investment": "forecasting",
+    "music": "music",
 }
 
 _SOURCE_LABELS: dict[str, str] = {
     "baseball": "Baseball",
     "nba": "NBA",
     "investment": "Investment",
+    "music": "Music",
+}
+
+_SOURCE_APP_ID_ALIASES: dict[str, str] = {
+    "music": "music",
+    "music practice coach": "music",
+    "music coach": "music",
+    "music practice": "music",
+    "baseball": "baseball",
+    "baseball stat app": "baseball",
+    "nba": "nba",
+    "nba playoff companion": "nba",
+    "investment": "investment",
+    "investment portfolio analyzer": "investment",
+}
+
+
+def normalize_source_app_id(
+    source_app: str,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Map display labels and context values to canonical suite app ids."""
+    raw = str(source_app or "").strip().lower()
+    if raw in _SOURCE_APP_ID_ALIASES:
+        return _SOURCE_APP_ID_ALIASES[raw]
+    if raw in _SOURCE_LABELS:
+        return raw
+    if context and isinstance(context, dict):
+        ctx_raw = str(context.get("source_app") or "").strip().lower()
+        if ctx_raw in _SOURCE_APP_ID_ALIASES:
+            return _SOURCE_APP_ID_ALIASES[ctx_raw]
+        if ctx_raw in _SOURCE_LABELS:
+            return ctx_raw
+        if "music" in ctx_raw and "math" not in ctx_raw:
+            return "music"
+    if "music" in raw and "math" not in raw:
+        return "music"
+    return raw
+
+_MUSIC_COACH_PLACEHOLDERS: dict[str, str] = {
+    "practice": "e.g. How should I practice this song?",
+    "backing": "e.g. How do I use Backing Track Studio?",
+    "custom": "e.g. What scale works over this progression?",
+    "karaoke": "e.g. How do I use Karaoke mode?",
 }
 
 # Only these keys may appear in user-facing context output.
@@ -156,8 +201,57 @@ def default_area_for_source(source_app: str) -> str:
 
 
 def source_app_label(source_app: str) -> str:
-    key = str(source_app or "").strip()
+    key = str(source_app or "").strip().lower()
+    if key == "music":
+        return "Music Practice Coach"
     return _SOURCE_LABELS.get(key, key.replace("_", " ").title())
+
+
+def source_question_card_title(
+    source_app: str,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Normalized Continue / activity title for cross-app questions."""
+    app = normalize_source_app_id(source_app, context)
+    if app == "music":
+        return "Music Coach question from Music"
+    label = _SOURCE_LABELS.get(app, app.replace("_", " ").title())
+    if app == "investment":
+        return f"Applied Investment Insight question from {label}"
+    if app in {"baseball", "nba"}:
+        return f"Applied Math question from {label}"
+    return f"Question from {label}"
+
+
+def music_coach_question_placeholder(source_page: str) -> str:
+    page = str(source_page or "").strip().lower()
+    return _MUSIC_COACH_PLACEHOLDERS.get(
+        page,
+        "e.g. What notes are in C minor?",
+    )
+
+
+INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
+    "Is this portfolio too risky for my goal?",
+    "Which holding contributes most to portfolio risk?",
+    "How would higher interest rates affect this portfolio?",
+    "Is this allocation diversified enough?",
+    "What is the biggest weakness in this portfolio?",
+    "How could I make this portfolio more conservative?",
+)
+
+
+def investment_ami_default_question(source_page: str) -> str:
+    """Rotate Investment-specific starter questions by active tab."""
+    page = str(source_page or "").strip().lower()
+    if not INVESTMENT_AMI_STARTER_QUESTIONS:
+        return ""
+    idx = sum(ord(c) for c in page) % len(INVESTMENT_AMI_STARTER_QUESTIONS)
+    return INVESTMENT_AMI_STARTER_QUESTIONS[idx]
+
+
+def investment_ami_question_placeholder(source_page: str) -> str:
+    return investment_ami_default_question(source_page)
 
 
 def _normalize_question(text: str) -> str:
@@ -434,13 +528,13 @@ def format_context_lines(context: dict[str, Any] | None) -> list[str]:
 
 def analytical_question_continue_copy(payload: dict[str, Any]) -> tuple[str, str, str]:
     """Return (title, subtitle, button_label) for Command Center Continue cards."""
-    label = source_app_label(str(payload.get("source_app") or ""))
+    ctx = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    app = normalize_source_app_id(str(payload.get("source_app") or ""), ctx)
     question = str(payload.get("question") or "").strip()
-    return (
-        f"Applied Math question from {label}",
-        question,
-        ANALYTICAL_QUESTION_BUTTON_LABEL,
-    )
+    title = source_question_card_title(app, ctx)
+    if app == "music":
+        return (title, question, "Continue with Music Coach →")
+    return (title, question, ANALYTICAL_QUESTION_BUTTON_LABEL)
 
 
 def analytical_question_storage_subtitle(payload: dict[str, Any]) -> str:
@@ -573,6 +667,10 @@ def build_applied_math_resume_url(payload: dict[str, Any], *, base_url: str = ""
     from suite_deep_links import build_resume_action_url
 
     metrics = metrics_for_applied_math_resume(payload)
+    metrics["source_app"] = normalize_source_app_id(
+        str(payload.get("source_app") or ""),
+        dict(payload.get("context") or {}),
+    )
     return build_resume_action_url(
         "applied_intelligence",
         resume_key=str(payload.get("resume_key") or ""),
@@ -625,7 +723,16 @@ def submit_analytical_question(
     duplicate = _recent_duplicate_send(session_state, payload["question_id"])
     if not duplicate:
         metrics = metrics_for_applied_math_resume(payload)
-        summary = f"Asked Applied Math: {payload['question'][:80]}"
+        metrics["source_app"] = normalize_source_app_id(
+            str(payload.get("source_app") or ""),
+            dict(payload.get("context") or {}),
+        )
+        if metrics["source_app"] == "music":
+            summary = f"Asked Music Coach: {payload['question'][:80]}"
+        elif metrics["source_app"] == "investment":
+            summary = f"Asked Applied Investment Insight: {payload['question'][:80]}"
+        else:
+            summary = f"Asked Applied Math: {payload['question'][:80]}"
         try:
             from suite_activity_client import record_activity
 
@@ -724,6 +831,7 @@ def render_analyze_with_applied_math_sidebar(
     default_question: str = "",
     developer_mode: bool = False,
     session_state: dict[str, Any] | None = None,
+    on_after_send: Callable[[], None] | None = None,
 ) -> None:
     """Always-visible sidebar block: question → Command Center → Applied Intelligence."""
     ss = session_state if session_state is not None else st.session_state
@@ -732,8 +840,20 @@ def render_analyze_with_applied_math_sidebar(
     question_key = f"ami_question_{source_app}_{page_suffix}_{send_gen}"
     submit_key = f"ami_submit_{source_app}_{page_suffix}"
 
-    st.sidebar.markdown("### Analyze with Applied Math")
-    st.sidebar.caption("Ask a math question about what you are viewing.")
+    app_key = str(source_app or "").strip().lower()
+    is_music = app_key == "music"
+    is_investment = app_key == "investment"
+    if is_music:
+        st.sidebar.markdown("### Ask the Music Coach")
+        st.sidebar.caption(
+            "Get help with practice, theory, navigation, backing tracks, karaoke, or this app."
+        )
+    elif is_investment:
+        st.sidebar.markdown("### Applied Investment Insight")
+        st.sidebar.caption("Ask an investment question about your portfolio and what you are viewing.")
+    else:
+        st.sidebar.markdown("### Analyze with Applied Math")
+        st.sidebar.caption("Ask a math question about what you are viewing.")
 
     last = ss.get("_ami_last_send")
     if (
@@ -741,14 +861,28 @@ def render_analyze_with_applied_math_sidebar(
         and last.get("source_app") == source_app
         and _recent_duplicate_send(ss, str(last.get("question_id") or ""))
     ):
-        st.sidebar.success(
-            "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
-        )
+        if is_music:
+            sent_msg = "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+        elif is_investment:
+            sent_msg = (
+                "Question sent to Command Center. Open Command Center to continue your "
+                "Applied Investment Insight."
+            )
+        else:
+            sent_msg = "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+        st.sidebar.success(sent_msg)
 
+    inv_default_q = investment_ami_default_question(source_page) if is_investment else ""
     question = st.sidebar.text_area(
         "Question",
-        value=str(ss.get(question_key) or default_question or "").strip(),
-        placeholder="e.g. Is this trend meaningful statistically?",
+        value=str(ss.get(question_key) or default_question or inv_default_q or "").strip(),
+        placeholder=(
+            music_coach_question_placeholder(source_page)
+            if is_music
+            else investment_ami_question_placeholder(source_page)
+            if is_investment
+            else "e.g. Is this trend meaningful statistically?"
+        ),
         height=88,
         key=question_key,
         label_visibility="visible",
@@ -761,7 +895,6 @@ def render_analyze_with_applied_math_sidebar(
         type="primary",
     ):
         q = str(question or "").strip()
-        is_investment = str(source_app or "").strip().lower() == "investment"
         entrypoint = "sidebar_analyze_with_applied_math"
         if is_investment:
             _record_investment_ami_launch_trace(
@@ -815,14 +948,40 @@ def render_analyze_with_applied_math_sidebar(
                     source_state=result.get("source_state") or submit_source_state,
                     action_url=str(result.get("action_url") or ""),
                 )
-            if result.get("duplicate"):
-                st.sidebar.info(
-                    "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
+            if is_music:
+                dup_msg = (
+                    "That question was already sent recently. Open Command Center to continue "
+                    "with the Music Coach."
+                )
+                ok_msg = (
+                    "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+                )
+            elif is_investment:
+                dup_msg = (
+                    "That question was already sent recently. Open Command Center to continue your "
+                    "Applied Investment Insight."
+                )
+                ok_msg = (
+                    "Question sent to Command Center. Open Command Center to continue your "
+                    "Applied Investment Insight."
                 )
             else:
-                st.sidebar.success(
+                dup_msg = (
+                    "That question was already sent recently. Open Command Center to continue "
+                    "in Applied Intelligence."
+                )
+                ok_msg = (
                     "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
                 )
+            if result.get("duplicate"):
+                st.sidebar.info(dup_msg)
+            else:
+                st.sidebar.success(ok_msg)
+            if on_after_send is not None:
+                try:
+                    on_after_send()
+                except Exception:
+                    log.exception("on_after_send hook failed for %s (%s)", source_app, source_page)
             st.rerun()
 
     if developer_mode:
@@ -840,6 +999,7 @@ def render_applied_math_sidebar_entry(
     context_extra_builder: Callable[[], dict[str, Any] | None] | None = None,
     source_state_builder: Callable[[], dict[str, Any] | None] | None = None,
     developer_mode: bool = False,
+    on_after_send: Callable[[], None] | None = None,
     **kwargs: Any,
 ) -> None:
     """Render AMI sidebar near the top; log and surface failures in Developer Mode."""
@@ -868,6 +1028,7 @@ def render_applied_math_sidebar_entry(
             context_summary="",
             developer_mode=developer_mode,
             session_state=ss,
+            on_after_send=on_after_send,
         )
     except Exception as exc:
         log.exception("Applied Math sidebar failed for %s (%s)", source_app, source_page)
@@ -1099,8 +1260,60 @@ def build_context_from_session(
                 val = getattr(hr_obj, attr, None) if not isinstance(hr_obj, dict) else hr_obj.get(attr)
                 if val is not None and val != "":
                     ctx[key] = val
+    elif app == "music":
+        try:
+            from music_coach_context import (
+                coach_page_display_name,
+                resolve_coach_source_page,
+            )
+
+            coach_page = resolve_coach_source_page(session_state)
+            ctx["page"] = coach_page_display_name(coach_page)
+            ctx["workflow"] = "Music practice coach"
+            song = session_state.get("selected_song")
+            if isinstance(song, dict):
+                title = str(song.get("title") or "").strip()
+                artist = str(song.get("artist") or "").strip()
+                if title:
+                    ctx["song"] = f"{title} — {artist}" if artist else title
+            instrument = str(session_state.get("instrument") or "").strip()
+            if instrument:
+                ctx["instrument"] = instrument
+            display_key = str(session_state.get("display_key") or "").strip()
+            if display_key:
+                ctx["display_key"] = display_key
+            section = str(session_state.get("practice_focus_section") or "").strip()
+            if section:
+                ctx["practice_section"] = section
+            summary = ctx.get("song") or ctx["page"]
+        except Exception:
+            ctx["workflow"] = "Music practice coach"
+            summary = page_display
 
     return ctx, summary
+
+
+def render_music_coach_sidebar_entry(
+    st: Any,
+    *,
+    source_page: str,
+    session_state: dict[str, Any] | None = None,
+    context_extra_builder: Callable[[], dict[str, Any] | None] | None = None,
+    source_state_builder: Callable[[], dict[str, Any] | None] | None = None,
+    developer_mode: bool = False,
+    on_after_send: Callable[[], None] | None = None,
+) -> None:
+    """Music Practice Coach sidebar — Ask the Music Coach (not Applied Math wording)."""
+    render_applied_math_sidebar_entry(
+        st,
+        source_app="music",
+        source_page=source_page,
+        session_state=session_state,
+        context_extra_builder=context_extra_builder,
+        source_state_builder=source_state_builder,
+        developer_mode=developer_mode,
+        on_after_send=on_after_send,
+    )
 
 
 def render_suite_applied_math_insight(

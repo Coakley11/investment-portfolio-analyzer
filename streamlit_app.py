@@ -971,7 +971,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**PR1 probe:** `investment-persistence-trace-pr1-v1` · commit `3b81e3d`")
+    st.sidebar.caption("**Deploy marker:** `investment-insight-hydrate-v2` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar

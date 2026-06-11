@@ -81,6 +81,21 @@ class TestWorkflowPersistSync(unittest.TestCase):
         self.assertFalse(checklist["health"])
         self.assertIn("health", ss["_workflow_stale_steps"])
 
+    def test_restore_without_health_summary_keeps_analyze_when_fingerprint_present(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss["portfolio_analyzed"] = True
+        ss["portfolio_built"] = True
+        ss["guide_goal_choice"] = "Balanced growth"
+        ss["health_result_fingerprint"] = "BND:50.0:Bonds|VYM:50.0:Dividend ETF"
+        ss["_workflow_health_status"] = "fresh"
+        reconcile_workflow_after_restore(st)
+        checklist = workflow_checklist(st)
+        self.assertTrue(checklist["goal"])
+        self.assertTrue(checklist["portfolio"])
+        self.assertTrue(checklist["analyze"])
+        self.assertEqual(ss["_workflow_health_status"], "fresh")
+
 
 if __name__ == "__main__":
     unittest.main()

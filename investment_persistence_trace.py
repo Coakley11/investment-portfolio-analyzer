@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-persistence-trace-pr1-v1"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-insight-hydrate-v2"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -98,6 +98,19 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "return_context_keys",
     "apply_source_state_attempted",
     "apply_source_state_success",
+)
+
+INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
+    "insight_exists_cloud",
+    "pending_insight_exists",
+    "insight_card_rendered",
+    "insight_render_skipped_reason",
+    "insight_source_tab",
+    "current_investment_tab",
+    "source_investment_tab",
+    "insight_hydrate_attempted",
+    "insight_hydrate_success",
+    "insight_hydrate_source",
 )
 
 SAVE_TRACE_LABELS: tuple[str, ...] = (
@@ -226,7 +239,7 @@ def init_developer_mode_from_query(st: Any) -> None:
 
 def pr1_baseline_trace_active(*, persistence_ok: bool | None = None) -> bool:
     """PR1 baseline: show trace when persistence loaded and deploy marker matches (no ``?dev=1``)."""
-    return bool(persistence_ok) and INVESTMENT_PERSIST_DEPLOY_VERSION == "investment-persistence-trace-pr1-v1"
+    return bool(persistence_ok) and INVESTMENT_PERSIST_DEPLOY_VERSION == "investment-insight-hydrate-v2"
 
 
 def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> bool:
@@ -773,6 +786,31 @@ def record_save_trace(
     )
 
 
+def record_insight_card_trace(st: Any, **fields: Any) -> None:
+    """Record Investment insight card hydrate/render diagnostics (post-Test-E UX)."""
+    ss = st.session_state
+    update_trace(st, **fields)
+    _persist_ami_trace_backup(ss, **fields)
+
+
+def snapshot_insight_card_trace(st: Any) -> dict[str, Any]:
+    ss = st.session_state
+    trace = get_trace(st)
+    fields = {
+        label: _resolved_ami_trace_value(ss, trace, label)
+        for label in INSIGHT_CARD_TRACE_LABELS
+    }
+    for label in INSIGHT_CARD_TRACE_LABELS:
+        if fields.get(label) is None:
+            val = ss.get(label) or ss.get(f"_{label}")
+            if val is not None and val != "":
+                fields[label] = val
+    if fields.get("current_investment_tab") is None:
+        fields["current_investment_tab"] = ss.get("investment_active_tab")
+    update_trace(st, **{k: v for k, v in fields.items() if v is not None})
+    return fields
+
+
 def record_investment_ami_launch(
     st: Any,
     *,
@@ -918,6 +956,7 @@ def snapshot_full_trace(st: Any, *, persistence_ok: bool | None = None) -> dict[
     snapshot_portfolio_trace(st)
     snapshot_filter_trace(st)
     snapshot_ami_return_trace(st)
+    snapshot_insight_card_trace(st)
     snapshot_save_trace(st)
     return get_trace(st)
 
@@ -1139,9 +1178,10 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
         _render_trace_section(st, "5. Portfolio trace", PORTFOLIO_TRACE_LABELS, trace)
         _render_trace_section(st, "6. Filter trace", FILTER_TRACE_LABELS, trace)
         _render_trace_section(st, "7. AMI return trace", AMI_RETURN_TRACE_LABELS, trace)
-        _render_trace_section(st, "8. Save/autosave trace", SAVE_TRACE_LABELS, trace)
+        _render_trace_section(st, "8. Insight card trace", INSIGHT_CARD_TRACE_LABELS, trace)
+        _render_trace_section(st, "9. Save/autosave trace", SAVE_TRACE_LABELS, trace)
 
-        st.markdown("**9. Manual test copy blocks**")
+        st.markdown("**10. Manual test copy blocks**")
         st.caption(
             "Baseline manual tests (PR1 trace-only). "
             "1) Set non-default state on device A → wait ~10s → copy block. "
