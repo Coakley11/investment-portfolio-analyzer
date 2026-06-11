@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** PR1 trace live · Tests A–C **PASS** (frozen) · Test D **re-verify** (portfolio cloud save) · Test E **inconclusive** (AMI not detected)  
+**Status:** PR1 trace live · Tests A–C **PASS** (frozen) · Test D **PASS** (portfolio cloud) · Test E **in progress** (AMI launch wiring)  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -299,14 +299,24 @@ Underlying blob keys (not all in copy block): `holdings_df` records, `workflow_s
 - Holdings fp reverted to stale cloud portfolio (see Test D re-verify)
 - Likely causes: (A) portfolio not saved to cloud before AMI; (B) return did not use `?suite_ami_insight=` URL (manual nav skips hydrate)
 
-### AMI diagnostics added (trace only — no behavior change)
+### AMI launch path (round-trip — not in-page helper)
+- **Sidebar:** `### Analyze with Applied Math` → question text → **`Send to Command Center`** (primary button)
+- Creates `source_state` + resume URL to Applied Intelligence; return uses `?suite_ami_insight=` via Command Center insight link
+- **Not** the in-page insight card alone (`render_suite_applied_math_insight` is return display only)
+
+### AMI diagnostics (PR2 scope E — launch wiring)
 | Field | When set |
 |-------|----------|
-| `ami_launch_detected` | Investment sidebar **Send to Command Center** |
-| `source_state_created` | Launch — `build_source_state` non-empty |
-| `return_url_generated` | Launch — resume `action_url` non-empty |
-| `return_context_created` | Return hydrate — `_ami_return_context` / source_state loaded |
-| `ami_return_detected` | Return URL hydrate or apply |
+| `ami_launch_button_clicked` | **Send to Command Center** clicked |
+| `ami_launch_entrypoint` | `sidebar_analyze_with_applied_math` |
+| `build_source_state_called` | `ensure_investment_source_state` / builder ran |
+| `ami_launch_detected` | Successful send with source_state or action_url |
+| `source_state_created` | Non-empty `source_state` in payload |
+| `source_state_keys` | Top-level keys in source_state |
+| `source_state_holdings_fingerprint` | `entity_params.holdings_fingerprint` |
+| `return_url_generated` | Non-empty resume `action_url` |
+| `return_url_has_suite_ami_insight` | True on return URL only (not launch URL) |
+| `ami_return_detected` | Return hydrate (`?suite_ami_insight=`) or apply |
 | `apply_source_state_*` | `apply_return_source_state` for investment |
 
 ### Re-baseline procedure (after Test D re-verify)

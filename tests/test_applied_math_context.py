@@ -6,7 +6,11 @@ import unittest
 
 import pandas as pd
 
-from applied_math_context import build_investment_applied_math_context, record_rebalance_from_health
+from applied_math_context import (
+    build_investment_applied_math_context,
+    build_source_state,
+    record_rebalance_from_health,
+)
 
 
 class TestInvestmentAppliedMathContext(unittest.TestCase):
@@ -35,6 +39,28 @@ class TestInvestmentAppliedMathContext(unittest.TestCase):
         self.assertIn("VTI", ctx.get("holdings", []))
         self.assertIn("context_note_historical", ctx)
         self.assertIn("sharpe_ratio", ctx)
+
+    def test_build_source_state_uses_holdings_fingerprint(self) -> None:
+        session = {
+            "investment_active_tab": "⑤ Portfolio Health",
+            "health_objective": "income",
+            "experience": "Advanced Mode",
+            "risk_free_pct": 3.5,
+            "holdings_df": pd.DataFrame(
+                {
+                    "Ticker": ["VYM", "BND"],
+                    "Weight (%)": [50.0, 50.0],
+                    "Asset Type": ["Dividend ETF", "Bonds"],
+                }
+            ),
+        }
+        state = build_source_state("⑤ Portfolio Health", session)
+        self.assertEqual(state["source_app"], "investment")
+        ent = state["entity_params"]
+        self.assertIn("BND:50.0:Bonds", ent["holdings_fingerprint"])
+        self.assertIn("VYM:50.0:Dividend ETF", ent["holdings_fingerprint"])
+        self.assertEqual(ent["objective"], "income")
+        self.assertEqual(state["filter_params"].get("risk_free_pct"), 3.5)
 
     def test_rebalance_drift_captured_from_health(self) -> None:
         class _HR:

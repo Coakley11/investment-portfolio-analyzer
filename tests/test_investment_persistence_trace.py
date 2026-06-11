@@ -235,6 +235,36 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         self.assertTrue(rows["ami_launch_detected"])
         self.assertTrue(rows["source_state_created"])
         self.assertTrue(rows["return_url_generated"])
+        self.assertEqual(
+            rows["source_state_holdings_fingerprint"],
+            "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+        )
+
+    def test_ami_trace_survives_snapshot_with_none_fields(self) -> None:
+        from investment_persistence_trace import (
+            AMI_TRACE_BACKUP_KEY,
+            record_investment_ami_launch,
+            snapshot_ami_return_trace,
+        )
+
+        st = self._st({"investment_active_tab": "Portfolio Health"})
+        source_state = {
+            "source_app": "investment",
+            "entity_params": {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"},
+        }
+        record_investment_ami_launch(
+            st,
+            entrypoint="test",
+            button_clicked=True,
+            build_source_state_called=True,
+            source_state=source_state,
+            action_url="https://ami.example/resume",
+        )
+        snapshot_ami_return_trace(st)
+        backup = st.session_state.get(AMI_TRACE_BACKUP_KEY)
+        self.assertTrue(backup.get("ami_launch_detected"))
+        trace = st.session_state["_investment_persist_trace"]
+        self.assertTrue(trace.get("ami_launch_detected"))
 
     def test_record_save_trace_captures_autosave_event(self) -> None:
         from investment_persistence_trace import record_save_trace

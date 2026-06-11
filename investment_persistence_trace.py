@@ -78,11 +78,19 @@ FILTER_TRACE_LABELS: tuple[str, ...] = (
     "health_regime",
 )
 
+AMI_TRACE_BACKUP_KEY = "_suite_inv_ami_trace_backup"
+
 AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
+    "ami_launch_button_clicked",
+    "ami_launch_entrypoint",
+    "build_source_state_called",
     "ami_launch_detected",
     "source_state_created",
+    "source_state_keys",
+    "source_state_holdings_fingerprint",
     "return_context_created",
     "return_url_generated",
+    "return_url_has_suite_ami_insight",
     "ami_return_detected",
     "source_app_normalized",
     "current_investment_tab",
@@ -272,7 +280,9 @@ def get_trace(st: Any) -> dict[str, Any]:
 
 def update_trace(st: Any, **fields: Any) -> None:
     trace = get_trace(st)
-    trace.update(fields)
+    for key, val in fields.items():
+        if val is not None:
+            trace[key] = val
     trace.setdefault("deploy_version", INVESTMENT_PERSIST_DEPLOY_VERSION)
     try:
         trace.setdefault("git_commit", _git_head_short())
@@ -535,6 +545,41 @@ def snapshot_filter_trace(st: Any) -> dict[str, Any]:
     return fields
 
 
+def _ami_trace_backup(ss: Any) -> dict[str, Any]:
+    raw = ss.get(AMI_TRACE_BACKUP_KEY)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _resolved_ami_trace_value(ss: Any, trace: dict[str, Any], label: str) -> Any:
+    backup = _ami_trace_backup(ss)
+    if label in backup and backup[label] is not None and backup[label] != "":
+        return backup[label]
+    return trace.get(label)
+
+
+def _persist_ami_trace_backup(ss: Any, **fields: Any) -> None:
+    backup = _ami_trace_backup(ss)
+    for key, val in fields.items():
+        if val is not None:
+            backup[key] = val
+    ss[AMI_TRACE_BACKUP_KEY] = backup
+
+
+def _source_state_holdings_fingerprint(source_state: dict[str, Any] | None) -> str | None:
+    if not isinstance(source_state, dict):
+        return None
+    ent = source_state.get("entity_params")
+    if isinstance(ent, dict):
+        hfp = ent.get("holdings_fingerprint")
+        if hfp:
+            return str(hfp)
+    return None
+
+
+def _url_has_suite_ami_insight(url: str) -> bool:
+    return "suite_ami_insight" in str(url or "")
+
+
 def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
     ss = st.session_state
     trace = get_trace(st)
@@ -545,7 +590,7 @@ def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
     ami_detected = bool(
         ss.get("ami_return_detected")
         or ss.get("insight_return_detected")
-        or trace.get("ami_return_detected")
+        or _resolved_ami_trace_value(ss, trace, "ami_return_detected")
     )
     try:
         from applied_math_return_insight import ami_return_navigation_active
@@ -556,20 +601,33 @@ def snapshot_ami_return_trace(st: Any) -> dict[str, Any]:
         pass
 
     fields = {
-        "ami_launch_detected": trace.get("ami_launch_detected"),
-        "source_state_created": trace.get("source_state_created"),
-        "return_context_created": trace.get("return_context_created"),
-        "return_url_generated": trace.get("return_url_generated"),
+        "ami_launch_button_clicked": _resolved_ami_trace_value(ss, trace, "ami_launch_button_clicked"),
+        "ami_launch_entrypoint": _resolved_ami_trace_value(ss, trace, "ami_launch_entrypoint"),
+        "build_source_state_called": _resolved_ami_trace_value(ss, trace, "build_source_state_called"),
+        "ami_launch_detected": _resolved_ami_trace_value(ss, trace, "ami_launch_detected"),
+        "source_state_created": _resolved_ami_trace_value(ss, trace, "source_state_created"),
+        "source_state_keys": _resolved_ami_trace_value(ss, trace, "source_state_keys"),
+        "source_state_holdings_fingerprint": _resolved_ami_trace_value(
+            ss, trace, "source_state_holdings_fingerprint"
+        ),
+        "return_context_created": _resolved_ami_trace_value(ss, trace, "return_context_created")
+        or bool(ctx_keys),
+        "return_url_generated": _resolved_ami_trace_value(ss, trace, "return_url_generated"),
+        "return_url_has_suite_ami_insight": _resolved_ami_trace_value(
+            ss, trace, "return_url_has_suite_ami_insight"
+        ),
         "ami_return_detected": ami_detected,
-        "source_app_normalized": ss.get("source_app_normalized")
-        or (return_ctx or {}).get("source_app")
-        if isinstance(return_ctx, dict)
-        else ss.get("source_app_normalized"),
-        "current_investment_tab": trace.get("current_investment_tab") or ss.get("investment_active_tab"),
+        "source_app_normalized": _resolved_ami_trace_value(ss, trace, "source_app_normalized")
+        or ss.get("source_app_normalized")
+        or ((return_ctx or {}).get("source_app") if isinstance(return_ctx, dict) else None),
+        "current_investment_tab": _resolved_ami_trace_value(ss, trace, "current_investment_tab")
+        or ss.get("investment_active_tab"),
         "final_investment_tab": ss.get("investment_active_tab"),
-        "return_context_keys": ctx_keys or trace.get("return_context_keys") or None,
-        "apply_source_state_attempted": trace.get("apply_source_state_attempted"),
-        "apply_source_state_success": trace.get("apply_source_state_success"),
+        "return_context_keys": ctx_keys or _resolved_ami_trace_value(ss, trace, "return_context_keys"),
+        "apply_source_state_attempted": _resolved_ami_trace_value(
+            ss, trace, "apply_source_state_attempted"
+        ),
+        "apply_source_state_success": _resolved_ami_trace_value(ss, trace, "apply_source_state_success"),
     }
     update_trace(st, **fields)
     return fields
@@ -715,26 +773,64 @@ def record_save_trace(
     )
 
 
+def record_investment_ami_launch(
+    st: Any,
+    *,
+    entrypoint: str = "unknown",
+    button_clicked: bool = False,
+    build_source_state_called: bool = False,
+    source_state: dict[str, Any] | None = None,
+    action_url: str = "",
+) -> None:
+    """Record Investment AMI launch from the actual sidebar submit path (Test E)."""
+    ss = st.session_state
+    has_source = isinstance(source_state, dict) and bool(source_state)
+    state_keys: list[str] | None = None
+    if has_source:
+        state_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
+    url = str(action_url or "").strip()
+    hfp = _source_state_holdings_fingerprint(source_state)
+    fields: dict[str, Any] = {
+        "ami_launch_button_clicked": True if button_clicked else None,
+        "ami_launch_entrypoint": entrypoint or None,
+        "current_investment_tab": ss.get("investment_active_tab"),
+    }
+    if build_source_state_called:
+        fields["build_source_state_called"] = True
+    if has_source or url or build_source_state_called:
+        fields.update(
+            {
+                "ami_launch_detected": True,
+                "source_state_created": has_source,
+                "source_state_keys": state_keys,
+                "source_state_holdings_fingerprint": hfp,
+                "return_url_generated": bool(url),
+                "return_url_has_suite_ami_insight": _url_has_suite_ami_insight(url) if url else False,
+                "source_app_normalized": (source_state or {}).get("source_app") if has_source else "investment",
+                "return_context_keys": state_keys,
+            }
+        )
+    update_trace(st, **fields)
+    _persist_ami_trace_backup(ss, **fields)
+
+
 def record_ami_launch_trace(
     st: Any,
     *,
     source_state: dict[str, Any] | None = None,
     action_url: str = "",
+    entrypoint: str = "on_after_send",
+    button_clicked: bool = True,
+    build_source_state_called: bool = True,
 ) -> None:
-    """Record AMI launch from Investment sidebar (Test E diagnostics; no behavior change)."""
-    ss = st.session_state
-    has_source = isinstance(source_state, dict) and bool(source_state)
-    ctx_keys: list[str] | None = None
-    if has_source:
-        ctx_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
-    update_trace(
+    """Backward-compatible wrapper for Investment AMI launch trace."""
+    record_investment_ami_launch(
         st,
-        ami_launch_detected=True,
-        source_state_created=has_source,
-        return_url_generated=bool(str(action_url or "").strip()),
-        source_app_normalized=(source_state or {}).get("source_app") if has_source else "investment",
-        return_context_keys=ctx_keys,
-        current_investment_tab=ss.get("investment_active_tab"),
+        entrypoint=entrypoint,
+        button_clicked=button_clicked,
+        build_source_state_called=build_source_state_called,
+        source_state=source_state,
+        action_url=action_url,
     )
 
 
@@ -770,13 +866,15 @@ def record_ami_return_hydrate_trace(
     ctx_keys: list[str] | None = None
     if has_state:
         ctx_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
-    update_trace(
-        st,
-        ami_return_detected=True,
-        return_context_created=has_state,
-        return_context_keys=ctx_keys,
-        current_investment_tab=st.session_state.get("investment_active_tab"),
-    )
+    fields = {
+        "ami_return_detected": True,
+        "return_context_created": has_state,
+        "return_context_keys": ctx_keys,
+        "current_investment_tab": st.session_state.get("investment_active_tab"),
+        "return_url_has_suite_ami_insight": bool(str(insight_id or "").strip()),
+    }
+    update_trace(st, **fields)
+    _persist_ami_trace_backup(st.session_state, **fields)
     if insight_id:
         update_trace(st, ami_insight_id=insight_id)
 
@@ -794,16 +892,20 @@ def record_ami_apply_trace(
     ctx_keys: list[str] | None = None
     if isinstance(source_state, dict):
         ctx_keys = sorted(str(k) for k in source_state.keys())
-    update_trace(
-        st,
-        ami_return_detected=True,
-        apply_source_state_attempted=True,
-        apply_source_state_success=success if success is not None else error is None,
-        apply_source_state_error=error,
-        current_investment_tab=tab_before,
-        return_context_keys=ctx_keys,
-        source_app_normalized=source_state.get("source_app") if isinstance(source_state, dict) else None,
-    )
+    hfp = _source_state_holdings_fingerprint(source_state if isinstance(source_state, dict) else None)
+    fields = {
+        "ami_return_detected": True,
+        "apply_source_state_attempted": True,
+        "apply_source_state_success": success if success is not None else error is None,
+        "apply_source_state_error": error,
+        "current_investment_tab": tab_before,
+        "return_context_keys": ctx_keys,
+        "source_app_normalized": source_state.get("source_app") if isinstance(source_state, dict) else None,
+        "source_state_holdings_fingerprint": hfp,
+        "return_context_created": bool(ctx_keys),
+    }
+    update_trace(st, **fields)
+    _persist_ami_trace_backup(ss, **fields)
 
 
 def snapshot_full_trace(st: Any, *, persistence_ok: bool | None = None) -> dict[str, Any]:
@@ -899,11 +1001,13 @@ def collect_test_d_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_test_e_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
-    rows = {label: trace.get(label) for label in AMI_RETURN_TRACE_LABELS}
+    ss = st.session_state
+    rows = {label: _resolved_ami_trace_value(ss, trace, label) for label in AMI_RETURN_TRACE_LABELS}
     rows["cloud_fetch_tab"] = trace.get("cloud_fetch_tab")
     rows["restored_tab"] = trace.get("restored_tab")
     rows["page_overwrite_source"] = trace.get("page_overwrite_source")
-    rows["holdings_fingerprint"] = trace.get("holdings_fingerprint")
+    fp, _ = _holdings_fingerprint_and_count(st)
+    rows["holdings_fingerprint"] = trace.get("holdings_fingerprint") or fp
     return rows
 
 

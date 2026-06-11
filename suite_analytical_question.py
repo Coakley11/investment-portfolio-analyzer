@@ -682,6 +682,36 @@ def build_submit_context(
     return ctx
 
 
+def _record_investment_ami_launch_trace(
+    session_state: dict[str, Any],
+    *,
+    entrypoint: str = "unknown",
+    button_clicked: bool = False,
+    build_source_state_called: bool = False,
+    source_state: dict[str, Any] | None = None,
+    action_url: str = "",
+) -> None:
+    """Investment-only AMI launch diagnostics (Test E; no cross-app behavior change)."""
+    try:
+        from investment_persistence_trace import record_investment_ami_launch
+
+        class _StShim:
+            pass
+
+        shim = _StShim()
+        shim.session_state = session_state
+        record_investment_ami_launch(
+            shim,
+            entrypoint=entrypoint,
+            button_clicked=button_clicked,
+            build_source_state_called=build_source_state_called,
+            source_state=source_state,
+            action_url=action_url,
+        )
+    except Exception:
+        log.debug("Investment AMI launch trace skipped", exc_info=True)
+
+
 def render_analyze_with_applied_math_sidebar(
     st: Any,
     *,
@@ -731,6 +761,14 @@ def render_analyze_with_applied_math_sidebar(
         type="primary",
     ):
         q = str(question or "").strip()
+        is_investment = str(source_app or "").strip().lower() == "investment"
+        entrypoint = "sidebar_analyze_with_applied_math"
+        if is_investment:
+            _record_investment_ami_launch_trace(
+                ss,
+                entrypoint=entrypoint,
+                button_clicked=True,
+            )
         if not q:
             st.sidebar.warning("Enter a question first.")
         else:
@@ -742,11 +780,21 @@ def render_analyze_with_applied_math_sidebar(
                 context_extra=context,
             )
             submit_source_state: dict[str, Any] | None = None
+            build_source_state_called = False
             if source_state_builder is not None:
                 try:
                     submit_source_state = source_state_builder()
+                    build_source_state_called = True
                 except Exception:
                     log.exception("AMI source_state builder failed for %s (%s)", source_app, source_page)
+            if is_investment and not submit_source_state:
+                try:
+                    from applied_math_context import ensure_investment_source_state
+
+                    submit_source_state = ensure_investment_source_state(source_page, ss)
+                    build_source_state_called = True
+                except Exception:
+                    log.exception("Investment AMI source_state fallback failed")
             result = submit_analytical_question(
                 source_app=source_app,
                 source_page=source_page,
@@ -758,6 +806,15 @@ def render_analyze_with_applied_math_sidebar(
             )
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
+            if is_investment:
+                _record_investment_ami_launch_trace(
+                    ss,
+                    entrypoint=entrypoint,
+                    button_clicked=True,
+                    build_source_state_called=build_source_state_called,
+                    source_state=result.get("source_state") or submit_source_state,
+                    action_url=str(result.get("action_url") or ""),
+                )
             if result.get("duplicate"):
                 st.sidebar.info(
                     "That question was already sent recently. Open Command Center to continue in Applied Intelligence."

@@ -1002,26 +1002,15 @@ def render_sidebar() -> dict:
         from suite_analytical_question import render_applied_math_sidebar_entry
 
         try:
-            from applied_math_context import build_investment_applied_math_context, build_source_state
+            from applied_math_context import (
+                build_investment_applied_math_context,
+                ensure_investment_source_state,
+            )
         except Exception:
             build_investment_applied_math_context = None  # type: ignore[misc, assignment]
-            build_source_state = None  # type: ignore[misc, assignment]
+            ensure_investment_source_state = None  # type: ignore[misc, assignment]
 
         _inv_tab = str(st.session_state.get("investment_active_tab") or "Overview")
-
-        def _record_investment_ami_launch() -> None:
-            try:
-                from investment_persistence_trace import record_ami_launch_trace
-
-                result = st.session_state.get("_last_analytical_question")
-                if isinstance(result, dict):
-                    record_ami_launch_trace(
-                        st,
-                        source_state=result.get("source_state"),
-                        action_url=str(result.get("action_url") or ""),
-                    )
-            except Exception:
-                pass
 
         render_applied_math_sidebar_entry(
             st,
@@ -1035,11 +1024,10 @@ def render_sidebar() -> dict:
                 else None
             ),
             source_state_builder=(
-                lambda: build_source_state(_inv_tab, st.session_state)
-                if build_source_state
+                lambda: ensure_investment_source_state(_inv_tab, st.session_state)
+                if ensure_investment_source_state
                 else None
             ),
-            on_after_send=_record_investment_ami_launch,
         )
     except Exception as _ami_sidebar_exc:
         st.session_state["_pr1_ami_sidebar_error"] = str(_ami_sidebar_exc)

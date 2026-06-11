@@ -194,8 +194,34 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     return ctx
 
 
+_INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (
+    "overview_subtab",
+    "mc_assumption_mode",
+    "health_run_optimizer",
+    "health_bond_min",
+    "frontier_points",
+    "macro_scenario_id",
+    "macro_scenario_mode",
+    "health_rate_env",
+    "health_inflation",
+    "health_recession",
+    "health_valuation",
+    "health_regime",
+)
+
+_INVESTMENT_SOURCE_GLOBAL_KEYS: tuple[str, ...] = (
+    "experience",
+    "_suite_persisted_experience",
+    "sidebar_portfolio_value",
+    "analysis_start_date",
+    "analysis_end_date",
+    "risk_free_pct",
+    "portfolio_preset",
+)
+
+
 def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, Any]:
-    """Serializable snapshot for Return Insight page restore."""
+    """Serializable snapshot for AMI launch + return restore (tab, portfolio, globals, filters)."""
     from datetime import datetime, timezone
 
     tab = str(session_state.get("investment_active_tab") or page or "").strip()
@@ -204,26 +230,49 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
     filter_params: dict[str, Any] = {}
 
     objective = str(
-        session_state.get("portfolio_objective") or session_state.get("investment_objective") or ""
+        session_state.get("health_objective")
+        or session_state.get("portfolio_objective")
+        or session_state.get("investment_objective")
+        or ""
     ).strip()
     if objective:
         entity_params["objective"] = objective
-        widget_params["portfolio_objective"] = objective
+        widget_params["health_objective"] = objective
+
+    for key in _INVESTMENT_SOURCE_GLOBAL_KEYS:
+        val = session_state.get(key)
+        if val is not None and val != "":
+            filter_params[key] = val
 
     exp = session_state.get("investment_experience") or session_state.get("experience_mode")
     if exp:
         filter_params["experience_mode"] = str(exp)
+
+    for key in _INVESTMENT_SOURCE_FILTER_KEYS:
+        val = session_state.get(key)
+        if val is not None and val != "":
+            filter_params[key] = val
+
+    preset = session_state.get("preset_applied")
+    if preset:
+        entity_params["preset_applied"] = str(preset)
+    if session_state.get("portfolio_built"):
+        entity_params["portfolio_built"] = True
 
     df = session_state.get("holdings_df")
     tickers: list[str] = []
     try:
         import pandas as pd
 
+        from components.beginner_navigation import _holdings_fingerprint
+
         if isinstance(df, pd.DataFrame) and not df.empty and "Ticker" in df.columns:
             tickers = [str(t).strip() for t in df["Ticker"].dropna().tolist() if str(t).strip()]
             if tickers:
                 entity_params["holdings"] = tickers[:12]
-                entity_params["holdings_fingerprint"] = "|".join(tickers[:12])
+            hfp = str(_holdings_fingerprint(df)).strip()
+            if hfp:
+                entity_params["holdings_fingerprint"] = hfp
     except Exception:
         pass
 
@@ -232,6 +281,9 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
         score = getattr(hr, "score", None) if not isinstance(hr, dict) else hr.get("score")
         if score is not None:
             entity_params["health_score"] = score
+    summary = session_state.get("health_summary")
+    if isinstance(summary, dict) and summary.get("score") is not None:
+        entity_params.setdefault("health_score", summary.get("score"))
 
     return {
         "source_app": "investment",
@@ -242,6 +294,26 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
         "filter_params": filter_params,
         "chart_params": {},
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def ensure_investment_source_state(page: str, session_state: dict[str, Any]) -> dict[str, Any]:
+    """Build source_state for AMI launch; always returns an investment snapshot dict."""
+    try:
+        state = build_source_state(page, session_state)
+        if isinstance(state, dict) and state.get("source_app"):
+            return state
+    except Exception:
+        pass
+    tab = str(session_state.get("investment_active_tab") or page or "").strip()
+    return {
+        "source_app": "investment",
+        "source_page": tab,
+        "page_params": {"page": tab, "tab": tab},
+        "entity_params": {"tab": tab, "page": tab},
+        "widget_params": {},
+        "filter_params": {},
+        "chart_params": {},
     }
 
 
