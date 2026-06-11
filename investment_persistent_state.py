@@ -23,9 +23,13 @@ PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-production-cleanup-v1"
 _MODE_SWITCH_LOG_KEY = "_suite_inv_mode_switch_log"
 _AUTOSAVE_LOG_KEY = "_suite_inv_autosave_log"
 _TAB_CHANGE_LOG_KEY = "_suite_inv_tab_change_log"
+_GLOBAL_SETTINGS_LOG_KEY = "_suite_inv_global_settings_log"
 _PENDING_EXPERIENCE_KEY = "_suite_inv_pending_experience_mode"
 _LAST_PERSISTED_TAB_KEY = "_suite_inv_last_persisted_tab"
+_LAST_PERSISTED_GLOBAL_KEY = "_suite_inv_last_persisted_global"
 _TAB_PAGE_DIRTY_KEY = "_suite_inv_tab_page_dirty"
+_GLOBAL_PAGE_DIRTY_KEY = "_suite_inv_global_page_dirty"
+_PORTFOLIO_VALUE_USER_SET_KEY = "_suite_inv_portfolio_value_user_set"
 _MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
@@ -367,6 +371,127 @@ def sync_investment_active_tab_after_widget(st: Any) -> None:
     prev = _last_persisted_tab(ss)
     if prev != str(tab).strip():
         notify_investment_tab_change(st, str(tab), source="section_radio")
+
+
+def _normalize_global_settings_value(key: str, val: Any) -> Any:
+    if isinstance(val, dt.date):
+        return val.isoformat()
+    if key == "sidebar_portfolio_value" and val is not None:
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return val
+    if key == "risk_free_pct" and val is not None:
+        try:
+            return round(float(val), 4)
+        except (TypeError, ValueError):
+            return val
+    return copy.deepcopy(val) if val is not None else None
+
+
+def global_settings_payload_from_session(ss: Any) -> dict[str, Any]:
+    """Normalized global settings snapshot for dirty detection and save traces."""
+    start = ss.get("analysis_start_date")
+    end = ss.get("analysis_end_date")
+    return {
+        "experience": ss.get(EXPERIENCE_KEY),
+        "_suite_persisted_experience": ss.get(PERSISTED_EXPERIENCE_KEY),
+        "sidebar_portfolio_value": _normalize_global_settings_value(
+            "sidebar_portfolio_value", ss.get("sidebar_portfolio_value")
+        ),
+        "analysis_start_date": _normalize_global_settings_value("analysis_start_date", start),
+        "analysis_end_date": _normalize_global_settings_value("analysis_end_date", end),
+        "risk_free_pct": _normalize_global_settings_value("risk_free_pct", ss.get("risk_free_pct")),
+        "portfolio_preset": ss.get("portfolio_preset"),
+    }
+
+
+def seed_last_persisted_global_from_state(st: Any, state: dict[str, Any] | None) -> None:
+    if not isinstance(state, dict):
+        return
+    ss = st.session_state
+    payload = {
+        "experience": state.get(EXPERIENCE_KEY),
+        "_suite_persisted_experience": state.get(PERSISTED_EXPERIENCE_KEY),
+        "sidebar_portfolio_value": _normalize_global_settings_value(
+            "sidebar_portfolio_value", state.get("sidebar_portfolio_value")
+        ),
+        "analysis_start_date": state.get("analysis_start_date"),
+        "analysis_end_date": state.get("analysis_end_date"),
+        "risk_free_pct": _normalize_global_settings_value("risk_free_pct", state.get("risk_free_pct")),
+        "portfolio_preset": state.get("portfolio_preset"),
+    }
+    ss[_LAST_PERSISTED_GLOBAL_KEY] = payload
+
+
+def ensure_sidebar_portfolio_value_default(st: Any) -> None:
+    ss = st.session_state
+    if "sidebar_portfolio_value" not in ss:
+        ss["sidebar_portfolio_value"] = PERSIST_FIELD_DEFAULTS["sidebar_portfolio_value"]
+
+
+def ensure_risk_free_pct_default(st: Any) -> None:
+    ss = st.session_state
+    if "risk_free_pct" not in ss:
+        ss["risk_free_pct"] = PERSIST_FIELD_DEFAULTS["risk_free_pct"]
+
+
+def notify_global_settings_change(
+    st: Any,
+    *,
+    source: str = "unknown",
+    trigger_save: bool = True,
+    overwrite_source: str | None = None,
+) -> bool:
+    """
+    Device A save path for Test B globals — immediate ``global_setting_change`` autosave.
+    """
+    ss = st.session_state
+    current = global_settings_payload_from_session(ss)
+    prev_raw = ss.get(_LAST_PERSISTED_GLOBAL_KEY)
+    prev = dict(prev_raw) if isinstance(prev_raw, dict) else {}
+    changed = current != prev
+    switch_evt: dict[str, Any] = {
+        "at": _utc_now_iso(),
+        "source": source,
+        "prev_global": prev,
+        "new_global": current,
+        "global_change_detected": changed,
+        "global_setting_overwrite_source": overwrite_source or source,
+    }
+    if not changed:
+        switch_evt["autosave_triggered"] = False
+        switch_evt["autosave_skip_reason"] = "prev_equals_global"
+        _append_diag_log(st, _GLOBAL_SETTINGS_LOG_KEY, switch_evt)
+        ss["_suite_inv_debug_last_global_change"] = switch_evt
+        return False
+
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    ss[dirty_key] = True
+    ss[_GLOBAL_PAGE_DIRTY_KEY] = True
+    switch_evt["local_dirty_set"] = True
+    _append_diag_log(st, _GLOBAL_SETTINGS_LOG_KEY, switch_evt)
+    ss["_suite_inv_debug_last_global_change"] = switch_evt
+
+    if trigger_save:
+        switch_evt["autosave_triggered"] = True
+        autosave_investment_state(st, trigger="global_setting_change")
+        last = ss.get("_suite_inv_debug_last_autosave_event")
+        if isinstance(last, dict):
+            switch_evt["autosave_outcome"] = last.get("outcome")
+            switch_evt["save_global_portfolio_value"] = last.get("payload_global_portfolio_value")
+            switch_evt["cloud_readback_portfolio_value"] = last.get("cloud_readback_portfolio_value")
+            switch_evt["save_risk_free_pct"] = last.get("payload_risk_free_pct")
+            switch_evt["cloud_readback_risk_free_pct"] = last.get("cloud_readback_risk_free_pct")
+        ss["_suite_inv_debug_last_global_change"] = switch_evt
+    else:
+        switch_evt["autosave_triggered"] = False
+    return True
+
+
+def sync_global_settings_after_widgets(st: Any) -> None:
+    """After sidebar global widgets render, autosave when live values drift from last persisted."""
+    notify_global_settings_change(st, source="sidebar_widgets")
 
 
 def ensure_analysis_date_defaults(st: Any) -> None:
@@ -712,6 +837,7 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     restored_tab = state.get(INVESTMENT_ACTIVE_TAB_KEY) or state.get(_LEGACY_TAB_KEY)
     if restored_tab is not None and str(restored_tab).strip():
         st.session_state[_LAST_PERSISTED_TAB_KEY] = str(restored_tab).strip()
+    seed_last_persisted_global_from_state(st, state)
 
 
 def _record_session_sync_debug(st: Any) -> None:
@@ -958,6 +1084,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         event["blob_experience"] = state.get(EXPERIENCE_KEY)
         event["blob_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
         event["blob_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)
+        event["payload_global_portfolio_value"] = state.get("sidebar_portfolio_value")
+        event["payload_risk_free_pct"] = state.get("risk_free_pct")
 
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
@@ -969,7 +1097,11 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         if restored_fp and fp != restored_fp:
             ss[dirty_key] = True
 
-        if ss.get(fp_key) == fp and trigger not in ("mode_change", "tab_change"):
+        if ss.get(fp_key) == fp and trigger not in (
+            "mode_change",
+            "tab_change",
+            "global_setting_change",
+        ):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
             ss["_suite_inv_debug_last_autosave_event"] = event
@@ -988,6 +1120,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 event["cloud_readback_experience"] = cloud_state.get(EXPERIENCE_KEY)
                 event["cloud_readback_persisted"] = cloud_state.get(PERSISTED_EXPERIENCE_KEY)
                 event["cloud_readback_tab"] = cloud_state.get(INVESTMENT_ACTIVE_TAB_KEY)
+                event["cloud_readback_portfolio_value"] = cloud_state.get("sidebar_portfolio_value")
+                event["cloud_readback_risk_free_pct"] = cloud_state.get("risk_free_pct")
             event["cloud_readback_ts"] = cloud_ts
         except Exception as exc:
             event["cloud_save_error"] = str(exc)
@@ -1012,9 +1146,12 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 and saved_cloud
                 and readback_tab == attempt_tab
             )
+            global_saved_to_cloud = trigger == "global_setting_change" and saved_cloud
             if trigger == "mode_change" and not mode_saved_to_cloud:
                 ss[dirty_key] = True
             elif trigger == "tab_change" and not tab_saved_to_cloud:
+                ss[dirty_key] = True
+            elif trigger == "global_setting_change" and not global_saved_to_cloud:
                 ss[dirty_key] = True
             else:
                 ss[dirty_key] = False
@@ -1023,6 +1160,9 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 ss.pop(_TAB_PAGE_DIRTY_KEY, None)
             elif (saved_disk or saved_cloud) and attempt_tab:
                 ss[_LAST_PERSISTED_TAB_KEY] = str(attempt_tab)
+            if global_saved_to_cloud or (saved_disk or saved_cloud):
+                seed_last_persisted_global_from_state(st, state)
+                ss.pop(_GLOBAL_PAGE_DIRTY_KEY, None)
             if trigger == "mode_change" and (saved_disk or saved_cloud):
                 ss.pop(_PENDING_EXPERIENCE_KEY, None)
                 if readback_exp in EXPERIENCE_OPTIONS:

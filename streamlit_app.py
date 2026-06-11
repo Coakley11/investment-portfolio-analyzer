@@ -1076,8 +1076,18 @@ def render_sidebar() -> dict:
     st.sidebar.divider()
     st.sidebar.markdown("### Investment amount")
     st.sidebar.caption("Used for dollar amounts across all tables and suggestions.")
-    if "sidebar_portfolio_value" not in st.session_state:
-        st.session_state.sidebar_portfolio_value = 100_000
+    from investment_persistent_state import (
+        _PORTFOLIO_VALUE_USER_SET_KEY,
+        ensure_sidebar_portfolio_value_default,
+        notify_global_settings_change,
+    )
+
+    ensure_sidebar_portfolio_value_default(st)
+
+    def _on_portfolio_value_widget_change() -> None:
+        st.session_state[_PORTFOLIO_VALUE_USER_SET_KEY] = True
+        notify_global_settings_change(st, source="portfolio_value_widget")
+
     initial_value = st.sidebar.number_input(
         "Portfolio value ($)",
         min_value=1_000,
@@ -1085,6 +1095,7 @@ def render_sidebar() -> dict:
         step=5_000,
         help="Total investable amount for allocation dollar estimates.",
         key="sidebar_portfolio_value",
+        on_change=_on_portfolio_value_widget_change,
     )
 
     st.sidebar.divider()
@@ -1140,11 +1151,25 @@ def render_sidebar() -> dict:
     render_historical_window_summary(start=start_date, end=end_date)
     render_historical_period_sidebar_help(beginner=beginner)
 
-    risk_free = st.sidebar.slider(
-        "Risk-free rate (%)", 0.0, 10.0, 4.0, 0.25,
+    from investment_persistent_state import ensure_risk_free_pct_default
+
+    ensure_risk_free_pct_default(st)
+
+    def _on_risk_free_widget_change() -> None:
+        notify_global_settings_change(st, source="risk_free_widget")
+
+    st.sidebar.slider(
+        "Risk-free rate (%)",
+        0.0,
+        10.0,
+        4.0,
+        0.25,
         help="Return on very safe assets like T-Bills. Used in risk/reward scores." if beginner
         else "Risk-free rate for Sharpe/Sortino.",
-    ) / 100.0
+        key="risk_free_pct",
+        on_change=_on_risk_free_widget_change,
+    )
+    risk_free = float(st.session_state.get("risk_free_pct", 4.0)) / 100.0
 
     st.sidebar.divider()
     st.sidebar.markdown("### Quick-add asset")
@@ -1169,6 +1194,12 @@ def render_sidebar() -> dict:
         )
 
     if _PERSISTENCE_OK:
+        try:
+            from investment_persistent_state import sync_global_settings_after_widgets
+
+            sync_global_settings_after_widgets(st)
+        except Exception:
+            pass
         try:
             from investment_persistence_trace import (
                 ensure_pr1_trace_snapshot,

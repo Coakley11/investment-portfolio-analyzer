@@ -97,6 +97,13 @@ SAVE_TRACE_LABELS: tuple[str, ...] = (
     "last_save_cloud",
     "saved_tab",
     "cloud_readback_tab",
+    "save_global_portfolio_value",
+    "payload_global_portfolio_value",
+    "cloud_readback_portfolio_value",
+    "save_risk_free_pct",
+    "payload_risk_free_pct",
+    "cloud_readback_risk_free_pct",
+    "global_setting_overwrite_source",
     "saved_experience",
     "saved_portfolio_value",
     "saved_holdings_fingerprint",
@@ -661,6 +668,18 @@ def record_save_trace(
 
     readback_tab = evt.get("cloud_readback_tab")
     saved_tab = blob_tab or evt.get("blob_tab") or readback_tab
+    payload_pv = evt.get("payload_global_portfolio_value") or blob_pv
+    readback_pv = evt.get("cloud_readback_portfolio_value")
+    payload_rf = evt.get("payload_risk_free_pct")
+    if payload_rf is None and isinstance(blob, dict):
+        payload_rf = blob.get("risk_free_pct")
+    readback_rf = evt.get("cloud_readback_risk_free_pct")
+    global_evt = ss.get("_suite_inv_debug_last_global_change")
+    overwrite_source = (
+        global_evt.get("global_setting_overwrite_source")
+        if isinstance(global_evt, dict)
+        else None
+    )
     update_trace(
         st,
         autosave_ran=True,
@@ -671,8 +690,15 @@ def record_save_trace(
         last_save_cloud=evt.get("cloud_readback_ts") or ss.get("_suite_persist_last_save_at"),
         saved_tab=saved_tab,
         cloud_readback_tab=readback_tab,
+        save_global_portfolio_value=payload_pv,
+        payload_global_portfolio_value=payload_pv,
+        cloud_readback_portfolio_value=readback_pv,
+        save_risk_free_pct=payload_rf,
+        payload_risk_free_pct=payload_rf,
+        cloud_readback_risk_free_pct=readback_rf,
+        global_setting_overwrite_source=overwrite_source or evt.get("trigger"),
         saved_experience=evt.get("blob_experience"),
-        saved_portfolio_value=blob_pv or evt.get("blob_portfolio_value"),
+        saved_portfolio_value=payload_pv or blob_pv or evt.get("blob_portfolio_value"),
         saved_holdings_fingerprint=blob_fp or evt.get("blob_holdings_fingerprint"),
     )
 

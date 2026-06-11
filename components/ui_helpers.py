@@ -86,12 +86,16 @@ TECHNICAL_METRIC_HELP = {
 PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY = "pending_sidebar_portfolio_value"
 
 
-def apply_pending_sidebar_portfolio_value() -> None:
+def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> None:
     """Apply a deferred portfolio value update before the sidebar number_input is drawn."""
-    if PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY in st.session_state:
-        st.session_state["sidebar_portfolio_value"] = st.session_state.pop(
-            PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY
-        )
+    if PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY not in st.session_state:
+        return
+    if respect_user_edit and st.session_state.get("_suite_inv_portfolio_value_user_set"):
+        st.session_state.pop(PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY, None)
+        return
+    st.session_state["sidebar_portfolio_value"] = st.session_state.pop(
+        PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY
+    )
 
 
 def request_sidebar_portfolio_value(value: int | float) -> None:

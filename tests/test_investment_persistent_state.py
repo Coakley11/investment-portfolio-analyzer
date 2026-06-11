@@ -342,6 +342,75 @@ def test_autosave_tab_change_writes_tab_and_readback(monkeypatch):
     assert st.session_state[ips._LAST_PERSISTED_TAB_KEY] == BEGINNER_TAB_LABELS[2]
 
 
+def test_build_state_includes_risk_free_pct_from_session():
+    st = _FakeSt()
+    st.session_state["risk_free_pct"] = 3.5
+    state = ips.build_investment_disk_state(st)
+    assert state["risk_free_pct"] == 3.5
+
+
+def test_notify_global_settings_change_triggers_autosave(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["sidebar_portfolio_value"] = 100_000
+    st.session_state["risk_free_pct"] = 4.0
+    ips.seed_last_persisted_global_from_state(
+        st,
+        ips.build_investment_disk_state(st),
+    )
+    st.session_state["sidebar_portfolio_value"] = 250_000
+    st.session_state["risk_free_pct"] = 3.5
+    triggers: list[str] = []
+
+    monkeypatch.setattr(
+        ips,
+        "autosave_investment_state",
+        lambda *a, **k: triggers.append(k.get("trigger", "unknown")),
+    )
+    changed = ips.notify_global_settings_change(st, source="test")
+    assert changed is True
+    assert triggers == ["global_setting_change"]
+    assert st.session_state["_suite_persist_local_dirty::investment"] is True
+
+
+def test_autosave_global_setting_change_writes_portfolio_and_risk_free(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["sidebar_portfolio_value"] = 250_000
+    st.session_state["risk_free_pct"] = 3.5
+    st.session_state["analysis_start_date"] = dt.date(2020, 1, 1)
+    st.session_state["analysis_end_date"] = dt.date(2025, 12, 31)
+
+    import copy
+
+    saved_payloads: list[dict] = []
+
+    def _fake_save_disk(app_id, payload):
+        saved_payloads.append(copy.deepcopy(payload))
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved_payloads.append(copy.deepcopy(payload))
+
+    def _fake_load_cloud(app_id):
+        return copy.deepcopy(saved_payloads[-1]), "2026-06-11T14:00:00Z"
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    ips.autosave_investment_state(st, trigger="global_setting_change")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["outcome"] != "skipped_fp_unchanged"
+    assert event["payload_global_portfolio_value"] == 250_000
+    assert event["payload_risk_free_pct"] == 3.5
+    assert event["cloud_readback_portfolio_value"] == 250_000
+    assert event["cloud_readback_risk_free_pct"] == 3.5
+
+
 def test_apply_state_sets_last_persisted_tab():
     from components.beginner_navigation import BEGINNER_TAB_LABELS
 
