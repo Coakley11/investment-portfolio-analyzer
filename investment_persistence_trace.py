@@ -175,16 +175,29 @@ TEST_E_TRACE_LABELS: tuple[str, ...] = AMI_RETURN_TRACE_LABELS + (
 )
 
 
-def init_developer_mode_from_query(st: Any) -> None:
-    """Enable diagnostics when ``?dev=1`` is present (one-step trace panel access)."""
+def _raw_dev_query_param(st: Any) -> str:
     try:
         raw = st.query_params.get("dev")
         if isinstance(raw, list):
             raw = raw[0] if raw else ""
-        if str(raw or "").strip().lower() in {"1", "true", "yes", "on"}:
-            st.session_state["investment_show_dev_diagnostics"] = True
+        return str(raw or "")
     except Exception:
-        pass
+        return ""
+
+
+def init_developer_mode_from_query(st: Any) -> None:
+    """Enable diagnostics when ``?dev=1`` is present (one-step trace panel access)."""
+    try:
+        st.session_state["_pr1_init_developer_mode_ran"] = True
+        raw = _raw_dev_query_param(st)
+        st.session_state["_pr1_dev_query_raw"] = raw
+        if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
+            st.session_state["investment_show_dev_diagnostics"] = True
+            st.session_state["_pr1_dev_query_matched"] = True
+        else:
+            st.session_state["_pr1_dev_query_matched"] = False
+    except Exception as exc:
+        st.session_state["_pr1_init_developer_mode_error"] = str(exc)
 
 
 def investment_trace_enabled(st: Any) -> bool:
@@ -646,6 +659,7 @@ def record_ami_apply_trace(
 
 def snapshot_full_trace(st: Any, *, persistence_ok: bool | None = None) -> dict[str, Any]:
     """Refresh all trace sections for sidebar render."""
+    st.session_state["_pr1_snapshot_full_trace_ran"] = True
     snapshot_deploy_info(st, persistence_ok=persistence_ok)
     snapshot_tab_trace(st)
     snapshot_workspace_restore_trace(st)
@@ -779,8 +793,56 @@ def _render_trace_section(st: Any, title: str, labels: tuple[str, ...], rows: di
         st.text(f"{label}: {_trace_display(rows.get(label))}")
 
 
+def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
+    """Temporary PR1 deploy/gate diagnostics — always visible until baseline traces captured."""
+    ss = st.session_state
+    dev_raw = _raw_dev_query_param(st)
+    dev_access = None
+    dev_diag = None
+    trace_enabled = None
+    try:
+        from investment_workflow import developer_access_available, developer_diagnostics_enabled
+
+        dev_access = bool(developer_access_available(st))
+        dev_diag = bool(developer_diagnostics_enabled(st))
+    except Exception as exc:
+        dev_access = f"import error: {exc}"
+        dev_diag = f"import error: {exc}"
+    try:
+        trace_enabled = bool(investment_trace_enabled(st))
+    except Exception as exc:
+        trace_enabled = f"error: {exc}"
+
+    with st.sidebar.expander("PR1 deploy verification (temp)", expanded=True):
+        st.caption(f"**Deploy marker:** `{INVESTMENT_PERSIST_DEPLOY_VERSION}`")
+        try:
+            st.caption(f"**Git:** `{_git_head_short()}` · `{_git_branch()}`")
+        except Exception:
+            st.caption("**Git:** unavailable")
+        st.markdown("**Gate checks**")
+        st.text(f"persistence_ok: {persistence_ok}")
+        st.text(f"dev query raw: {dev_raw!r}")
+        st.text(f"init_developer_mode_from_query ran: {ss.get('_pr1_init_developer_mode_ran', False)}")
+        st.text(f"dev query matched at init: {ss.get('_pr1_dev_query_matched', False)}")
+        st.text(f"investment_show_dev_diagnostics: {ss.get('investment_show_dev_diagnostics', False)}")
+        st.text(f"developer_access_available: {dev_access}")
+        st.text(f"developer_diagnostics_enabled: {dev_diag}")
+        st.text(f"investment_trace_enabled: {trace_enabled}")
+        st.markdown("**Call flags**")
+        st.text(f"render_persistence_trace_sidebar called: {ss.get('_pr1_trace_sidebar_called', False)}")
+        st.text(f"snapshot_full_trace ran: {ss.get('_pr1_snapshot_full_trace_ran', False)}")
+        init_err = ss.get("_pr1_init_developer_mode_error")
+        if init_err:
+            st.warning(f"init_developer_mode_from_query error: {init_err}")
+        persist_import = ss.get("_suite_persist_import_error")
+        if persist_import:
+            st.warning(f"Persistence import error: {persist_import}")
+
+
 def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
+    st.session_state["_pr1_trace_sidebar_called"] = True
     if not investment_trace_enabled(st):
+        st.session_state["_pr1_trace_sidebar_skipped"] = "investment_trace_enabled=False"
         return
 
     trace = snapshot_full_trace(st, persistence_ok=persistence_ok)

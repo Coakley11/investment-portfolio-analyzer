@@ -964,6 +964,14 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 def render_sidebar() -> dict:
     apply_pending_sidebar_portfolio_value()
+    # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
+    st.sidebar.caption("**PR1 probe:** `investment-persistence-trace-pr1-v1` · commit `3b81e3d`")
+    try:
+        from investment_persistence_trace import render_pr1_verification_sidebar
+
+        render_pr1_verification_sidebar(st, persistence_ok=_PERSISTENCE_OK)
+    except Exception as _pr1_verify_exc:
+        st.sidebar.warning(f"PR1 verification panel failed: {_pr1_verify_exc}")
     try:
         from suite_command_center_link import render_command_center_sidebar_link
 
