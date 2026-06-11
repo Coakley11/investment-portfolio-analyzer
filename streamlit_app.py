@@ -106,6 +106,13 @@ st.set_page_config(
 )
 
 try:
+    from investment_persistence_trace import init_developer_mode_from_query
+
+    init_developer_mode_from_query(st)
+except Exception:
+    pass
+
+try:
     from suite_resume_launch import apply_suite_resume_launch
 
     apply_suite_resume_launch(st, "investment")
@@ -1008,6 +1015,12 @@ def render_sidebar() -> dict:
 
                 if developer_diagnostics_enabled(st):
                     render_persistence_debug_sidebar(st)
+                try:
+                    from investment_persistence_trace import render_persistence_trace_sidebar
+
+                    render_persistence_trace_sidebar(st, persistence_ok=_PERSISTENCE_OK)
+                except Exception:
+                    pass
         except ImportError:
             pass
     st.sidebar.markdown("### Experience")
@@ -3090,6 +3103,12 @@ try:
     if _PERSISTENCE_OK and not pp.skip_background_persistence(st):
         autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
+    try:
+        from investment_persistence_trace import snapshot_full_trace
+
+        snapshot_full_trace(st, persistence_ok=_PERSISTENCE_OK)
+    except Exception:
+        pass
 except Exception:
     pass
 

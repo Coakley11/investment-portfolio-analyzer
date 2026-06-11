@@ -303,7 +303,20 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
             from applied_math_context import apply_source_state_to_session
 
             apply_source_state_to_session(ss, source_state)
+            try:
+                from investment_persistence_trace import record_ami_apply_trace
+
+                record_ami_apply_trace(st, source_state=source_state, success=True)
+            except Exception:
+                pass
     except Exception as exc:
+        if app == "investment":
+            try:
+                from investment_persistence_trace import record_ami_apply_trace
+
+                record_ami_apply_trace(st, source_state=source_state, success=False, error=str(exc))
+            except Exception:
+                pass
         log.warning("apply_return_source_state failed for %s: %s", app, exc)
 
 

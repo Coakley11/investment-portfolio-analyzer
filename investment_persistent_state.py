@@ -773,6 +773,12 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_mode_after_restore"] = current_experience_mode(st)
     _record_session_sync_debug(st)
     apply_suite_investment_resume(st)
+    try:
+        from investment_persistence_trace import record_restore_trace
+
+        record_restore_trace(st)
+    except Exception:
+        pass
     return restored
 
 
@@ -861,6 +867,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         "persisted_at_autosave": ss.get(PERSISTED_EXPERIENCE_KEY),
     }
 
+    state: dict[str, Any] | None = None
     try:
         state = build_investment_disk_state(st)
         event["blob_experience"] = state.get(EXPERIENCE_KEY)
@@ -949,6 +956,12 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
 
     _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
     ss["_suite_inv_debug_last_autosave_event"] = event
+    try:
+        from investment_persistence_trace import record_save_trace
+
+        record_save_trace(st, event=event, state=state)
+    except Exception:
+        pass
 
 
 def finalize_persistence_debug(st: Any) -> None:
