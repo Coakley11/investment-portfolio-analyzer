@@ -17,6 +17,8 @@ TRADING_DAYS = 252
 
 # Curated presets for bonds, cash, REITs, and dividend ETFs
 ASSET_PRESETS: dict[str, dict[str, str]] = {
+    "Total US Stock": {"ticker": "VTI", "category": "Equity"},
+    "International Stock": {"ticker": "VXUS", "category": "Equity"},
     "US Total Bond": {"ticker": "BND", "category": "Bonds"},
     "Long Treasury": {"ticker": "TLT", "category": "Bonds"},
     "Aggregate Bond": {"ticker": "AGG", "category": "Bonds"},
@@ -26,6 +28,16 @@ ASSET_PRESETS: dict[str, dict[str, str]] = {
     "Dividend ETF": {"ticker": "SCHD", "category": "Dividend ETF"},
     "High Dividend": {"ticker": "VYM", "category": "Dividend ETF"},
 }
+
+# Beginner quick-add row on the Portfolio tab (ticker order: VTI, BND, VYM, SCHD, VXUS, VNQ)
+COMMON_ETF_QUICK_ADD: tuple[str, ...] = (
+    "Total US Stock",
+    "US Total Bond",
+    "High Dividend",
+    "Dividend ETF",
+    "International Stock",
+    "REIT Index",
+)
 
 DEFAULT_HOLDINGS = [
     {"Ticker": "VTI", "Weight (%)": 40.0, "Asset Type": "Equity"},

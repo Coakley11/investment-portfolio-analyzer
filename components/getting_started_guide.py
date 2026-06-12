@@ -257,10 +257,10 @@ def render_getting_started_guide(*, beginner_mode: bool = True) -> None:
         st.markdown("#### Step 3 — Analyze your portfolio")
         st.markdown(
             "1. Open **💼 Portfolio Inputs** → confirm **How Much to Invest** and your mix.\n"
-            "2. Open **🏠 Overview** → click **Analyze Portfolio**.\n"
+            "2. Open **④ Analyze Portfolio** → click **Run Portfolio Analysis**.\n"
             "3. The app downloads prices and prepares your health score."
         )
-        if st.button("Analyze Portfolio Now", type="primary", key="guide_analyze_cta"):
+        if st.button("Run Portfolio Analysis Now", type="primary", key="guide_analyze_cta"):
             st.session_state.request_portfolio_analyze = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             st.rerun()

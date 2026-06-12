@@ -77,6 +77,7 @@ from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
     APP_DISCLAIMER as UI_DISCLAIMER,
+    RUN_PORTFOLIO_ANALYSIS_LABEL,
     HISTORICAL_LOOKBACK_DATE_HELP,
     HISTORICAL_PERIOD_DATE_INPUT_HELP,
     HISTORICAL_PERIOD_HELP_ADVANCED,
@@ -1504,7 +1505,7 @@ def render_overview_tab(
                 render_action_plan(stale.action_plan, score=stale.score, objective=st.session_state.get("health_objective", "balanced growth"), beginner=True)
             else:
                 render_action_plan_placeholder(True)
-            if st.button("Analyze Portfolio", type="primary", key="overview_analyze_btn"):
+            if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="overview_analyze_btn"):
                 st.session_state.run_health = True
                 st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
                 try:
@@ -1634,7 +1635,7 @@ def render_overview_tab(
             for item in explanation.portfolio_overview[:3]:
                 st.markdown(f"- {item}")
 
-    if st.button("Analyze Portfolio", type="primary", key="overview_analyze_btn"):
+    if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="overview_analyze_btn_adv"):
         st.session_state.run_health = True
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         try:
@@ -1973,6 +1974,17 @@ if _active_tab == _main_tab_labels[2]:
         "Enter fund tickers (like SPY) and what percent of your portfolio each one is." if beginner_mode
         else "Tickers and target weights. Normalized to 100% if needed.",
     )
+    try:
+        from components.portfolio_editor_guidance import (
+            render_common_etf_quick_add,
+            render_portfolio_editor_guidance,
+        )
+
+        render_portfolio_editor_guidance(beginner_mode=beginner_mode)
+        if render_common_etf_quick_add(apply_asset_preset, st):
+            st.rerun()
+    except ImportError:
+        pass
     edited = st.data_editor(
         st.session_state.holdings_df,
         num_rows="dynamic",
@@ -2035,8 +2047,8 @@ if _active_tab == _main_tab_labels[2]:
                 pass
             st.rerun()
         st.caption(
-            "Confirm when holdings and weights look right — this marks the Portfolio step complete "
-            "and unlocks analysis."
+            "**Step 2 of 4:** Confirm when holdings and weights look right — this marks **Portfolio** "
+            f"complete in the workflow bar and unlocks **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
         )
     except ImportError:
         pass
@@ -2302,11 +2314,16 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
     )
     if beginner_mode:
         section_header(
-            "Analyze Portfolio",
-            "Run a one-click checkup on this tab. Results stay tied to your current holdings in both modes.",
+            "Portfolio Analysis",
+            f"Click **{RUN_PORTFOLIO_ANALYSIS_LABEL}** to score your holdings. "
+            "Results stay tied to your current portfolio in both modes.",
+        )
+        st.caption(
+            "**Step 3 of 4:** After you confirm holdings on Portfolio, run analysis here, "
+            "then review the full score on **Portfolio Health**."
         )
         render_historical_metrics_banner()
-        if st.button("Analyze Portfolio", type="primary", key="beg_analyze", use_container_width=True):
+        if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="beg_analyze", use_container_width=True):
             st.session_state.run_health = True
             st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
             try:
@@ -2335,15 +2352,25 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
                 objective=st.session_state.get("health_objective", "balanced growth"),
             )
             sync_workflow_health_status(tickers, weights)
-            st.success("Analysis complete for your current portfolio. Open **⑤ Portfolio Health** for the full score and recommendations.")
+            try:
+                from investment_workflow import mark_health_reviewed_for_portfolio
+
+                mark_health_reviewed_for_portfolio(tickers, weights, st)
+            except ImportError:
+                pass
+            st.success(
+                "Analysis complete for your current portfolio. "
+                "Open **⑤ Portfolio Health** for the full score and recommendations."
+            )
             if st.session_state.pop("_workflow_analysis_just_completed", False):
                 st.rerun()
         else:
             pp.render_professional_empty(
                 st,
-                "Configure your holdings on the Portfolio Inputs tab, then run Analyze Portfolio "
-                "to generate risk metrics, correlation analysis, and performance charts.",
-                title="Run portfolio analysis",
+                f"Configure your holdings on the Portfolio Inputs tab, then click "
+                f"**{RUN_PORTFOLIO_ANALYSIS_LABEL}** to generate risk metrics, "
+                "correlation analysis, and performance charts.",
+                title=RUN_PORTFOLIO_ANALYSIS_LABEL,
             )
         try:
             from investment_workflow import render_rebuild_portfolio_panel
@@ -2424,11 +2451,15 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
         else f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
     )
     if beginner_mode:
+        st.caption(
+            "**Step 4 of 4:** Review your health score, action plan, and recommendations. "
+            "If you already ran analysis on the previous tab, results appear below automatically."
+        )
         what_why_do(
             "Portfolio Health",
             "A score and summary of how well your mix fits your goal in this model.",
             "Gives you a simple answer to 'Am I in decent shape?' without reading every chart.",
-            "Click **Refresh Portfolio Health** below, then open the **Recommendations** sub-tab.",
+            f"Click **Refresh Portfolio Health** below if holdings changed, or open the **Recommendations** sub-tab.",
         )
         render_macro_assumptions_guide(expanded=False)
     render_historical_metrics_banner()

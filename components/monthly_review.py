@@ -8,7 +8,7 @@ from components.ui_helpers import APP_DISCLAIMER
 
 MONTHLY_CHECKLIST = [
     ("Refresh Market Data", "In the sidebar, click **Refresh Market Data** to update prices."),
-    ("Run Analyze Portfolio", "Open **④ Analyze Portfolio** and click **Analyze Portfolio**."),
+    ("Run Portfolio Analysis", "Open **④ Analyze Portfolio** and click **Run Portfolio Analysis**."),
     ("Review Health Score", "Check your score and status summary on the same tab."),
     ("Read Recommendations", "Open **⑤ Recommendations** and review each coaching card."),
     ("Decide If Changes Are Worth Reviewing", "You do not need to trade every month — only act if something meaningful changed."),

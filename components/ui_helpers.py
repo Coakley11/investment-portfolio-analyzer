@@ -9,6 +9,8 @@ import streamlit as st
 
 APP_DISCLAIMER = "Educational model-based analysis, not financial advice."
 
+RUN_PORTFOLIO_ANALYSIS_LABEL = "Run Portfolio Analysis"
+
 HISTORICAL_PERIOD_HELP_BEGINNER = """
 **Historical analysis period**
 

@@ -47,7 +47,7 @@ STEP_TAB_LABEL: dict[str, str] = {
 CHECKLIST_STEPS = [
     ("goal", "Step 1 — Choose Goal"),
     ("portfolio", "Step 2 — Build Portfolio"),
-    ("analyze", "Step 3 — Analyze Portfolio"),
+    ("analyze", "Step 3 — Run Portfolio Analysis"),
     ("health", "Step 4 — Review Portfolio Health"),
     ("recommendations", "Step 5 — Review Recommendations"),
 ]
@@ -260,7 +260,7 @@ def get_recommended_next_step(st_obj: Any | None = None) -> tuple[str, str, str]
         return (
             f"Step 3 of {total}",
             tab,
-            f"Open **{tab}** and click **Analyze Portfolio** (top of that tab).",
+            f"Open **{tab}** and click **Run Portfolio Analysis** (top of that tab).",
         )
     if not state["health"]:
         tab = STEP_TAB_LABEL["health"]

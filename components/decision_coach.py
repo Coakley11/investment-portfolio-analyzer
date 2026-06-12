@@ -149,7 +149,7 @@ def render_recommendations_panel(
 def render_action_plan_placeholder(beginner: bool = True) -> None:
     st.info(
         "Your **Portfolio Journey / Action Plan** appears after you run Portfolio Health. "
-        "Click **Analyze Portfolio** on Overview or **Refresh Portfolio Health** on the Health tab."
+        "Click **Run Portfolio Analysis** on Overview or Analysis, or **Refresh Portfolio Health** on the Health tab."
     )
     if beginner:
         st.caption("You'll get simple Today / This Month / This Year guidance — not just raw metrics.")

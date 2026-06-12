@@ -6,6 +6,7 @@ from typing import Any
 
 import streamlit as st
 
+from components.portfolio_editor_guidance import render_workflow_journey_banner
 from investment_workflow import (
     WORKFLOW_CORE_STEPS,
     StepVisual,
@@ -102,6 +103,7 @@ def render_workflow_navigator(
                 else:
                     request_core_step_navigation(step, beginner=beginner_mode, st_obj=st_obj)
                 clicked = True
+    render_workflow_journey_banner(beginner_mode=beginner_mode)
     return clicked
 
 
