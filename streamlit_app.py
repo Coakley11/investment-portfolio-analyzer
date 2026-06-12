@@ -113,6 +113,19 @@ except Exception:
     pass
 
 try:
+    from suite_cloud_state import purge_stale_investment_ami_restore_blockers
+
+    purge_stale_investment_ami_restore_blockers(st, "investment")
+    try:
+        from investment_persistence_trace import record_emergency_restore_trace
+
+        record_emergency_restore_trace(st)
+    except Exception:
+        pass
+except Exception:
+    pass
+
+try:
     from suite_resume_launch import apply_suite_resume_launch
 
     apply_suite_resume_launch(st, "investment")
@@ -239,9 +252,11 @@ if _PERSISTENCE_OK:
             restore_investment_disk_state_once(st)
             reconcile_investment_cloud_drift_if_needed(st)
             try:
+                from applied_math_return_insight import insight_return_query_id
                 from suite_resume_launch import finalize_ami_return_restore
 
-                finalize_ami_return_restore(st, "investment")
+                if insight_return_query_id(st):
+                    finalize_ami_return_restore(st, "investment")
             except Exception:
                 pass
             st.session_state["_suite_inv_persistence_bootstrapped"] = True
@@ -979,7 +994,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v3` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v4` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar

@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-durable-restore-v3` (clear stale AMI flags blocking startup restore) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `d0fdaf9`: `restore_decision=skipped`, `ami_return_deferred_tab`) · Test **E** **BLOCKED**  
+**Status:** Deploy marker `investment-durable-restore-v4` (emergency AMI purge + URL-only defer gating) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `5f2dfb3` v3: `restore_decision=skipped`, `ami_return_deferred_tab`) · Test **E** **BLOCKED**  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 

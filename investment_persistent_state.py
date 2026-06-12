@@ -957,6 +957,12 @@ def reconcile_investment_cloud_drift_if_needed(st: Any) -> bool:
 
     Called once per session at bootstrap only — not every rerun (would overwrite local widget edits).
     """
+    try:
+        from suite_cloud_state import purge_stale_investment_ami_restore_blockers
+
+        purge_stale_investment_ami_restore_blockers(st, APP_ID)
+    except Exception:
+        pass
     ss = st.session_state
     if ss.get("_suite_inv_cloud_reconcile_done"):
         return False
@@ -1121,11 +1127,15 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
 
     ami_return_live = False
     try:
-        from applied_math_return_insight import ami_return_navigation_active
+        from applied_math_return_insight import insight_return_query_id
 
-        ami_return_live = ami_return_navigation_active(st, "investment")
+        ami_return_live = bool(insight_return_query_id(st))
     except ImportError:
         ami_return_live = False
+    if not ami_return_live:
+        st.session_state.pop("_skip_page_restore_for", None)
+        st.session_state.pop("_suite_holdings_fp", None)
+        st.session_state.pop("_suite_page_overwrite_source", None)
     ami_skip_tab = (
         str(st.session_state.get("_skip_page_restore_for") or "").strip() if ami_return_live else ""
     )
@@ -1296,11 +1306,15 @@ def _overlay_cloud_experience_if_authoritative(
 
 def restore_investment_disk_state_once(st: Any) -> bool:
     try:
-        from suite_cloud_state import reconcile_stale_resume_session_flags
+        from suite_cloud_state import purge_stale_investment_ami_restore_blockers
 
-        cleared = reconcile_stale_resume_session_flags(st, APP_ID)
-        if cleared:
-            st.session_state["_suite_inv_stale_ami_flags_cleared"] = cleared
+        purge_stale_investment_ami_restore_blockers(st, APP_ID)
+        try:
+            from investment_persistence_trace import record_emergency_restore_trace
+
+            record_emergency_restore_trace(st)
+        except Exception:
+            pass
     except Exception:
         pass
     st.session_state["_suite_inv_debug_cloud_experience"] = None

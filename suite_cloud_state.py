@@ -188,6 +188,65 @@ def reconcile_stale_resume_session_flags(st: Any, app_key: str) -> list[str]:
     return cleared
 
 
+def collect_investment_url_query_params(st: Any) -> dict[str, str]:
+    """Snapshot Investment resume/AMI query params currently on the URL."""
+    params = _RESUME_QUERY_KEYS.get("investment", ())
+    out: dict[str, str] = {}
+    for name in params:
+        val = _qp_get(st, name)
+        if val:
+            out[name] = val
+    return out
+
+
+def detect_stale_ami_session_flags(st: Any, app_key: str = "investment") -> list[str]:
+    """Session flags that imply a prior AMI return when the URL is not live."""
+    ss = st.session_state
+    detected: list[str] = []
+    for flag in _STALE_RESUME_SESSION_FLAGS:
+        if flag in ss:
+            detected.append(flag)
+    key = _normalize_resume_app_key(app_key)
+    committed = f"_ami_page_restore_committed_{key}"
+    if committed in ss:
+        detected.append(committed)
+    return detected
+
+
+def purge_stale_investment_ami_restore_blockers(
+    st: Any,
+    app_key: str = "investment",
+) -> dict[str, Any]:
+    """
+    Emergency purge: when URL has no AMI restore blockers, clear deferred-tab flags
+    so ``restore_once`` can run on normal reboot.
+    """
+    blockers = list_workspace_restore_blocking_params(st, app_key)
+    stale_detected = detect_stale_ami_session_flags(st, app_key)
+    cleared: list[str] = []
+    if not blockers:
+        cleared.extend(reconcile_stale_resume_session_flags(st, app_key))
+        ss = st.session_state
+        for extra in (
+            "_suite_resume_insight_hydration_only",
+            f"_ami_page_restore_committed_{_normalize_resume_app_key(app_key)}",
+        ):
+            if extra in ss:
+                ss.pop(extra, None)
+                cleared.append(extra)
+    diag: dict[str, Any] = {
+        "current_url_query_params": collect_investment_url_query_params(st) or None,
+        "has_suite_ami_insight": bool(_qp_get(st, "suite_ami_insight")),
+        "has_suite_ai_question_id": bool(_qp_get(st, "suite_ai_question_id")),
+        "stale_ami_flags_detected": stale_detected or None,
+        "stale_ami_flags_cleared": cleared or None,
+        "restore_blocker_flags": blockers or None,
+    }
+    for key, val in diag.items():
+        st.session_state[key] = val
+    return diag
+
+
 def should_skip_workspace_restore_for_resume(
     st: Any,
     app_key: str,
@@ -195,10 +254,9 @@ def should_skip_workspace_restore_for_resume(
     reconcile_first: bool = True,
 ) -> bool:
     """
-    Skip cloud workspace restore only for live URL resume params or URL-driven AMI return.
+    Skip cloud workspace restore only for live URL AMI blockers (Investment) or resume params.
 
-    Session-only ``_suite_resume_launch_*`` / ``_ami_insight_return_preserve`` flags
-    must not block cross-device page sync.
+    Session-only deferred-tab flags must never block durable cloud restore.
     """
     if ami_return_resume_consumed(st, app_key):
         if reconcile_first:
@@ -206,6 +264,9 @@ def should_skip_workspace_restore_for_resume(
         return False
     if reconcile_first:
         reconcile_stale_resume_session_flags(st, app_key)
+    key = _normalize_resume_app_key(app_key)
+    if key == "investment":
+        return bool(list_workspace_restore_blocking_params(st, app_key))
     if list_workspace_restore_blocking_params(st, app_key):
         return True
     try:

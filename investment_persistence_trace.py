@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v3"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v4"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -38,6 +38,13 @@ WORKSPACE_RESTORE_TRACE_LABELS: tuple[str, ...] = (
     "restored_tab",
     "final_tab",
     "page_overwrite_source",
+    "current_url_query_params",
+    "has_suite_ami_insight",
+    "has_suite_ai_question_id",
+    "stale_ami_flags_detected",
+    "stale_ami_flags_cleared",
+    "restore_skip_reason",
+    "restore_blocker_flags",
     "cloud_updated_at",
     "local_updated_at",
 )
@@ -217,6 +224,13 @@ TEST_D_TRACE_LABELS: tuple[str, ...] = (
     "workflow_state_exists",
     "restore_decision",
     "page_overwrite_source",
+    "current_url_query_params",
+    "has_suite_ami_insight",
+    "has_suite_ai_question_id",
+    "stale_ami_flags_detected",
+    "stale_ami_flags_cleared",
+    "restore_skip_reason",
+    "restore_blocker_flags",
 )
 
 TEST_E_TRACE_LABELS: tuple[str, ...] = AMI_RETURN_TRACE_LABELS + (
@@ -258,6 +272,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v1",
         "investment-durable-restore-v2",
         "investment-durable-restore-v3",
+        "investment-durable-restore-v4",
     }
 )
 
@@ -512,6 +527,21 @@ def snapshot_workspace_restore_trace(st: Any) -> dict[str, Any]:
         "restored_tab": restored_tab,
         "final_tab": final_tab,
         "page_overwrite_source": ss.get("_suite_page_overwrite_source") or trace.get("page_overwrite_source"),
+        "current_url_query_params": trace.get("current_url_query_params") or ss.get("current_url_query_params"),
+        "has_suite_ami_insight": trace.get("has_suite_ami_insight")
+        if trace.get("has_suite_ami_insight") is not None
+        else ss.get("has_suite_ami_insight"),
+        "has_suite_ai_question_id": trace.get("has_suite_ai_question_id")
+        if trace.get("has_suite_ai_question_id") is not None
+        else ss.get("has_suite_ai_question_id"),
+        "stale_ami_flags_detected": trace.get("stale_ami_flags_detected")
+        or ss.get("stale_ami_flags_detected"),
+        "stale_ami_flags_cleared": trace.get("stale_ami_flags_cleared")
+        or ss.get("stale_ami_flags_cleared"),
+        "restore_skip_reason": trace.get("restore_skip_reason")
+        or ss.get("restore_skip_reason")
+        or ss.get("_suite_persist_restore_skip_reason"),
+        "restore_blocker_flags": trace.get("restore_blocker_flags") or ss.get("restore_blocker_flags"),
         "cloud_updated_at": cloud_updated,
         "local_updated_at": local_updated,
     }
@@ -555,6 +585,25 @@ def record_holdings_restore_trace(st: Any) -> None:
         startup_holdings_fixup_pick=ss.get("startup_holdings_fixup_pick"),
         restore_pick_source=ss.get("_suite_persist_debug_pick_source")
         or ss.get("_suite_persist_last_restore_source"),
+    )
+
+
+def record_emergency_restore_trace(st: Any) -> None:
+    """Visible startup diagnostics for AMI restore blocker investigation."""
+    ss = st.session_state
+    update_trace(
+        st,
+        current_url_query_params=ss.get("current_url_query_params"),
+        has_suite_ami_insight=ss.get("has_suite_ami_insight"),
+        has_suite_ai_question_id=ss.get("has_suite_ai_question_id"),
+        stale_ami_flags_detected=ss.get("stale_ami_flags_detected"),
+        stale_ami_flags_cleared=ss.get("stale_ami_flags_cleared"),
+        restore_skip_reason=ss.get("restore_skip_reason")
+        or ss.get("_suite_persist_restore_skip_reason"),
+        restore_blocker_flags=ss.get("restore_blocker_flags"),
+        restore_decision=ss.get("_suite_persist_debug_pick_source")
+        or ss.get("_suite_restore_decision"),
+        page_overwrite_source=ss.get("_suite_page_overwrite_source"),
     )
 
 
@@ -1156,6 +1205,16 @@ def collect_test_d_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
     rows["cloud_readback_holdings_fingerprint"] = trace.get("cloud_readback_holdings_fingerprint")
     rows["restore_decision"] = trace.get("restore_decision")
     rows["page_overwrite_source"] = trace.get("page_overwrite_source")
+    for label in (
+        "current_url_query_params",
+        "has_suite_ami_insight",
+        "has_suite_ai_question_id",
+        "stale_ami_flags_detected",
+        "stale_ami_flags_cleared",
+        "restore_skip_reason",
+        "restore_blocker_flags",
+    ):
+        rows[label] = trace.get(label) if label in trace else st.session_state.get(label)
     return rows
 
 

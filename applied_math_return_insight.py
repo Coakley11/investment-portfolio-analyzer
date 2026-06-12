@@ -681,11 +681,14 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
         or source_state.get("page_params", {}).get("page")
         or ""
     ).strip()
+    app = str(app_key or source_state.get("source_app") or "").strip().lower()
     if page:
         ss[SESSION_RETURN_PAGE_KEY] = page
-        ss["_skip_page_restore_for"] = page
-
-    app = str(app_key or source_state.get("source_app") or "").strip().lower()
+        if app == "investment":
+            if insight_return_query_id(st):
+                ss["_skip_page_restore_for"] = page
+        else:
+            ss["_skip_page_restore_for"] = page
     try:
         if app == "baseball":
             from applied_math_context import apply_source_state_to_session
@@ -882,9 +885,9 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
         return str(raw).strip()
 
     iid = _qp("suite_ami_insight")
-    pending = st.session_state.get(SESSION_PENDING_KEY)
-    if not iid and not isinstance(pending, dict):
+    if not iid:
         return False
+    pending = st.session_state.get(SESSION_PENDING_KEY)
 
     insight = dict(pending) if isinstance(pending, dict) else {}
     if iid and not insight.get("insight_id"):
@@ -980,7 +983,8 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     elif st.session_state.get(SESSION_RETURN_PAGE_KEY):
         page = st.session_state[SESSION_RETURN_PAGE_KEY]
         st.session_state["_navigate_to_page"] = page
-        st.session_state["_skip_page_restore_for"] = page
+        if insight_return_query_id(st):
+            st.session_state["_skip_page_restore_for"] = page
 
     st.session_state["_ami_hydrated_insight_id"] = iid
     if str(app_key or "").strip().lower() == "investment":

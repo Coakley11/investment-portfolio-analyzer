@@ -355,7 +355,7 @@ def apply_source_state_to_session(session_state: dict[str, Any], source_state: d
     if tab:
         session_state["_suite_investment_page"] = tab
         session_state["investment_active_tab"] = tab
-        session_state["_skip_page_restore_for"] = tab
+        # Deferred tab restore is set only from live AMI return URL handlers.
     hfp = ent.get("holdings_fingerprint")
     if hfp:
         session_state["_suite_holdings_fp"] = str(hfp)

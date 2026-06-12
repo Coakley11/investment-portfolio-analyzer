@@ -203,7 +203,17 @@ def restore_once(
         pass
 
     if skip_cloud:
-        _set_restore_skip_reason(st, "resume query params or deep-link launch (restore skipped)")
+        skip_reason = "resume query params or deep-link launch (restore skipped)"
+        _set_restore_skip_reason(st, skip_reason)
+        st.session_state["restore_skip_reason"] = skip_reason
+        try:
+            from suite_cloud_state import list_workspace_restore_blocking_params
+
+            st.session_state["restore_blocker_flags"] = list_workspace_restore_blocking_params(
+                st, app_id
+            ) or None
+        except Exception:
+            pass
         _record_restore_debug_meta(
             st,
             app_id,
