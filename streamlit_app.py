@@ -2002,6 +2002,14 @@ if _active_tab == _main_tab_labels[2]:
         key="holdings_editor",
     )
     st.session_state.holdings_df = edited
+    if not beginner_mode:
+        try:
+            import etf_holdings as eh
+            from components.etf_holdings_explorer import render_etf_ticker_chip_bar
+
+            render_etf_ticker_chip_bar([t for t, _ in eh.portfolio_etf_tickers(edited)], key_prefix="inputs_etf")
+        except ImportError:
+            pass
     try:
         from investment_workflow import track_holdings_dataframe
 
@@ -3335,6 +3343,19 @@ if _active_tab == _main_tab_labels[9]:
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
+
+# ── ETF Holdings Explorer (Advanced only) ─────────────────────────────────────
+
+if _active_tab == _main_tab_labels[10]:
+    if beginner_mode:
+        st.info("ETF Holdings Explorer is available in **Advanced Mode**.")
+    else:
+        try:
+            from components.etf_holdings_explorer import render_etf_holdings_explorer
+
+            render_etf_holdings_explorer(st.session_state.holdings_df, settings=settings)
+        except ImportError:
+            st.warning("ETF Holdings Explorer module is not available in this build.")
 
 # ── Header health badge (cached; no heavy health calc on load) ─────────────────
 

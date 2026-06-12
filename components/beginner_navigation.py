@@ -34,6 +34,7 @@ ADVANCED_TAB_LABELS = [
     "Monte Carlo",
     "Optimization",
     "Efficient Frontier",
+    "ETF Holdings Explorer",
 ]
 
 STEP_TAB_LABEL: dict[str, str] = {
