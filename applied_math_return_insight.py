@@ -162,6 +162,127 @@ def _source_state_has_restore_payload(state: Any) -> bool:
     return False
 
 
+def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
+    """Rank stored insight payloads — prefer blobs with usable source_state."""
+    if not isinstance(payload, dict) or not payload:
+        return -1
+    score = 0
+    if str(payload.get("insight_id") or "").strip():
+        score += 1
+    if str(payload.get("question_id") or "").strip():
+        score += 1
+    for key in ("source_state", "return_context"):
+        if _source_state_has_restore_payload(payload.get(key)):
+            score += 4
+            break
+    return score
+
+
+def _enrich_insight_from_question_blob(
+    insight: dict[str, Any],
+    *,
+    question_id_qp: str = "",
+) -> dict[str, Any]:
+    """Merge question-send source_state into insight when blob lacks restore payload."""
+    data = dict(insight or {})
+    if _source_state_has_restore_payload(data.get("source_state")):
+        return data
+    qid = str(data.get("question_id") or question_id_qp or "").strip()
+    if not qid:
+        return data
+    try:
+        from suite_analytical_question import load_analytical_question_source_state
+
+        loaded = load_analytical_question_source_state(qid)
+        if _source_state_has_restore_payload(loaded):
+            data["source_state"] = dict(loaded)
+            data["return_context"] = dict(loaded)
+            data.setdefault("question_id", qid)
+    except Exception:
+        pass
+    return data
+
+
+def diagnose_ami_return_source_state_resolution(
+    st: Any,
+    app_key: str,
+    insight: dict[str, Any],
+    *,
+    question_id_qp: str = "",
+) -> dict[str, Any]:
+    """Inspect insight/question blobs for AMI return source_state (Test E debug)."""
+    insight = dict(insight or {})
+    iid = str(insight.get("insight_id") or insight_return_query_id(st) or "").strip()
+    qid = str(
+        insight.get("question_id")
+        or question_id_qp
+        or _query_param(st, "suite_ai_question_id")
+        or ""
+    ).strip()
+    raw_ss = insight.get("source_state")
+    raw_rc = insight.get("return_context")
+    ent = raw_ss.get("entity_params") if isinstance(raw_ss, dict) else {}
+    diag: dict[str, Any] = {
+        "return_insight_id": iid or None,
+        "return_question_id": qid or None,
+        "insight_blob_has_source_state": isinstance(raw_ss, dict) and bool(raw_ss),
+        "insight_blob_source_state_keys": sorted(str(k) for k in raw_ss.keys()) if isinstance(raw_ss, dict) else None,
+        "insight_blob_has_return_context": isinstance(raw_rc, dict) and bool(raw_rc),
+        "insight_blob_has_question_id": bool(str(insight.get("question_id") or "").strip()),
+        "insight_blob_source_app": str(insight.get("source_app") or "").strip() or None,
+        "insight_blob_has_holdings_df": bool(isinstance(ent, dict) and ent.get("holdings_df")),
+        "insight_blob_holdings_fingerprint": (
+            str(ent.get("holdings_fingerprint") or "").strip() or None if isinstance(ent, dict) else None
+        ),
+        "question_blob_loaded": False,
+        "question_blob_has_source_state": False,
+        "question_blob_source_state_keys": None,
+        "question_blob_has_holdings_df": False,
+        "question_blob_holdings_fingerprint": None,
+        "resolved_source_state_source": "none",
+    }
+    question_ss: dict[str, Any] = {}
+    if qid:
+        try:
+            from suite_analytical_question import load_analytical_question_source_state
+
+            question_ss = load_analytical_question_source_state(qid)
+            diag["question_blob_loaded"] = bool(question_ss)
+            diag["question_blob_has_source_state"] = _source_state_has_restore_payload(question_ss)
+            if isinstance(question_ss, dict) and question_ss:
+                diag["question_blob_source_state_keys"] = sorted(str(k) for k in question_ss.keys())
+                qent = question_ss.get("entity_params")
+                if isinstance(qent, dict):
+                    diag["question_blob_has_holdings_df"] = bool(qent.get("holdings_df"))
+                    diag["question_blob_holdings_fingerprint"] = (
+                        str(qent.get("holdings_fingerprint") or "").strip() or None
+                    )
+        except Exception:
+            pass
+
+    resolved_source = "none"
+    resolved: dict[str, Any] = {}
+    for candidate, label in (
+        (raw_ss, "insight_blob"),
+        (raw_rc, "insight_blob"),
+    ):
+        if isinstance(candidate, dict) and _source_state_has_restore_payload(candidate):
+            resolved = dict(candidate)
+            resolved_source = label
+            break
+    if not resolved and _source_state_has_restore_payload(question_ss):
+        resolved = dict(question_ss)
+        resolved_source = "question_blob"
+    if not resolved:
+        session_ctx = st.session_state.get(SESSION_RETURN_CONTEXT_KEY)
+        if _source_state_has_restore_payload(session_ctx):
+            resolved = dict(session_ctx)
+            resolved_source = "session"
+    diag["resolved_source_state_source"] = resolved_source
+    diag["resolved_source_state_has_restore_payload"] = _source_state_has_restore_payload(resolved)
+    return diag
+
+
 def investment_ami_return_allows_restore_skip(st: Any) -> bool:
     """Defer cloud restore only when AMI return has usable source_state to apply."""
     ss = st.session_state
@@ -912,12 +1033,39 @@ def store_applied_math_insight(
             if _source_state_has_restore_payload(candidate):
                 ss = dict(candidate)
                 break
+    qid = str(
+        data.get("question_id")
+        or blob.get("question_id")
+        or (st is not None and _question_id_from_insight_or_session(st, data))
+        or ""
+    ).strip()
+    if qid and not _source_state_has_restore_payload(ss):
+        try:
+            from suite_analytical_question import load_analytical_question_source_state
+
+            loaded = load_analytical_question_source_state(qid)
+            if _source_state_has_restore_payload(loaded):
+                ss = dict(loaded)
+        except Exception:
+            pass
     if _source_state_has_restore_payload(ss):
         blob["source_state"] = ss
         blob["return_context"] = ss
-    qid = str(data.get("question_id") or blob.get("question_id") or "").strip()
     if qid:
         blob["question_id"] = qid
+    if st is not None:
+        ent = ss.get("entity_params") if isinstance(ss, dict) else {}
+        st.session_state["_ami_insight_store_trace"] = {
+            "insight_id": iid,
+            "question_id": qid or None,
+            "insight_blob_has_source_state": _source_state_has_restore_payload(ss),
+            "insight_blob_source_state_keys": sorted(str(k) for k in ss.keys()) if isinstance(ss, dict) and ss else None,
+            "insight_blob_has_question_id": bool(qid),
+            "insight_blob_has_holdings_df": bool(isinstance(ent, dict) and ent.get("holdings_df")),
+            "insight_blob_holdings_fingerprint": (
+                str(ent.get("holdings_fingerprint") or "").strip() or None if isinstance(ent, dict) else None
+            ),
+        }
     try:
         from suite_account import remember_saved_item
 
@@ -955,29 +1103,40 @@ def store_applied_math_insight(
 
 
 def load_applied_math_insight(insight_id: str, *, source_app: str = "") -> dict[str, Any]:
-    """Load stored insight by id."""
+    """Load stored insight by id, preferring blobs that include usable source_state."""
     iid = str(insight_id or "").strip()
     if not iid:
         return {}
     app = str(source_app or "").strip()
+    best: dict[str, Any] = {}
+    best_score = -1
+    seen_apps: set[str] = set()
     try:
         from suite_account import load_saved_items
 
         for app_key in ([app] if app else []) + [
             "applied_intelligence",
+            "investment",
             "baseball",
             "nba",
-            "investment",
         ]:
+            if app_key in seen_apps:
+                continue
+            seen_apps.add(app_key)
             rows = load_saved_items(app=app_key, item_type=INSIGHT_ITEM_TYPE, limit=80)
             for row in rows:
-                if str(row.get("item_key") or "") == iid:
-                    payload = row.get("payload")
-                    if isinstance(payload, dict):
-                        return dict(payload)
+                if str(row.get("item_key") or "") != iid:
+                    continue
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                score = _insight_blob_restore_score(payload)
+                if score > best_score:
+                    best = dict(payload)
+                    best_score = score
     except Exception as exc:
         log.warning("load_applied_math_insight failed: %s", exc)
-    return {}
+    return best
 
 
 def _resolve_return_source_state(
@@ -1019,16 +1178,20 @@ def _record_investment_ami_return_diagnostics(
     source_state: dict[str, Any] | None = None,
     applied: bool = False,
     skip_reason: str = "",
+    storage_diag: dict[str, Any] | None = None,
 ) -> None:
     """Session + trace diagnostics for Test E AMI return apply path."""
     ss = st.session_state
     iid = insight_return_query_id(st)
     insight = insight if isinstance(insight, dict) else {}
     source_state = source_state if isinstance(source_state, dict) else {}
+    storage_diag = dict(storage_diag or {})
     ss["suite_ami_insight_query_value"] = iid or None
     ss["source_state_exists_on_return"] = _source_state_has_restore_payload(source_state)
     ss["source_state_app"] = str(source_state.get("source_app") or insight.get("source_app") or "").strip() or None
     ss["source_state_keys_on_return"] = sorted(str(k) for k in source_state.keys()) if source_state else None
+    for key, value in storage_diag.items():
+        ss[key] = value
     if skip_reason:
         ss["apply_source_state_skip_reason"] = skip_reason
     elif applied:
@@ -1042,6 +1205,7 @@ def _record_investment_ami_return_diagnostics(
             source_state=source_state,
             applied=applied,
             skip_reason=skip_reason or None,
+            storage_diag=storage_diag,
         )
     except Exception:
         pass
@@ -1067,21 +1231,20 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
 
     insight: dict[str, Any] = {}
     if iid:
-        prev = str(ss.get("_ami_hydrated_insight_id") or "").strip()
+        loaded = load_applied_math_insight(iid, source_app=key)
         pending = _pending_insight_valid(st)
-        if prev != iid or not pending:
-            loaded = load_applied_math_insight(iid, source_app=key)
-            if loaded:
-                insight = dict(loaded)
-            elif not pending:
-                insight = {
-                    "insight_id": iid,
-                    "conclusion": "Applied Investment Insight loaded.",
-                    "question": "",
-                    "source_app": key,
-                }
-        elif isinstance(ss.get(SESSION_PENDING_KEY), dict):
-            insight = dict(ss[SESSION_PENDING_KEY])
+        if loaded:
+            insight = dict(loaded)
+        elif pending and str(pending.get("insight_id") or "") == iid:
+            insight = dict(pending)
+        else:
+            insight = {
+                "insight_id": iid,
+                "conclusion": "Applied Investment Insight loaded.",
+                "question": "",
+                "source_app": key,
+            }
+        insight = _enrich_insight_from_question_blob(insight, question_id_qp=qid_qp)
 
     if insight:
         ss[SESSION_PENDING_KEY] = insight
@@ -1093,8 +1256,16 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
         )
         ss["_ami_hydrated_insight_id"] = iid or str(insight.get("insight_id") or "")
 
+    storage_diag = diagnose_ami_return_source_state_resolution(
+        st, key, insight, question_id_qp=qid_qp
+    )
     source_state = _resolve_return_source_state(st, key, insight, question_id_qp=qid_qp)
-    _record_investment_ami_return_diagnostics(st, insight=insight, source_state=source_state)
+    _record_investment_ami_return_diagnostics(
+        st,
+        insight=insight,
+        source_state=source_state,
+        storage_diag=storage_diag,
+    )
 
     if already_applied and _source_state_has_restore_payload(ss.get(SESSION_RETURN_CONTEXT_KEY)):
         ss["_ami_insight_hydrate_success"] = True
@@ -1166,14 +1337,26 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
     pending = st.session_state.get(SESSION_PENDING_KEY)
 
     insight = dict(pending) if isinstance(pending, dict) else {}
-    if iid and not insight.get("insight_id"):
+    if iid:
         loaded = load_applied_math_insight(iid, source_app=app_key)
         if loaded:
             insight = loaded
-            st.session_state[SESSION_PENDING_KEY] = insight
+        elif not insight.get("insight_id"):
+            insight = {"insight_id": iid, "source_app": app_key}
+        insight = _enrich_insight_from_question_blob(
+            insight,
+            question_id_qp=_qp("suite_ai_question_id"),
+        )
+        st.session_state[SESSION_PENDING_KEY] = insight
 
+    storage_diag = diagnose_ami_return_source_state_resolution(
+        st,
+        app_key,
+        insight,
+        question_id_qp=_qp("suite_ai_question_id"),
+    )
     source_state = st.session_state.get(SESSION_RETURN_CONTEXT_KEY)
-    if not isinstance(source_state, dict) or not source_state:
+    if not _source_state_has_restore_payload(source_state):
         source_state = _resolve_return_source_state(
             st,
             app_key,
@@ -1186,6 +1369,13 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
         st.session_state[flag] = True
         mark_ami_return_resume_consumed(st, app_key)
         clear_ami_return_deferred_flags(st, app_key)
+        _record_investment_ami_return_diagnostics(
+            st,
+            insight=insight,
+            source_state=source_state,
+            applied=True,
+            storage_diag=storage_diag,
+        )
         return True
     _record_investment_ami_return_diagnostics(
         st,
@@ -1193,6 +1383,7 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
         source_state=source_state if isinstance(source_state, dict) else {},
         applied=False,
         skip_reason="commit_ami_return_no_usable_source_state",
+        storage_diag=storage_diag,
     )
     return False
 

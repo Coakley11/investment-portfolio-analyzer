@@ -762,7 +762,13 @@ def submit_analytical_question(
         except Exception as exc:
             log.warning("record_activity failed for analytical_question: %s", exc)
     _upsert_applied_intelligence_resume(payload, action_url=action_url)
-    if not duplicate:
+    ss = payload.get("source_state")
+    refresh_blob = not duplicate or (
+        str(payload.get("source_app") or "").strip().lower() == "investment"
+        and isinstance(ss, dict)
+        and bool(ss.get("entity_params"))
+    )
+    if refresh_blob:
         _store_question_context_blob(payload)
     if session_state is not None:
         session_state["_ami_last_send"] = {

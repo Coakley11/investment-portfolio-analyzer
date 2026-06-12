@@ -10,10 +10,14 @@ import pandas as pd
 from applied_math_context import apply_source_state_to_session, build_source_state
 from applied_math_return_insight import (
     SESSION_PENDING_KEY,
+    _enrich_insight_from_question_blob,
+    _insight_blob_restore_score,
     _resolve_return_source_state,
     _source_state_has_restore_payload,
     ami_return_navigation_active,
+    diagnose_ami_return_source_state_resolution,
     hydrate_investment_ami_return_state,
+    load_applied_math_insight,
     resolve_ami_return_source_state_for_store,
     store_applied_math_insight,
 )
@@ -229,6 +233,78 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
         ent = resolved.get("entity_params") or {}
         self.assertIn("holdings_df", ent)
         self.assertEqual(ent.get("holdings_fingerprint"), question_ss["entity_params"]["holdings_fingerprint"])
+
+    def test_load_applied_math_insight_prefers_blob_with_source_state(self) -> None:
+        iid = "674475f5a3c1c57a"
+        thin = {"insight_id": iid, "source_app": "investment", "conclusion": "thin"}
+        rich = {
+            "insight_id": iid,
+            "source_app": "investment",
+            "question_id": "q-rich",
+            "source_state": {
+                "source_app": "investment",
+                "source_page": "Portfolio Health",
+                "entity_params": {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"},
+                "page_params": {"page": "Portfolio Health"},
+            },
+        }
+        self.assertLess(_insight_blob_restore_score(thin), _insight_blob_restore_score(rich))
+
+        def _load_saved_items(*, app=None, item_type=None, limit=100):
+            if app == "investment":
+                return [{"item_key": iid, "payload": thin}]
+            if app == "applied_intelligence":
+                return [{"item_key": iid, "payload": rich}]
+            return []
+
+        with patch("suite_account.load_saved_items", side_effect=_load_saved_items):
+            loaded = load_applied_math_insight(iid, source_app="investment")
+        self.assertTrue(_source_state_has_restore_payload(loaded.get("source_state")))
+
+    def test_enrich_insight_from_question_blob(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        question_ss = build_source_state(
+            "Portfolio Health",
+            {"investment_active_tab": "Portfolio Health", "holdings_df": holdings},
+        )
+        insight = {"insight_id": "insight-thin", "question_id": "q-enrich", "source_app": "investment"}
+        with patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value=question_ss,
+        ):
+            enriched = _enrich_insight_from_question_blob(insight)
+        self.assertTrue(_source_state_has_restore_payload(enriched.get("source_state")))
+        ent = enriched["source_state"]["entity_params"]
+        self.assertIn("holdings_df", ent)
+
+    def test_diagnose_ami_return_source_state_resolution_question_blob(self) -> None:
+        st = _FakeSt({"suite_ami_insight": "674475f5a3c1c57a", "suite_ai_question_id": "q-diag"})
+        insight = {"insight_id": "674475f5a3c1c57a", "source_app": "investment"}
+        question_ss = {
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+            "entity_params": {
+                "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+                "holdings_df": [{"Ticker": "BND"}],
+            },
+            "page_params": {"page": "Portfolio Health"},
+        }
+        with patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value=question_ss,
+        ):
+            diag = diagnose_ami_return_source_state_resolution(
+                st, "investment", insight, question_id_qp="q-diag"
+            )
+        self.assertTrue(diag["question_blob_loaded"])
+        self.assertTrue(diag["question_blob_has_source_state"])
+        self.assertEqual(diag["resolved_source_state_source"], "question_blob")
 
     def test_store_applied_math_insight_embeds_resolved_source_state(self) -> None:
         holdings = pd.DataFrame(

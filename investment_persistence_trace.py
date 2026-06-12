@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v6"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v7"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -113,6 +113,19 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "source_state_app",
     "source_state_keys_on_return",
     "apply_source_state_skip_reason",
+    "return_insight_id",
+    "return_question_id",
+    "insight_blob_has_source_state",
+    "insight_blob_source_state_keys",
+    "insight_blob_has_question_id",
+    "insight_blob_has_holdings_df",
+    "insight_blob_holdings_fingerprint",
+    "question_blob_loaded",
+    "question_blob_has_source_state",
+    "question_blob_source_state_keys",
+    "question_blob_has_holdings_df",
+    "question_blob_holdings_fingerprint",
+    "resolved_source_state_source",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
@@ -280,6 +293,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v4",
         "investment-durable-restore-v5",
         "investment-durable-restore-v6",
+        "investment-durable-restore-v7",
     }
 )
 
@@ -602,11 +616,13 @@ def record_investment_ami_return_diagnostics(
     source_state: dict[str, Any] | None = None,
     applied: bool = False,
     skip_reason: str | None = None,
+    storage_diag: dict[str, Any] | None = None,
 ) -> None:
     """Test E return-path diagnostics (hydrate + apply)."""
     ss = st.session_state
     insight = insight if isinstance(insight, dict) else {}
     source_state = source_state if isinstance(source_state, dict) else {}
+    storage_diag = dict(storage_diag or {})
     ctx_keys = sorted(str(k) for k in source_state.keys()) if source_state else None
     update_trace(
         st,
@@ -621,6 +637,21 @@ def record_investment_ami_return_diagnostics(
         apply_source_state_skip_reason=skip_reason or ss.get("apply_source_state_skip_reason"),
         source_app_normalized=source_state.get("source_app") or insight.get("source_app"),
         ami_return_detected=True,
+        **{k: storage_diag.get(k) for k in (
+            "return_insight_id",
+            "return_question_id",
+            "insight_blob_has_source_state",
+            "insight_blob_source_state_keys",
+            "insight_blob_has_question_id",
+            "insight_blob_has_holdings_df",
+            "insight_blob_holdings_fingerprint",
+            "question_blob_loaded",
+            "question_blob_has_source_state",
+            "question_blob_source_state_keys",
+            "question_blob_has_holdings_df",
+            "question_blob_holdings_fingerprint",
+            "resolved_source_state_source",
+        )},
     )
     if applied:
         update_trace(
