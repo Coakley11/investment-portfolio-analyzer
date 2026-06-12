@@ -5,6 +5,7 @@ Supabase PostgREST backend for cross-deployment suite activity.
 from __future__ import annotations
 
 import json
+from activity_time import normalize_timestamp_iso, utc_now_iso
 from datetime import datetime
 from typing import Any
 
@@ -28,6 +29,24 @@ _TABLE_STATE = "suite_app_current_state"
 _TABLE_RESUME = "suite_resume_items"
 _TABLE_SAVED = "suite_saved_items"
 _TABLE_SETTINGS = "suite_user_settings"
+_FULL_SESSION_KEY = "full_session"
+
+
+def _merge_state_metrics(app_key: str, incoming: dict[str, Any] | None) -> dict[str, Any]:
+    """Shallow-merge metrics; preserve ``full_session`` when incoming omits it."""
+    new_metrics = dict(incoming or {})
+    try:
+        existing = load_current_states().get(app_key) or {}
+        prior = existing.get("metrics")
+        if not isinstance(prior, dict) or not prior:
+            return new_metrics
+        merged = dict(prior)
+        merged.update(new_metrics)
+        if _FULL_SESSION_KEY not in new_metrics and _FULL_SESSION_KEY in prior:
+            merged[_FULL_SESSION_KEY] = prior[_FULL_SESSION_KEY]
+        return merged
+    except Exception:
+        return new_metrics
 
 
 def _now_iso() -> str:
@@ -189,7 +208,7 @@ def save_current_state(
         "app": app_key,
         "page": page or "",
         "summary": summary or "",
-        "metrics": metrics or {},
+        "metrics": _merge_state_metrics(app_key, metrics),
         "updated_at": _now_iso(),
     }
     uid = _cloud_user_id()
@@ -272,14 +291,20 @@ def invalidate_app_resume_items(app: str) -> None:
 
 
 def load_events(limit: int = MAX_EVENTS) -> list[dict[str, Any]]:
+    params: dict[str, str] = {
+        "select": "app,event,page,timestamp,metrics",
+        "order": "timestamp.desc",
+        "limit": str(limit),
+    }
+    uid = _cloud_user_id()
+    if uid:
+        params["user_id"] = f"eq.{uid}"
+    else:
+        params["user_id"] = "is.null"
     rows = _request(
         "GET",
         _TABLE_EVENTS,
-        params={
-            "select": "app,event,page,timestamp,metrics",
-            "order": "id.desc",
-            "limit": str(limit),
-        },
+        params=params,
         prefer="return=representation",
     )
     if not isinstance(rows, list):
@@ -291,12 +316,13 @@ def load_events(limit: int = MAX_EVENTS) -> list[dict[str, Any]]:
         metrics = row.get("metrics")
         if not isinstance(metrics, dict):
             metrics = {}
+        raw_ts = str(row.get("timestamp") or "")
         out.append(
             {
                 "app": str(row.get("app") or ""),
                 "event": str(row.get("event") or ""),
                 "page": str(row.get("page") or ""),
-                "timestamp": str(row.get("timestamp") or "")[:19],
+                "timestamp": normalize_timestamp_iso(raw_ts) or raw_ts,
                 "metrics": metrics,
             }
         )
@@ -502,6 +528,17 @@ def record_activity(
     action_url: str = "",
 ) -> None:
     append_event(app, event, page=page, metrics=metrics)
+    # Applied-math insight events must not replace metrics.full_session (Test D portfolio).
+    if str(event or "").strip() == "applied_math_insight":
+        if resume_key and resume_title:
+            upsert_resume_item(
+                app,
+                resume_key,
+                title=resume_title,
+                subtitle=resume_subtitle,
+                action_url=action_url,
+            )
+        return
     if summary or page or metrics:
         save_current_state(app, page=page, summary=summary, metrics=metrics)
     if resume_key and resume_title:

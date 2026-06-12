@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v10"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v11"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -237,6 +237,8 @@ TEST_C_TRACE_LABELS: tuple[str, ...] = (
 )
 
 TEST_D_TRACE_LABELS: tuple[str, ...] = (
+    "deploy_version",
+    "git_commit",
     "device_id",
     "trace_captured_at",
     "cloud_updated_at",
@@ -248,6 +250,7 @@ TEST_D_TRACE_LABELS: tuple[str, ...] = (
     "cloud_fetch_holdings_fingerprint",
     "restored_holdings_fingerprint",
     "final_holdings_fingerprint",
+    "cloud_has_full_session",
     "cloud_blob_has_holdings_df",
     "cloud_blob_holdings_row_count",
     "cloud_readback_has_holdings_df",
@@ -320,6 +323,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v8",
         "investment-durable-restore-v9",
         "investment-durable-restore-v10",
+        "investment-durable-restore-v11",
     }
 )
 
@@ -616,8 +620,19 @@ def snapshot_global_settings_trace(st: Any) -> dict[str, Any]:
 def record_holdings_restore_trace(st: Any) -> None:
     """Persist durable holdings restore diagnostics into the developer trace."""
     ss = st.session_state
+    cloud_has_full_session = ss.get("cloud_has_full_session")
+    if cloud_has_full_session is None:
+        try:
+            from suite_cloud_state import probe_cloud_restore_diagnostics
+
+            diag = probe_cloud_restore_diagnostics(APP_ID)
+            if isinstance(diag, dict):
+                cloud_has_full_session = diag.get("cloud_has_full_session")
+        except Exception:
+            pass
     update_trace(
         st,
+        cloud_has_full_session=cloud_has_full_session,
         cloud_fetch_holdings_fingerprint=ss.get("cloud_fetch_holdings_fingerprint"),
         restored_holdings_fingerprint=ss.get("restored_holdings_fingerprint"),
         final_holdings_fingerprint=ss.get("final_holdings_fingerprint"),
@@ -1312,6 +1327,9 @@ def collect_test_c_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
 
 def collect_test_d_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
     rows = _base_compare_rows(st, trace)
+    rows["deploy_version"] = trace.get("deploy_version") or INVESTMENT_PERSIST_DEPLOY_VERSION
+    rows["git_commit"] = trace.get("git_commit") or _git_head_short()
+    rows["cloud_has_full_session"] = trace.get("cloud_has_full_session")
     for label in PORTFOLIO_TRACE_LABELS:
         rows[label] = trace.get(label)
     rows["saved_holdings_fingerprint"] = trace.get("saved_holdings_fingerprint")

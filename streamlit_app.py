@@ -1008,7 +1008,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v10` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v11` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar
