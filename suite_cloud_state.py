@@ -105,14 +105,22 @@ def list_active_resume_query_params(st: Any, app_key: str) -> list[str]:
     return [name for name in params if _qp_get(st, name)]
 
 
+def list_workspace_restore_blocking_params(st: Any, app_key: str) -> list[str]:
+    """URL params that should defer full_session restore (not mere page hints)."""
+    key = _normalize_resume_app_key(app_key)
+    if key == "investment":
+        return [name for name in _INVESTMENT_WORKSPACE_RESTORE_BLOCKERS if _qp_get(st, name)]
+    return list_active_resume_query_params(st, app_key)
+
+
 def _ami_return_url_active(st: Any, app_key: str) -> bool:
-    """True when resume/AMI steering comes from the current URL (not stale session flags)."""
-    if list_active_resume_query_params(st, app_key):
+    """True when a live AMI return URL is present (not suite_page navigation hints alone)."""
+    if list_workspace_restore_blocking_params(st, app_key):
         return True
     try:
-        from applied_math_return_insight import _active_ami_return_query_param_keys, insight_return_query_id
+        from applied_math_return_insight import insight_return_query_id
 
-        if insight_return_query_id(st) or _active_ami_return_query_param_keys(st):
+        if insight_return_query_id(st):
             return True
     except ImportError:
         pass
@@ -135,6 +143,19 @@ _STALE_RESUME_SESSION_FLAGS: tuple[str, ...] = (
     "ami_return_force_active_page",
     "ami_return_forced_page",
     "_ami_insight_return_preserve",
+    "_ami_return_context",
+    "_ami_return_page",
+    "_ami_pending_insight",
+    "_ami_hydrated_insight_id",
+    "_suite_holdings_fp",
+    "_suite_holdings_fp_mismatch",
+    "_suite_holdings_fp_confirmed",
+)
+
+# Investment: suite_page / suite_holdings_fp alone are navigation hints — not restore blockers.
+_INVESTMENT_WORKSPACE_RESTORE_BLOCKERS: tuple[str, ...] = (
+    "suite_ami_insight",
+    "suite_ai_question_id",
 )
 
 
@@ -185,7 +206,7 @@ def should_skip_workspace_restore_for_resume(
         return False
     if reconcile_first:
         reconcile_stale_resume_session_flags(st, app_key)
-    if list_active_resume_query_params(st, app_key):
+    if list_workspace_restore_blocking_params(st, app_key):
         return True
     try:
         from applied_math_return_insight import ami_return_navigation_active

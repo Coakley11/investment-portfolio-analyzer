@@ -1119,8 +1119,19 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
     except ImportError:
         _WF_BLOB = "workflow_state"
 
-    ami_skip_tab = str(st.session_state.get("_skip_page_restore_for") or "").strip()
-    ami_expected_fp = str(st.session_state.get("_suite_holdings_fp") or "").strip()
+    ami_return_live = False
+    try:
+        from applied_math_return_insight import ami_return_navigation_active
+
+        ami_return_live = ami_return_navigation_active(st, "investment")
+    except ImportError:
+        ami_return_live = False
+    ami_skip_tab = (
+        str(st.session_state.get("_skip_page_restore_for") or "").strip() if ami_return_live else ""
+    )
+    ami_expected_fp = (
+        str(st.session_state.get("_suite_holdings_fp") or "").strip() if ami_return_live else ""
+    )
     blob_holdings_fp = str(state.get("holdings_fingerprint") or "").strip()
 
     for key, val in state.items():
@@ -1284,6 +1295,14 @@ def _overlay_cloud_experience_if_authoritative(
 
 
 def restore_investment_disk_state_once(st: Any) -> bool:
+    try:
+        from suite_cloud_state import reconcile_stale_resume_session_flags
+
+        cleared = reconcile_stale_resume_session_flags(st, APP_ID)
+        if cleared:
+            st.session_state["_suite_inv_stale_ami_flags_cleared"] = cleared
+    except Exception:
+        pass
     st.session_state["_suite_inv_debug_cloud_experience"] = None
     st.session_state["_suite_inv_debug_disk_experience"] = None
     st.session_state["_suite_inv_debug_disk_file_exists"] = state_file_path(APP_ID).is_file()

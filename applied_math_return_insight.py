@@ -151,16 +151,65 @@ def _active_ami_return_query_param_keys(st: Any) -> list[str]:
     return [name for name in names if _query_param(st, name)]
 
 
-def ami_return_navigation_active(st: Any, app_key: str) -> bool:
-    """True when Investment (or other source app) is loading from an AMI return URL."""
+def _ami_return_url_active(st: Any) -> bool:
+    """True when the current URL carries a live AMI insight return param."""
+    return bool(insight_return_query_id(st))
+
+
+def clear_ami_return_deferred_flags(st: Any, app_key: str) -> list[str]:
+    """Drop deferred AMI tab/holdings restore flags (safe after return consumed or on normal reboot)."""
+    ss = st.session_state
+    cleared: list[str] = []
+    for flag in (
+        SESSION_RETURN_CONTEXT_KEY,
+        SESSION_RETURN_PAGE_KEY,
+        "_skip_page_restore_for",
+        "_suite_holdings_fp",
+        "_ami_hydrated_insight_id",
+        "_navigate_to_page",
+        "_suite_page_overwrite_source",
+        "_suite_holdings_fp_mismatch",
+        "_suite_holdings_fp_confirmed",
+    ):
+        if flag in ss:
+            ss.pop(flag, None)
+            cleared.append(flag)
+    if str(app_key or "").strip().lower() == "investment" and not _ami_return_url_active(st):
+        for flag in (SESSION_PENDING_KEY,):
+            if flag in ss:
+                ss.pop(flag, None)
+                cleared.append(flag)
+    return cleared
+
+
+def reconcile_stale_page_navigation(st: Any, app_key: str) -> list[str]:
+    """Clear stale AMI deferred-restore flags when not in a live AMI return URL."""
+    if _ami_return_url_active(st):
+        return []
+    return clear_ami_return_deferred_flags(st, app_key)
+
+
+def mark_ami_return_resume_consumed(st: Any, app_key: str) -> None:
+    """Record that AMI return hydration/restore finished so startup may use cloud restore."""
     key = str(app_key or "").strip().lower()
     if key == "math":
         key = "applied_intelligence"
-    if insight_return_query_id(st):
-        return key == "investment" or bool(st.session_state.get(SESSION_RETURN_CONTEXT_KEY))
-    if _active_ami_return_query_param_keys(st):
-        return key == "investment"
-    return bool(st.session_state.get(SESSION_RETURN_CONTEXT_KEY)) and key == "investment"
+    try:
+        from suite_cloud_state import _ami_resume_consumed_flag
+
+        st.session_state[_ami_resume_consumed_flag(key)] = True
+    except ImportError:
+        st.session_state[f"_ami_resume_consumed_{key}"] = True
+
+
+def ami_return_navigation_active(st: Any, app_key: str) -> bool:
+    """True only when ``suite_ami_insight`` is on the URL (live AMI return), not stale session flags."""
+    key = str(app_key or "").strip().lower()
+    if key == "math":
+        key = "applied_intelligence"
+    if not insight_return_query_id(st):
+        return False
+    return key == "investment" or bool(st.session_state.get(SESSION_RETURN_CONTEXT_KEY))
 
 
 def _session_holdings_fingerprint(session_state: Any) -> str:
@@ -856,6 +905,8 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
         st.session_state[SESSION_RETURN_CONTEXT_KEY] = dict(source_state)
         apply_return_source_state(st, app_key, source_state)
         st.session_state[flag] = True
+        mark_ami_return_resume_consumed(st, app_key)
+        clear_ami_return_deferred_flags(st, app_key)
         return True
     return False
 

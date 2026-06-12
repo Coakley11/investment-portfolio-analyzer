@@ -187,6 +187,13 @@ def restore_once(
     if disk_warn:
         st.session_state[_SESSION_INVALID_WARN_KEY] = disk_warn
 
+    try:
+        from suite_cloud_state import reconcile_stale_resume_session_flags
+
+        reconcile_stale_resume_session_flags(st, app_id)
+    except ImportError:
+        pass
+
     skip_cloud = False
     try:
         from suite_cloud_state import has_resume_query_params
@@ -197,7 +204,6 @@ def restore_once(
 
     if skip_cloud:
         _set_restore_skip_reason(st, "resume query params or deep-link launch (restore skipped)")
-        st.session_state[flag] = True
         _record_restore_debug_meta(
             st,
             app_id,

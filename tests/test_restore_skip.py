@@ -35,14 +35,33 @@ class TestRestoreOnceSkip(unittest.TestCase):
         self.assertIn("no restore source loaded", st.session_state["_suite_persist_restore_skip_reason"])
         self.assertNotIn("_suite_disk_state_restored::investment", st.session_state)
 
-    def test_resume_query_params_skip_with_reason(self) -> None:
+    def test_investment_suite_page_alone_does_not_skip_restore(self) -> None:
         st = _FakeSt()
         st.query_params = {"suite_page": "overview"}
+
+        def _apply(_st, state):
+            _st.session_state["holdings_fingerprint"] = state.get("holdings_fingerprint")
+
+        with patch(
+            "suite_cloud_state.load_cloud_full_session",
+            return_value=(
+                {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"},
+                "2026-06-11T20:00:00+00:00",
+            ),
+        ):
+            with patch("suite_user_persistence._load_raw", return_value=({}, None, None)):
+                restored = restore_once(st, "investment", apply_state=_apply)
+        self.assertTrue(restored)
+        self.assertNotIn("_suite_persist_restore_skip_reason", st.session_state)
+
+    def test_investment_suite_ami_insight_skips_restore(self) -> None:
+        st = _FakeSt()
+        st.query_params = {"suite_ami_insight": "abc123"}
         with patch("suite_user_persistence._load_raw", return_value=({}, None, None)):
             restored = restore_once(st, "investment", apply_state=lambda _s, _d: None)
         self.assertFalse(restored)
         self.assertIn("resume query params", st.session_state["_suite_persist_restore_skip_reason"])
-        self.assertTrue(st.session_state["_suite_disk_state_restored::investment"])
+        self.assertNotIn("_suite_disk_state_restored::investment", st.session_state)
 
     def test_successful_restore_sets_flag(self) -> None:
         st = _FakeSt()

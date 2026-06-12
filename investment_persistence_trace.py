@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v2"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v3"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -257,6 +257,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-insight-hydrate-v2",
         "investment-durable-restore-v1",
         "investment-durable-restore-v2",
+        "investment-durable-restore-v3",
     }
 )
 

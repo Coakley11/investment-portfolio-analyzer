@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-durable-restore-v2` (Dell startup restore fix — post-init cloud align) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `da4f654`; phone cloud restore OK) · Test **E** **BLOCKED** until Test D passes after Dell reboot  
+**Status:** Deploy marker `investment-durable-restore-v3` (clear stale AMI flags blocking startup restore) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `d0fdaf9`: `restore_decision=skipped`, `ami_return_deferred_tab`) · Test **E** **BLOCKED**  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 

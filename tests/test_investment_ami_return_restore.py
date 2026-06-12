@@ -32,6 +32,12 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
         st = _FakeSt({"suite_ami_insight": "abc123"})
         self.assertTrue(ami_return_navigation_active(st, "investment"))
 
+    def test_ami_return_navigation_inactive_with_stale_session_context_only(self) -> None:
+        st = _FakeSt()
+        st.session_state["_ami_return_context"] = {"source_page": "Portfolio Health"}
+        st.session_state["_skip_page_restore_for"] = "Portfolio Health"
+        self.assertFalse(ami_return_navigation_active(st, "investment"))
+
     def test_build_source_state_includes_holdings_df_records(self) -> None:
         holdings = pd.DataFrame(
             {
@@ -53,7 +59,7 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
     def test_apply_deferred_restore_skips_stale_blob_holdings(self) -> None:
         import investment_persistent_state as ips
 
-        st = _FakeSt()
+        st = _FakeSt({"suite_ami_insight": "live-return-id"})
         st.session_state["_skip_page_restore_for"] = "⑤ Portfolio Health"
         st.session_state["_suite_holdings_fp"] = "BND:50.0:Bonds|VYM:50.0:Dividend ETF"
         stale = {
