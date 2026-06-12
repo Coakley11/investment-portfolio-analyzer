@@ -121,6 +121,42 @@ HEALTH_SUBTAB_LABELS: tuple[str, ...] = (
 RECOMMENDATIONS_SCROLL_ANCHOR = "portfolio-recommendations"
 RECOMMENDATIONS_HEALTH_SUBTAB = HEALTH_SUBTAB_LABELS[3]
 
+ETF_HOLDINGS_TAB_LABEL = "ETF Holdings Explorer"
+
+# Semantic keys for main section routing (first 10 tabs align across modes).
+_MAIN_TAB_STEP_ORDER: tuple[str, ...] = (
+    "getting_started",
+    "overview",
+    "portfolio",
+    "analytics",
+    "health",
+    "explain",
+    "macro",
+    "monte_carlo",
+    "optimization",
+    "frontier",
+)
+
+
+def main_tab_label(step: str, *, beginner: bool) -> str:
+    """Resolve the section label for a semantic step in the current experience mode."""
+    labels = BEGINNER_TAB_LABELS if beginner else ADVANCED_TAB_LABELS
+    idx = _MAIN_TAB_STEP_ORDER.index(step)
+    if idx >= len(labels):
+        raise IndexError(
+            f"Tab step {step!r} is not available in {'beginner' if beginner else 'advanced'} mode"
+        )
+    return labels[idx]
+
+
+def active_main_tab(active: str, step: str, *, beginner: bool) -> bool:
+    """True when ``active`` is the main tab for ``step`` in the given mode."""
+    return active == main_tab_label(step, beginner=beginner)
+
+
+def is_etf_holdings_tab(active: str) -> bool:
+    return str(active or "").strip() == ETF_HOLDINGS_TAB_LABEL
+
 
 def normalize_tab_label_for_mode(label: str, *, beginner: bool) -> str:
     """Map a saved tab from the other experience mode to the active label set."""

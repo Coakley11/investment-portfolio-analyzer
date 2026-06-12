@@ -28,6 +28,8 @@ from components.beginner_navigation import (
     BEGINNER_TAB_LABELS,
     OBJECTIVE_TO_PRESET,
     _holdings_fingerprint,
+    active_main_tab,
+    is_etf_holdings_tab,
     mark_portfolio_built,
     render_beginner_sidebar_checklist,
     render_recommended_next_step_card,
@@ -1943,7 +1945,7 @@ from suite_analytical_question import render_suite_applied_math_insight
 
 render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
 
-if _active_tab == _main_tab_labels[0]:
+if active_main_tab(_active_tab, "getting_started", beginner=beginner_mode):
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
         render_beginner_goal_tab(change_goal_mode=_change_goal_mode)
@@ -1965,7 +1967,7 @@ if _active_tab == _main_tab_labels[0]:
         )
         render_getting_started_guide(beginner_mode=False)
 
-if _active_tab == _main_tab_labels[2]:
+if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
     try:
         from investment_workflow import record_workflow_action
 
@@ -2218,7 +2220,7 @@ def _require_analytics(feature: str) -> bool:
     )
     return False
 
-if _active_tab == _main_tab_labels[2]:
+if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
     try:
         from investment_workflow import render_rebuild_portfolio_panel
 
@@ -2268,7 +2270,7 @@ if _active_tab == _main_tab_labels[2]:
 
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[5] and _require_analytics("Explain This Portfolio"):
+if active_main_tab(_active_tab, "explain", beginner=beginner_mode) and _require_analytics("Explain This Portfolio"):
     if beginner_mode:
         st.session_state.visited_explain = True
     section_header(
@@ -2312,7 +2314,7 @@ if _active_tab == _main_tab_labels[5] and _require_analytics("Explain This Portf
 
 # ── Risk Analysis ─────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"):
+if active_main_tab(_active_tab, "analytics", beginner=beginner_mode) and _require_analytics("Analyze Portfolio"):
     st.session_state.visited_risk = True
     if pp.is_demo_mode(st) or pp.is_screenshot_mode(st):
         pdemo.render_sample_portfolio_button(st)
@@ -2476,7 +2478,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
 
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health"):
+if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_analytics("Portfolio Health"):
     _health_debug_loaded = False
     section_header(
         "Portfolio Health",
@@ -2935,7 +2937,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[1] and _require_analytics("Overview"):
+if active_main_tab(_active_tab, "overview", beginner=beginner_mode) and _require_analytics("Overview"):
     if pp.is_demo_mode(st) or pp.is_screenshot_mode(st):
         pdemo.render_sample_portfolio_button(st)
     render_overview_tab(
@@ -2954,7 +2956,7 @@ if _active_tab == _main_tab_labels[1] and _require_analytics("Overview"):
 
 # ── Forward-Looking Macro Analysis ─────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[6] and _require_analytics("Macro Analysis"):
+if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_analytics("Macro Analysis"):
     if beginner_mode:
         section_header(
             "Macro Analysis",
@@ -3070,7 +3072,7 @@ if _active_tab == _main_tab_labels[6] and _require_analytics("Macro Analysis"):
 
 # ── Monte Carlo ───────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[7] and _require_analytics("Monte Carlo"):
+if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _require_analytics("Monte Carlo"):
     section_header("Monte Carlo Simulation", f"{HELP['monte_carlo']} {APP_DISCLAIMER}")
     if beginner_mode:
         what_why_do(
@@ -3180,7 +3182,7 @@ if _active_tab == _main_tab_labels[7] and _require_analytics("Monte Carlo"):
 
 # ── Optimization ──────────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[8] and _require_analytics("Optimization"):
+if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _require_analytics("Optimization"):
     if beginner_mode:
         st.info("Portfolio optimization is available in **Advanced Mode**.")
     else:
@@ -3256,7 +3258,7 @@ if _active_tab == _main_tab_labels[8] and _require_analytics("Optimization"):
 
 # ── Efficient Frontier ────────────────────────────────────────────────────────
 
-if _active_tab == _main_tab_labels[9]:
+if active_main_tab(_active_tab, "frontier", beginner=beginner_mode):
     if beginner_mode:
         st.info("The efficient frontier chart is available in **Advanced Mode**.")
     else:
@@ -3370,16 +3372,13 @@ if _active_tab == _main_tab_labels[9]:
 
 # ── ETF Holdings Explorer (Advanced only) ─────────────────────────────────────
 
-if _active_tab == _main_tab_labels[10]:
-    if beginner_mode:
-        st.info("ETF Holdings Explorer is available in **Advanced Mode**.")
-    else:
-        try:
-            from components.etf_holdings_explorer import render_etf_holdings_explorer
+if not beginner_mode and is_etf_holdings_tab(_active_tab):
+    try:
+        from components.etf_holdings_explorer import render_etf_holdings_explorer
 
-            render_etf_holdings_explorer(st.session_state.holdings_df, settings=settings)
-        except ImportError:
-            st.warning("ETF Holdings Explorer module is not available in this build.")
+        render_etf_holdings_explorer(st.session_state.holdings_df, settings=settings)
+    except ImportError:
+        st.warning("ETF Holdings Explorer module is not available in this build.")
 
 # ── Header health badge (cached; no heavy health calc on load) ─────────────────
 

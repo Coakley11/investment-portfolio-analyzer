@@ -82,14 +82,13 @@ def main() -> int:
 
     print("\n=== CHIP NAV (code path) ===")
     from components.etf_holdings_explorer import render_etf_ticker_chip_bar  # noqa: F401
-    from components.beginner_navigation import ADVANCED_TAB_LABELS
+    from components.beginner_navigation import ADVANCED_TAB_LABELS, ETF_HOLDINGS_TAB_LABEL
 
-    if "ETF Holdings Explorer" not in ADVANCED_TAB_LABELS:
+    if ETF_HOLDINGS_TAB_LABEL not in ADVANCED_TAB_LABELS:
         print("FAIL: ETF Holdings Explorer not in ADVANCED_TAB_LABELS")
         ok = False
     else:
-        idx = ADVANCED_TAB_LABELS.index("ETF Holdings Explorer")
-        print(f"ETF tab index: {idx}")
+        print(f"ETF tab label: {ETF_HOLDINGS_TAB_LABEL}")
         # Chip sets these session keys (verified in source):
         print("Chip sets: etf_explorer_ticker, _pending_investment_tab=ETF Holdings Explorer")
 

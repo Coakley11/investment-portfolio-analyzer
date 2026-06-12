@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 import etf_holdings as eh
+from components.beginner_navigation import ETF_HOLDINGS_TAB_LABEL
 from components.ui_helpers import APP_DISCLAIMER
 
 
@@ -41,7 +42,7 @@ def render_etf_ticker_chip_bar(
         with cols[i % len(cols)]:
             if st.button(sym, key=f"{key_prefix}_{sym}", use_container_width=True):
                 st.session_state["etf_explorer_ticker"] = sym
-                st.session_state["_pending_investment_tab"] = "ETF Holdings Explorer"
+                st.session_state["_pending_investment_tab"] = ETF_HOLDINGS_TAB_LABEL
                 st.rerun()
 
 
