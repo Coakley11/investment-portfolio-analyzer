@@ -126,6 +126,14 @@ except Exception:
     pass
 
 try:
+    from applied_math_return_insight import hydrate_investment_ami_return_state, insight_return_query_id
+
+    if insight_return_query_id(st) or str(st.query_params.get("suite_ai_question_id") or "").strip():
+        hydrate_investment_ami_return_state(st, "investment")
+except Exception:
+    pass
+
+try:
     from suite_resume_launch import apply_suite_resume_launch
 
     apply_suite_resume_launch(st, "investment")
@@ -994,7 +1002,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v4` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v5` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar

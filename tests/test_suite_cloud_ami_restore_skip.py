@@ -6,6 +6,7 @@ import unittest
 
 from suite_cloud_state import (
     has_resume_query_params,
+    list_workspace_restore_blocking_params,
     purge_stale_investment_ami_restore_blockers,
     reconcile_stale_resume_session_flags,
 )
@@ -61,7 +62,7 @@ class TestSuiteCloudAmiRestoreSkip(unittest.TestCase):
         st = _FakeSt({"suite_ami_insight": "live-id"})
         st.session_state["_skip_page_restore_for"] = "Portfolio Health"
         purge_stale_investment_ami_restore_blockers(st, "investment")
-        self.assertTrue(has_resume_query_params(st, "investment"))
+        self.assertIn("suite_ami_insight", list_workspace_restore_blocking_params(st, "investment"))
         self.assertIn("_skip_page_restore_for", st.session_state)
 
 

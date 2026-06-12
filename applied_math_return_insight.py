@@ -145,6 +145,47 @@ def insight_return_query_id(st: Any) -> str:
     return _query_param(st, "suite_ami_insight")
 
 
+def _source_state_has_restore_payload(state: Any) -> bool:
+    """True when a source_state dict can restore page/holdings (not empty shell)."""
+    if not isinstance(state, dict) or not state:
+        return False
+    if not str(state.get("source_app") or "").strip():
+        return False
+    ent = state.get("entity_params")
+    if isinstance(ent, dict) and ent:
+        return True
+    wp = state.get("widget_params")
+    if isinstance(wp, dict) and wp:
+        return True
+    if state.get("source_page") or state.get("page_params"):
+        return True
+    return False
+
+
+def investment_ami_return_allows_restore_skip(st: Any) -> bool:
+    """Defer cloud restore only when AMI return has usable source_state to apply."""
+    ss = st.session_state
+    if ss.get("_ami_return_allow_cloud_restore"):
+        return False
+    if ss.get("_ami_return_source_applied"):
+        return True
+    ctx = ss.get(SESSION_RETURN_CONTEXT_KEY)
+    if _source_state_has_restore_payload(ctx):
+        return True
+    if not insight_return_query_id(st) and not _query_param(st, "suite_ai_question_id"):
+        return False
+    pending = ss.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict) and pending:
+        resolved = _resolve_return_source_state(
+            st,
+            "investment",
+            pending,
+            question_id_qp=_query_param(st, "suite_ai_question_id"),
+        )
+        return _source_state_has_restore_payload(resolved)
+    return False
+
+
 def _active_ami_return_query_param_keys(st: Any) -> list[str]:
     """AMI return query params present on the current URL."""
     names = ("suite_ami_insight", "suite_page", "suite_holdings_fp", "suite_ai_question_id")
@@ -672,7 +713,7 @@ def build_return_resume_key(
 
 def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any] | None) -> None:
     """Apply stored page snapshot to source app session (pending keys + navigation)."""
-    if not isinstance(source_state, dict) or not source_state:
+    if not isinstance(source_state, dict) or not _source_state_has_restore_payload(source_state):
         return
     ss = st.session_state
     ss[SESSION_RETURN_CONTEXT_KEY] = dict(source_state)
@@ -685,9 +726,11 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
     if page:
         ss[SESSION_RETURN_PAGE_KEY] = page
         if app == "investment":
-            if insight_return_query_id(st):
+            if _source_state_has_restore_payload(source_state) and insight_return_query_id(st):
                 ss["_skip_page_restore_for"] = page
-        else:
+            else:
+                ss.pop("_skip_page_restore_for", None)
+        elif insight_return_query_id(st):
             ss["_skip_page_restore_for"] = page
     try:
         if app == "baseball":
@@ -704,6 +747,7 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
             fp_before = _session_holdings_fingerprint(ss)
             apply_source_state_to_session(ss, source_state)
             fp_after = _session_holdings_fingerprint(ss)
+            ss["_ami_return_source_applied"] = True
             try:
                 from investment_persistence_trace import record_ami_apply_trace
 
@@ -848,20 +892,156 @@ def _resolve_return_source_state(
     question_id_qp: str = "",
 ) -> dict[str, Any]:
     """Best-effort source_state from insight blob, return_context, or question send snapshot."""
-    source_state = insight.get("source_state") or insight.get("return_context") or {}
-    if isinstance(source_state, dict) and source_state.get("widget_params"):
-        return dict(source_state)
-    qid = str(insight.get("question_id") or question_id_qp or "").strip()
+    insight = insight if isinstance(insight, dict) else {}
+    raw_ss = insight.get("source_state")
+    raw_rc = insight.get("return_context")
+    for candidate in (raw_ss, raw_rc):
+        if isinstance(candidate, dict) and _source_state_has_restore_payload(candidate):
+            return dict(candidate)
+
+    qid = str(insight.get("question_id") or question_id_qp or _query_param(st, "suite_ai_question_id") or "").strip()
     if qid:
         try:
             from suite_analytical_question import load_analytical_question_source_state
 
             loaded = load_analytical_question_source_state(qid)
-            if loaded:
+            if _source_state_has_restore_payload(loaded):
                 return dict(loaded)
         except Exception:
             pass
-    return dict(source_state) if isinstance(source_state, dict) else {}
+
+    for candidate in (raw_ss, raw_rc):
+        if isinstance(candidate, dict) and candidate:
+            return dict(candidate)
+    return {}
+
+
+def _record_investment_ami_return_diagnostics(
+    st: Any,
+    *,
+    insight: dict[str, Any] | None = None,
+    source_state: dict[str, Any] | None = None,
+    applied: bool = False,
+    skip_reason: str = "",
+) -> None:
+    """Session + trace diagnostics for Test E AMI return apply path."""
+    ss = st.session_state
+    iid = insight_return_query_id(st)
+    insight = insight if isinstance(insight, dict) else {}
+    source_state = source_state if isinstance(source_state, dict) else {}
+    ss["suite_ami_insight_query_value"] = iid or None
+    ss["source_state_exists_on_return"] = _source_state_has_restore_payload(source_state)
+    ss["source_state_app"] = str(source_state.get("source_app") or insight.get("source_app") or "").strip() or None
+    ss["source_state_keys_on_return"] = sorted(str(k) for k in source_state.keys()) if source_state else None
+    if skip_reason:
+        ss["apply_source_state_skip_reason"] = skip_reason
+    elif applied:
+        ss.pop("apply_source_state_skip_reason", None)
+    try:
+        from investment_persistence_trace import record_investment_ami_return_diagnostics
+
+        record_investment_ami_return_diagnostics(
+            st,
+            insight=insight,
+            source_state=source_state,
+            applied=applied,
+            skip_reason=skip_reason or None,
+        )
+    except Exception:
+        pass
+
+
+def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") -> bool:
+    """
+    Load AMI insight on return URL and apply investment source_state when available.
+
+    When source_state is missing, clears deferred-tab flags so cloud restore can run.
+    """
+    key = str(app_key or "").strip().lower()
+    if key != "investment":
+        return False
+    iid = insight_return_query_id(st)
+    qid_qp = _query_param(st, "suite_ai_question_id")
+    if not iid and not qid_qp:
+        return False
+
+    ss = st.session_state
+    ss["_ami_insight_hydrate_attempted"] = True
+    already_applied = bool(ss.get("_ami_return_source_applied"))
+
+    insight: dict[str, Any] = {}
+    if iid:
+        prev = str(ss.get("_ami_hydrated_insight_id") or "").strip()
+        pending = _pending_insight_valid(st)
+        if prev != iid or not pending:
+            loaded = load_applied_math_insight(iid, source_app=key)
+            if loaded:
+                insight = dict(loaded)
+            elif not pending:
+                insight = {
+                    "insight_id": iid,
+                    "conclusion": "Applied Investment Insight loaded.",
+                    "question": "",
+                    "source_app": key,
+                }
+        elif isinstance(ss.get(SESSION_PENDING_KEY), dict):
+            insight = dict(ss[SESSION_PENDING_KEY])
+
+    if insight:
+        ss[SESSION_PENDING_KEY] = insight
+        ss[SESSION_RETURN_PAGE_KEY] = (
+            _query_param(st, "suite_page")
+            or _resolve_insight_source_page(insight)
+            or insight.get("source_page")
+            or ""
+        )
+        ss["_ami_hydrated_insight_id"] = iid or str(insight.get("insight_id") or "")
+
+    source_state = _resolve_return_source_state(st, key, insight, question_id_qp=qid_qp)
+    _record_investment_ami_return_diagnostics(st, insight=insight, source_state=source_state)
+
+    if already_applied and _source_state_has_restore_payload(ss.get(SESSION_RETURN_CONTEXT_KEY)):
+        ss["_ami_insight_hydrate_success"] = True
+        ss["_ami_insight_hydrate_source"] = "session"
+        return True
+
+    if _source_state_has_restore_payload(source_state):
+        apply_return_source_state(st, key, source_state)
+        ss["_ami_return_source_applied"] = True
+        ss["_ami_insight_hydrate_success"] = True
+        ss["_ami_insight_hydrate_source"] = "url"
+        _record_investment_ami_return_diagnostics(st, insight=insight, source_state=source_state, applied=True)
+        try:
+            from investment_persistence_trace import record_ami_return_hydrate_trace
+
+            record_ami_return_hydrate_trace(st, source_state=source_state, insight_id=iid)
+        except Exception:
+            pass
+        _sync_investment_insight_tab_keys(st, key, insight=insight)
+        try:
+            from investment_persistent_state import notify_pending_insight_change
+
+            notify_pending_insight_change(st, source="insight_hydrate")
+        except Exception:
+            pass
+        return True
+
+    skip_reason = "no_usable_source_state_on_return"
+    ss["apply_source_state_skip_reason"] = skip_reason
+    ss["_ami_return_allow_cloud_restore"] = True
+    ss["_ami_insight_hydrate_success"] = bool(insight)
+    ss["_ami_insight_hydrate_source"] = "url_partial" if insight else "none"
+    clear_ami_return_deferred_flags(st, key)
+    ss.pop("_skip_page_restore_for", None)
+    ss.pop("_suite_page_overwrite_source", None)
+    _record_investment_ami_return_diagnostics(
+        st,
+        insight=insight,
+        source_state=source_state,
+        applied=False,
+        skip_reason=skip_reason,
+    )
+    return False
 
 
 def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
@@ -904,13 +1084,20 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
             insight,
             question_id_qp=_qp("suite_ai_question_id"),
         )
-    if isinstance(source_state, dict) and source_state:
+    if isinstance(source_state, dict) and _source_state_has_restore_payload(source_state):
         st.session_state[SESSION_RETURN_CONTEXT_KEY] = dict(source_state)
         apply_return_source_state(st, app_key, source_state)
         st.session_state[flag] = True
         mark_ami_return_resume_consumed(st, app_key)
         clear_ami_return_deferred_flags(st, app_key)
         return True
+    _record_investment_ami_return_diagnostics(
+        st,
+        insight=insight if isinstance(insight, dict) else {},
+        source_state=source_state if isinstance(source_state, dict) else {},
+        applied=False,
+        skip_reason="commit_ami_return_no_usable_source_state",
+    )
     return False
 
 
@@ -929,6 +1116,9 @@ def stage_pending_insight(st: Any, insight: AppliedMathInsight | dict[str, Any],
 
 def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     """On source app load: hydrate pending insight from ?suite_ami_insight= (cloud-backed)."""
+    key = str(app_key or "").strip().lower()
+    if key == "investment":
+        return hydrate_investment_ami_return_state(st, key)
 
     def _qp(name: str) -> str:
         try:

@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v4"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v5"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -108,6 +108,11 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "holdings_fingerprint_before_apply",
     "holdings_fingerprint_after_apply",
     "holdings_fingerprint_after_restore",
+    "suite_ami_insight_query_value",
+    "source_state_exists_on_return",
+    "source_state_app",
+    "source_state_keys_on_return",
+    "apply_source_state_skip_reason",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
@@ -273,6 +278,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v2",
         "investment-durable-restore-v3",
         "investment-durable-restore-v4",
+        "investment-durable-restore-v5",
     }
 )
 
@@ -586,6 +592,41 @@ def record_holdings_restore_trace(st: Any) -> None:
         restore_pick_source=ss.get("_suite_persist_debug_pick_source")
         or ss.get("_suite_persist_last_restore_source"),
     )
+
+
+def record_investment_ami_return_diagnostics(
+    st: Any,
+    *,
+    insight: dict[str, Any] | None = None,
+    source_state: dict[str, Any] | None = None,
+    applied: bool = False,
+    skip_reason: str | None = None,
+) -> None:
+    """Test E return-path diagnostics (hydrate + apply)."""
+    ss = st.session_state
+    insight = insight if isinstance(insight, dict) else {}
+    source_state = source_state if isinstance(source_state, dict) else {}
+    ctx_keys = sorted(str(k) for k in source_state.keys()) if source_state else None
+    update_trace(
+        st,
+        suite_ami_insight_query_value=ss.get("suite_ami_insight_query_value"),
+        insight_hydrate_attempted=ss.get("_ami_insight_hydrate_attempted"),
+        insight_hydrate_success=ss.get("_ami_insight_hydrate_success"),
+        insight_hydrate_source=ss.get("_ami_insight_hydrate_source"),
+        return_context_keys=ctx_keys,
+        source_state_exists_on_return=ss.get("source_state_exists_on_return"),
+        source_state_app=ss.get("source_state_app"),
+        source_state_keys_on_return=ss.get("source_state_keys_on_return"),
+        apply_source_state_skip_reason=skip_reason or ss.get("apply_source_state_skip_reason"),
+        source_app_normalized=source_state.get("source_app") or insight.get("source_app"),
+        ami_return_detected=True,
+    )
+    if applied:
+        update_trace(
+            st,
+            apply_source_state_attempted=True,
+            apply_source_state_success=True,
+        )
 
 
 def record_emergency_restore_trace(st: Any) -> None:
@@ -1226,6 +1267,17 @@ def collect_test_e_trace_rows(st: Any, trace: dict[str, Any]) -> dict[str, Any]:
     rows["page_overwrite_source"] = trace.get("page_overwrite_source")
     fp, _ = _holdings_fingerprint_and_count(st)
     rows["holdings_fingerprint"] = trace.get("holdings_fingerprint") or fp
+    for label in (
+        "suite_ami_insight_query_value",
+        "insight_hydrate_attempted",
+        "insight_hydrate_success",
+        "insight_hydrate_source",
+        "source_state_exists_on_return",
+        "source_state_app",
+        "source_state_keys_on_return",
+        "apply_source_state_skip_reason",
+    ):
+        rows[label] = trace.get(label) if label in trace else ss.get(label)
     return rows
 
 

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from applied_math_context import apply_source_state_to_session, build_source_state
-from applied_math_return_insight import ami_return_navigation_active
-
+from applied_math_return_insight import (
+    SESSION_PENDING_KEY,
+    _resolve_return_source_state,
+    _source_state_has_restore_payload,
+    ami_return_navigation_active,
+    hydrate_investment_ami_return_state,
+)
 
 class _FakeSessionState(dict):
     def __getattr__(self, name):
@@ -98,6 +104,93 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
         self.assertEqual(
             st.session_state.get("_suite_page_overwrite_source"),
             "ami_return_deferred_holdings",
+        )
+
+    def test_resolve_source_state_from_entity_params_without_widget_params(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        built = build_source_state(
+            "Portfolio Health",
+            {"investment_active_tab": "Portfolio Health", "holdings_df": holdings},
+        )
+        built.pop("widget_params", None)
+        built["widget_params"] = {}
+        insight = {"insight_id": "x", "source_state": built, "source_app": "investment"}
+        st = _FakeSt()
+        resolved = _resolve_return_source_state(st, "investment", insight)
+        self.assertTrue(_source_state_has_restore_payload(resolved))
+        self.assertIn("BND:50.0:Bonds", str(resolved.get("entity_params", {}).get("holdings_fingerprint")))
+
+    def test_hydrate_applies_source_state_from_question_id_url(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        source_state = build_source_state(
+            "Portfolio Health",
+            {"investment_active_tab": "Portfolio Health", "holdings_df": holdings},
+        )
+        st = _FakeSt(
+            {
+                "suite_ami_insight": "insight-abc",
+                "suite_ai_question_id": "q-123",
+            }
+        )
+        insight = {
+            "insight_id": "insight-abc",
+            "question_id": "q-123",
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+            "conclusion": "Test conclusion",
+        }
+
+        with patch(
+            "applied_math_return_insight.load_applied_math_insight",
+            return_value=insight,
+        ), patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value=source_state,
+        ):
+            ok = hydrate_investment_ami_return_state(st, "investment")
+
+        self.assertTrue(ok)
+        self.assertTrue(st.session_state.get("_ami_return_source_applied"))
+        df = st.session_state["holdings_df"]
+        self.assertEqual(set(df["Ticker"].astype(str).str.upper()), {"BND", "VYM"})
+
+    def test_hydrate_missing_source_state_allows_cloud_restore(self) -> None:
+        st = _FakeSt({"suite_ami_insight": "insight-only"})
+        insight = {
+            "insight_id": "insight-only",
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+            "conclusion": "No source state",
+        }
+        st.session_state["_skip_page_restore_for"] = "Portfolio Health"
+
+        with patch(
+            "applied_math_return_insight.load_applied_math_insight",
+            return_value=insight,
+        ), patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value={},
+        ):
+            ok = hydrate_investment_ami_return_state(st, "investment")
+
+        self.assertFalse(ok)
+        self.assertTrue(st.session_state.get("_ami_return_allow_cloud_restore"))
+        self.assertNotIn("_skip_page_restore_for", st.session_state)
+        self.assertEqual(
+            st.session_state.get("apply_source_state_skip_reason"),
+            "no_usable_source_state_on_return",
         )
 
 

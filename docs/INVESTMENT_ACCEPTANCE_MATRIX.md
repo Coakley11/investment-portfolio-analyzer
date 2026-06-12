@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-durable-restore-v4` (emergency AMI purge + URL-only defer gating) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `5f2dfb3` v3: `restore_decision=skipped`, `ami_return_deferred_tab`) · Test **E** **BLOCKED**  
+**Status:** Deploy marker `investment-durable-restore-v5` · Tests A–C **PASS** (frozen) · Test **D** **PASS** (frozen on v4) · Test **E** **IN PROGRESS** (v5 AMI apply fix)  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -18,8 +18,8 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 | **A** | Page / tab sync | `investment_active_tab`, `health_active_tab` | Set non-default tab (e.g. ③ Build Portfolio) → wait for `tab_change` save → hard refresh other device | **PASS** — frozen 2026-06-11 (PR2 scope A `c4bb94b`); re-open only on trace regression |
 | **B** | Global sidebar settings sync | `experience`, `_suite_persisted_experience`, `sidebar_portfolio_value`, `analysis_start`/`analysis_end`, `risk_free_pct`, `portfolio_preset` | Change global sidebar settings on Dell → save trace → hard refresh phone → compare Test B block | **PASS** — frozen 2026-06-11 (PR2 scope B `7dc3595`); re-open only on trace regression |
 | **C** | Page-specific filters sync | `overview_subtab`, `mc_assumption_mode`, `health_run_optimizer`, `health_bond_min`, `frontier_points`, macro keys | Set non-default filters on Dell → wait 8–10s → Test C block → phone hard refresh → compare | **PASS** — frozen 2026-06-11; re-open only on trace regression |
-| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Set 50% VYM / 50% BND → confirm save/readback fingerprints + row count → **reboot/hard refresh** Dell + phone | **REOPENED** — reboot on `51fd4e6` restores defaults; fix `investment-durable-restore-v1` local, pending live verify |
-| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **BLOCKED** — do not run until Test D passes after reboot (`51fd4e6` AMI fix shipped; durable restore still failing) |
+| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Set 50% VYM / 50% BND → confirm save/readback fingerprints + row count → **reboot/hard refresh** Dell + phone | **PASS** — frozen 2026-06-11 on v4 `089e8be` (Dell reboot + phone refresh: BND 50 / VYM 50, `restore_decision=cloud`) |
+| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **IN PROGRESS** — unblocked after Test D frozen |
 
 ---
 
@@ -188,7 +188,7 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 
 ## Test D — Portfolio / ticker / analysis restore
 
-**Status: REOPENED (2026-06-11)** — Live on `da4f654`: save + phone cloud restore OK; **Dell reboot/hard refresh** still restores default VTI/VXUS/BND/VNQ + Long-Term Growth. Root cause: early reconcile ran before `init_holdings()` and could not detect missing `holdings_df`; `init_holdings()` then applied defaults. Fix: `investment-durable-restore-v2` — post-init cloud align + missing-row fingerprint drift detection.
+**Status: PASS / FROZEN (2026-06-11)** — Verified on v4 `089e8be` (`investment-durable-restore-v4`). Dell reboot + phone hard refresh: BND 50 / VYM 50; `restore_decision=cloud`; `page_overwrite_source` empty; `has_suite_ami_insight=False`; `restore_blocker_flags` empty; no default portfolio.
 
 ### Failure on reboot (`51fd4e6`, not AMI-only)
 - Before reboot: Dell + phone show 50% BND / 50% VYM; save/readback fingerprints match.
@@ -314,7 +314,7 @@ Underlying blob keys (not all in copy block): `holdings_df` records, `workflow_s
 
 ## Test E — AMI return restores investment state
 
-**Status: INCONCLUSIVE (2026-06-11)** — AMI return not detected on Dell or phone. **Do not re-run until Test D cloud portfolio is current.**
+**Status: IN PROGRESS (2026-06-11)** — Test D frozen on v4. v5 (`investment-durable-restore-v5`) fixes AMI return detect-without-apply: hydrate source_state from insight/question blob, apply holdings, or fall back to cloud restore when missing.
 
 ### Baseline failure (observed)
 - `ami_return_detected` = False, `return_context_keys` = empty
@@ -481,14 +481,14 @@ See plan § Trace — required fields per test:
 - [ ] `investment_nav_state.py` (Test A)
 - [ ] Global settings module (Test B)
 - [ ] `portfolio_state.py` (Test D)
-- [ ] AMI return wiring (Test E)
+- [x] AMI return wiring (Test E) — launch + return paths wired; baseline run in progress
 
 ### Phase 4 — Manual sign-off
 - [x] Test A PASS (frozen 2026-06-11 — PR2 scope A `c4bb94b`)
 - [x] Test B PASS (frozen 2026-06-11 — PR2 scope B `7dc3595`)
 - [x] Test C PASS (frozen 2026-06-11 — baseline passed without scoped PR2)
 - [ ] Test D PASS (re-verify after `portfolio_change` autosave)
-- [ ] Test E PASS (blocked on D + AMI return URL)
+- [ ] Test E PASS (in progress — Portfolio Health AMI round-trip)
 - [ ] Freeze Investment persistence baseline
 
 ---

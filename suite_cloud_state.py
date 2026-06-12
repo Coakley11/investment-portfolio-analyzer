@@ -266,6 +266,15 @@ def should_skip_workspace_restore_for_resume(
         reconcile_stale_resume_session_flags(st, app_key)
     key = _normalize_resume_app_key(app_key)
     if key == "investment":
+        if st.session_state.get("_ami_return_allow_cloud_restore"):
+            return False
+        try:
+            from applied_math_return_insight import investment_ami_return_allows_restore_skip
+
+            if not investment_ami_return_allows_restore_skip(st):
+                return False
+        except ImportError:
+            pass
         return bool(list_workspace_restore_blocking_params(st, app_key))
     if list_workspace_restore_blocking_params(st, app_key):
         return True
