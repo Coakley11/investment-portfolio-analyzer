@@ -12,6 +12,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 INSIGHT_ITEM_TYPE = "applied_math_insight"
+AMI_INSIGHT_STORE_VERSION = "insight-store-v10"
 SESSION_PENDING_KEY = "_ami_pending_insight"
 SESSION_RETURN_PAGE_KEY = "_ami_return_page"
 SESSION_RETURN_CONTEXT_KEY = "_ami_return_context"
@@ -229,9 +230,15 @@ def _ami_insight_store_trace(
     return_context_exists: bool,
     blob_written_success: bool,
     return_link_insight_id: str = "",
+    store_exception: str = "",
+    payload_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     ent = source_state.get("entity_params") if isinstance(source_state, dict) else {}
     return {
+        "store_called": True,
+        "store_function_name_used": "store_applied_math_insight",
+        "store_module_file_used": __file__,
+        "store_version": AMI_INSIGHT_STORE_VERSION,
         "store_insight_id": insight_id or None,
         "store_question_id": question_id or None,
         "store_source_state_exists": _source_state_has_restore_payload(source_state),
@@ -244,8 +251,21 @@ def _ami_insight_store_trace(
         ),
         "store_return_context_exists": return_context_exists,
         "store_blob_written_success": blob_written_success,
+        "store_payload_keys": sorted(str(k) for k in (payload_keys or [])) or None,
+        "store_payload_has_source_state": _source_state_has_restore_payload(source_state),
+        "store_payload_has_question_id": bool(str(question_id or "").strip()),
+        "store_payload_has_ami_store_trace": True,
+        "store_exception": str(store_exception or "").strip() or None,
         "return_link_insight_id": str(return_link_insight_id or insight_id or "").strip() or None,
     }
+
+
+def _flatten_insight_store_diag_on_blob(blob: dict[str, Any], trace: dict[str, Any]) -> None:
+    blob["_ami_store_trace"] = dict(trace)
+    blob["store_version"] = AMI_INSIGHT_STORE_VERSION
+    for key, value in trace.items():
+        if key.startswith("store_") or key == "return_link_insight_id":
+            blob[key] = value
 
 
 def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
@@ -261,6 +281,12 @@ def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
         if _source_state_has_restore_payload(payload.get(key)):
             score += 4
             break
+    if isinstance(payload.get("_ami_store_trace"), dict) and payload.get("_ami_store_trace"):
+        score += 2
+    if str(payload.get("store_version") or "") == AMI_INSIGHT_STORE_VERSION:
+        score += 3
+    if payload.get("store_blob_written_success") is True:
+        score += 1
     return score
 
 
@@ -341,6 +367,9 @@ def diagnose_ami_return_source_state_resolution(
     store_trace = insight.get("_ami_store_trace")
     if isinstance(store_trace, dict) and store_trace:
         diag.update(store_trace)
+    for key, val in insight.items():
+        if (str(key).startswith("store_") or key in ("return_link_insight_id", "store_version")) and val is not None:
+            diag.setdefault(key, val)
     question_ss: dict[str, Any] = {}
     if qid:
         try:
@@ -1155,14 +1184,16 @@ def store_applied_math_insight(
         blob["return_context"] = ss
     if qid:
         blob["question_id"] = qid
+    store_exc = ""
     store_trace = _ami_insight_store_trace(
         insight_id=iid,
         question_id=qid,
         source_state=ss if isinstance(ss, dict) else {},
         return_context_exists=_source_state_has_restore_payload(ss),
         blob_written_success=False,
+        payload_keys=sorted(str(k) for k in blob.keys()),
     )
-    blob["_ami_store_trace"] = store_trace
+    _flatten_insight_store_diag_on_blob(blob, store_trace)
     written_ok = False
     try:
         from suite_account import remember_saved_item
@@ -1184,9 +1215,34 @@ def store_applied_math_insight(
             )
         written_ok = True
     except Exception as exc:
+        store_exc = str(exc)
         log.warning("remember_saved_item insight failed: %s", exc)
     store_trace["store_blob_written_success"] = written_ok
-    blob["_ami_store_trace"] = store_trace
+    store_trace["store_exception"] = store_exc or None
+    store_trace["store_payload_has_source_state"] = _source_state_has_restore_payload(blob.get("source_state"))
+    store_trace["store_payload_has_question_id"] = bool(str(blob.get("question_id") or "").strip())
+    _flatten_insight_store_diag_on_blob(blob, store_trace)
+    if written_ok:
+        try:
+            from suite_account import remember_saved_item
+
+            for store_app in (
+                str(data.get("source_app") or "applied_intelligence"),
+                "applied_intelligence",
+                "investment",
+            ):
+                default_title = "Applied Investment Insight"
+                if str(data.get("source_app") or "").strip().lower() != "investment":
+                    default_title = "Applied Math insight"
+                remember_saved_item(
+                    store_app,
+                    INSIGHT_ITEM_TYPE,
+                    iid,
+                    title=str(data.get("conclusion") or default_title)[:120],
+                    payload=blob,
+                )
+        except Exception as exc:
+            log.warning("remember_saved_item insight re-write failed: %s", exc)
     if st is not None:
         st.session_state["_ami_insight_store_trace"] = dict(store_trace)
     try:

@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v9"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v10"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -140,6 +140,15 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "store_return_context_exists",
     "store_blob_written_success",
     "return_link_insight_id",
+    "store_called",
+    "store_function_name_used",
+    "store_module_file_used",
+    "store_version",
+    "store_exception",
+    "store_payload_keys",
+    "store_payload_has_source_state",
+    "store_payload_has_question_id",
+    "store_payload_has_ami_store_trace",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
