@@ -218,6 +218,7 @@ ensure_investment_active_tab = _fallback_ensure_investment_active_tab
 autosave_investment_state = _fallback_noop_persistence
 default_reset_investment_session = _fallback_noop_persistence
 finalize_persistence_debug = _fallback_noop_persistence
+finalize_init_holdings_defaults = _fallback_noop_persistence
 finalize_startup_holdings_restore = _fallback_noop_persistence
 reconcile_investment_cloud_drift_if_needed = _fallback_noop_persistence
 restore_investment_disk_state_once = _fallback_noop_persistence
@@ -234,6 +235,7 @@ try:
         ensure_experience_mode,
         ensure_investment_active_tab,
         finalize_persistence_debug,
+        finalize_init_holdings_defaults,
         finalize_startup_holdings_restore,
         reconcile_investment_cloud_drift_if_needed,
         render_persistence_debug_sidebar,
@@ -1271,8 +1273,8 @@ def render_sidebar() -> dict:
 
 def init_holdings():
     if "holdings_df" not in st.session_state:
-        cloud_saved = False
         if _PERSISTENCE_OK:
+            cloud_saved = False
             try:
                 from investment_persistent_state import _cloud_has_saved_portfolio
 
@@ -1280,11 +1282,13 @@ def init_holdings():
                 cloud_saved = cloud_state is not None
             except Exception:
                 cloud_saved = False
-        if cloud_saved:
             st.session_state.holdings_df = pd.DataFrame()
-            st.session_state["_suite_inv_holdings_restore_issue"] = "holdings_pending_startup_cloud_fixup"
             st.session_state["default_holdings_applied"] = False
-            st.session_state["default_holdings_apply_reason"] = "deferred_for_cloud_fixup"
+            if cloud_saved:
+                st.session_state["_suite_inv_holdings_restore_issue"] = "holdings_pending_startup_cloud_fixup"
+                st.session_state["default_holdings_apply_reason"] = "deferred_for_cloud_fixup"
+            else:
+                st.session_state["default_holdings_apply_reason"] = "deferred_for_persistence_bootstrap"
         elif st.session_state.get("portfolio_built") or st.session_state.get("_suite_inv_holdings_restore_issue"):
             st.session_state.holdings_df = pd.DataFrame()
             st.session_state["default_holdings_applied"] = False
@@ -1876,6 +1880,10 @@ init_holdings()
 if _PERSISTENCE_OK:
     try:
         finalize_startup_holdings_restore(st)
+    except Exception:
+        pass
+    try:
+        finalize_init_holdings_defaults(st)
     except Exception:
         pass
 apply_asset_preset(settings["asset_preset"])

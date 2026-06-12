@@ -834,6 +834,34 @@ def finalize_startup_holdings_restore(st: Any) -> bool:
     return aligned
 
 
+def finalize_init_holdings_defaults(st: Any) -> None:
+    """
+    Apply factory holdings only after restore + ``finalize_startup_holdings_restore``.
+
+    Prevents ``init_holdings`` from poisoning the session with defaults before cloud
+    alignment runs on reboot (Test D).
+    """
+    import portfolio_core as core
+
+    ss = st.session_state
+    if ss.get("_suite_inv_holdings_from_saved_blob") or ss.get("portfolio_built"):
+        return
+    df = ss.get("holdings_df")
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        return
+    cloud_state, _ = _cloud_has_saved_portfolio()
+    if cloud_state:
+        if align_session_holdings_with_cloud(st, cloud_state, source="init_defaults_cloud_guard"):
+            return
+        df = ss.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return
+    ss["holdings_df"] = pd.DataFrame(core.DEFAULT_HOLDINGS)
+    ss["default_holdings_applied"] = True
+    ss["default_holdings_apply_reason"] = "init_holdings_no_saved_portfolio"
+    ss.pop("_suite_inv_holdings_restore_issue", None)
+
+
 def _record_holdings_restore_trace(st: Any, state: dict[str, Any]) -> None:
     ss = st.session_state
     records = _holdings_records_from_blob(state.get("holdings_df"))
@@ -1375,6 +1403,11 @@ def restore_investment_disk_state_once(st: Any) -> bool:
             source="post_restore_cloud_align",
         )
     st.session_state["_suite_inv_debug_restore_ran"] = restored
+    pick_source = st.session_state.get("_suite_persist_debug_pick_source") or st.session_state.get(
+        "_suite_persist_last_restore_source"
+    )
+    if pick_source:
+        st.session_state["_suite_restore_decision"] = str(pick_source)
     st.session_state["_suite_inv_debug_restore_source"] = st.session_state.get(
         "_suite_persist_last_restore_source"
     )

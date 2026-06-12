@@ -610,6 +610,30 @@ def test_finalize_startup_holdings_restore_overrides_init_defaults(monkeypatch):
     assert st.session_state.get("startup_holdings_finalize_source") == "startup_post_init_cloud"
 
 
+def test_finalize_init_holdings_defaults_prefers_cloud_over_factory(monkeypatch):
+    st = _FakeSt()
+    cloud_state = {
+        "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+        "portfolio_built": True,
+        "holdings_df": [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ],
+    }
+
+    def _fake_cloud_saved():
+        return cloud_state, "2026-06-11T18:00:00Z"
+
+    monkeypatch.setattr(ips, "_cloud_has_saved_portfolio", _fake_cloud_saved)
+    st.session_state.holdings_df = pd.DataFrame()
+    st.session_state["default_holdings_applied"] = False
+    st.session_state["default_holdings_apply_reason"] = "deferred_for_persistence_bootstrap"
+    ips.finalize_init_holdings_defaults(st)
+    assert set(st.session_state.holdings_df["Ticker"].tolist()) == {"BND", "VYM"}
+    assert st.session_state.get("default_holdings_applied") is False
+    assert st.session_state.get("holdings_restore_source") == "init_defaults_cloud_guard"
+
+
 def test_end_of_run_autosave_blocked_when_default_holdings_applied(monkeypatch):
     st = _FakeSt()
     st.session_state["default_holdings_applied"] = True

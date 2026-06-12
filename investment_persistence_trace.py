@@ -319,6 +319,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v7",
         "investment-durable-restore-v8",
         "investment-durable-restore-v9",
+        "investment-durable-restore-v10",
     }
 )
 
