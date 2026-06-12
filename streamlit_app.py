@@ -977,7 +977,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-insight-hydrate-v2` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v1` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar
@@ -1242,7 +1242,10 @@ def render_sidebar() -> dict:
 
 def init_holdings():
     if "holdings_df" not in st.session_state:
-        st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+        if st.session_state.get("portfolio_built") or st.session_state.get("_suite_inv_holdings_restore_issue"):
+            st.session_state.holdings_df = pd.DataFrame()
+        else:
+            st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
 
 
 def apply_asset_preset(name: str):

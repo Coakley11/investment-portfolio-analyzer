@@ -100,12 +100,12 @@ def test_sync_experience_after_widget_triggers_save_on_change(monkeypatch):
     assert st.session_state["_suite_inv_debug_last_mode_switch"]["autosave_triggered"] is True
 
 
-def test_apply_state_empty_holdings_blob_not_default_portfolio():
+def test_apply_state_empty_holdings_without_fingerprint_uses_defaults():
     st = _FakeSt()
     ips.apply_investment_disk_state(st, {"holdings_df": []})
-    assert st.session_state.holdings_df.empty
-    assert st.session_state.get("_suite_inv_holdings_restore_issue") == "empty_saved_holdings"
-    assert st.session_state.get("_suite_inv_holdings_from_saved_blob") is True
+    assert not st.session_state.holdings_df.empty
+    assert st.session_state.get("default_holdings_applied") is True
+    assert st.session_state.get("default_holdings_apply_reason") == "no_saved_portfolio"
 
 
 def test_apply_state_no_holdings_key_uses_factory_default():
@@ -113,6 +113,7 @@ def test_apply_state_no_holdings_key_uses_factory_default():
     ips.apply_investment_disk_state(st, {"experience": "Advanced Mode"})
     assert not st.session_state.holdings_df.empty
     assert len(st.session_state.holdings_df) >= 1
+    assert st.session_state.get("default_holdings_applied") is True
     st = _FakeSt()
     st.session_state["experience"] = "Beginner Mode"
     st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Beginner Mode"
@@ -488,6 +489,106 @@ def test_apply_state_sets_last_persisted_tab():
         },
     )
     assert st.session_state[ips._LAST_PERSISTED_TAB_KEY] == BEGINNER_TAB_LABELS[0]
+
+
+def test_apply_state_fingerprint_without_holdings_refetches_cloud(monkeypatch):
+    st = _FakeSt()
+    expected_fp = "BND:50.0:Bonds|VYM:50.0:Dividend ETF"
+    cloud_state = {
+        "holdings_fingerprint": expected_fp,
+        "holdings_df": [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ],
+        "portfolio_built": True,
+    }
+
+    def _fake_load_cloud(app_id):
+        return cloud_state, "2026-06-11T16:00:00Z"
+
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "holdings_fingerprint": expected_fp,
+            "portfolio_built": True,
+        },
+    )
+    tickers = set(st.session_state.holdings_df["Ticker"].tolist())
+    assert tickers == {"BND", "VYM"}
+    assert st.session_state.get("default_holdings_applied") is False
+    assert st.session_state.get("holdings_restore_source") == "cloud_refetch"
+    assert st.session_state.get("portfolio_built_restored") is True
+
+
+def test_apply_state_fingerprint_without_holdings_skips_defaults_when_cloud_empty(monkeypatch):
+    st = _FakeSt()
+
+    def _fake_load_cloud(app_id):
+        return {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"}, "2026-06-11T16:00:00Z"
+
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+            "portfolio_built": True,
+        },
+    )
+    assert st.session_state.holdings_df.empty
+    assert st.session_state.get("default_holdings_applied") is False
+    assert st.session_state.get("default_holdings_apply_reason") == "missing_holdings_with_fingerprint"
+
+
+def test_end_of_run_autosave_blocked_when_default_holdings_applied(monkeypatch):
+    st = _FakeSt()
+    st.session_state["default_holdings_applied"] = True
+
+    def _fake_load_cloud(app_id):
+        return {}, None
+
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    blocked, reason = ips._end_of_run_autosave_blocked(st)
+    assert blocked is True
+    assert reason == "default_holdings_applied_after_restore"
+
+
+def test_autosave_portfolio_change_writes_holdings_row_count(monkeypatch):
+    st = _FakeSt()
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+    st.session_state["holdings_df"] = pd.DataFrame(
+        [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ]
+    )
+
+    import copy
+
+    saved_payloads: list[dict] = []
+
+    def _fake_save_disk(app_id, payload):
+        saved_payloads.append(copy.deepcopy(payload))
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved_payloads.append(copy.deepcopy(payload))
+
+    def _fake_load_cloud(app_id):
+        return copy.deepcopy(saved_payloads[-1]), "2026-06-11T15:30:00Z"
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    ips.autosave_investment_state(st, trigger="portfolio_change")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["payload_holdings_row_count"] == 2
+    assert event["cloud_blob_has_holdings_df"] is True
+    assert event["cloud_readback_has_holdings_df"] is True
+    assert event["cloud_readback_holdings_row_count"] == 2
 
 
 def test_autosave_mode_change_does_not_skip_when_fp_unchanged(monkeypatch):

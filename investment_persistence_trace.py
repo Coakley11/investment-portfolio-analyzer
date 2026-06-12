@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-insight-hydrate-v2"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v1"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -197,6 +197,18 @@ TEST_D_TRACE_LABELS: tuple[str, ...] = (
     "holdings_row_count",
     "saved_holdings_fingerprint",
     "cloud_readback_holdings_fingerprint",
+    "cloud_fetch_holdings_fingerprint",
+    "restored_holdings_fingerprint",
+    "final_holdings_fingerprint",
+    "cloud_blob_has_holdings_df",
+    "cloud_blob_holdings_row_count",
+    "cloud_readback_has_holdings_df",
+    "cloud_readback_holdings_row_count",
+    "default_holdings_applied",
+    "default_holdings_apply_reason",
+    "holdings_restore_source",
+    "portfolio_built_restored",
+    "workflow_restore_source",
     "preset_applied",
     "selected_portfolio",
     "health_objective",
@@ -240,9 +252,17 @@ def init_developer_mode_from_query(st: Any) -> None:
         st.session_state["_pr1_init_developer_mode_error"] = str(exc)
 
 
+_PR1_BASELINE_DEPLOY_MARKERS = frozenset(
+    {
+        "investment-insight-hydrate-v2",
+        "investment-durable-restore-v1",
+    }
+)
+
+
 def pr1_baseline_trace_active(*, persistence_ok: bool | None = None) -> bool:
     """PR1 baseline: show trace when persistence loaded and deploy marker matches (no ``?dev=1``)."""
-    return bool(persistence_ok) and INVESTMENT_PERSIST_DEPLOY_VERSION == "investment-insight-hydrate-v2"
+    return bool(persistence_ok) and INVESTMENT_PERSIST_DEPLOY_VERSION in _PR1_BASELINE_DEPLOY_MARKERS
 
 
 def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> bool:
@@ -514,6 +534,24 @@ def snapshot_global_settings_trace(st: Any) -> dict[str, Any]:
     return fields
 
 
+def record_holdings_restore_trace(st: Any) -> None:
+    """Persist durable holdings restore diagnostics into the developer trace."""
+    ss = st.session_state
+    update_trace(
+        st,
+        cloud_fetch_holdings_fingerprint=ss.get("cloud_fetch_holdings_fingerprint"),
+        restored_holdings_fingerprint=ss.get("restored_holdings_fingerprint"),
+        final_holdings_fingerprint=ss.get("final_holdings_fingerprint"),
+        cloud_blob_has_holdings_df=ss.get("cloud_blob_has_holdings_df"),
+        cloud_blob_holdings_row_count=ss.get("cloud_blob_holdings_row_count"),
+        default_holdings_applied=ss.get("default_holdings_applied"),
+        default_holdings_apply_reason=ss.get("default_holdings_apply_reason"),
+        holdings_restore_source=ss.get("holdings_restore_source"),
+        portfolio_built_restored=ss.get("portfolio_built_restored"),
+        workflow_restore_source=ss.get("workflow_restore_source"),
+    )
+
+
 def snapshot_portfolio_trace(st: Any) -> dict[str, Any]:
     ss = st.session_state
     fp, count = _holdings_fingerprint_and_count(st)
@@ -530,6 +568,16 @@ def snapshot_portfolio_trace(st: Any) -> dict[str, Any]:
     fields = {
         "holdings_fingerprint": fp,
         "holdings_row_count": count,
+        "final_holdings_fingerprint": fp or ss.get("final_holdings_fingerprint"),
+        "cloud_fetch_holdings_fingerprint": ss.get("cloud_fetch_holdings_fingerprint"),
+        "restored_holdings_fingerprint": ss.get("restored_holdings_fingerprint"),
+        "cloud_blob_has_holdings_df": ss.get("cloud_blob_has_holdings_df"),
+        "cloud_blob_holdings_row_count": ss.get("cloud_blob_holdings_row_count"),
+        "default_holdings_applied": ss.get("default_holdings_applied"),
+        "default_holdings_apply_reason": ss.get("default_holdings_apply_reason"),
+        "holdings_restore_source": ss.get("holdings_restore_source"),
+        "portfolio_built_restored": ss.get("portfolio_built_restored"),
+        "workflow_restore_source": ss.get("workflow_restore_source"),
         "preset_applied": ss.get("preset_applied"),
         "selected_portfolio": ss.get("portfolio_preset") or ss.get("preset_applied"),
         "health_objective": ss.get("health_objective"),
@@ -701,6 +749,12 @@ def snapshot_save_trace(st: Any) -> dict[str, Any]:
         "saved_portfolio_value": trace.get("saved_portfolio_value") or last_event.get("blob_portfolio_value"),
         "saved_holdings_fingerprint": trace.get("saved_holdings_fingerprint")
         or last_event.get("blob_holdings_fingerprint"),
+        "cloud_readback_has_holdings_df": trace.get("cloud_readback_has_holdings_df")
+        or last_event.get("cloud_readback_has_holdings_df"),
+        "cloud_readback_holdings_row_count": trace.get("cloud_readback_holdings_row_count")
+        or last_event.get("cloud_readback_holdings_row_count"),
+        "cloud_blob_has_holdings_df": trace.get("cloud_blob_has_holdings_df")
+        or last_event.get("cloud_blob_has_holdings_df"),
     }
     update_trace(st, **fields)
     return fields

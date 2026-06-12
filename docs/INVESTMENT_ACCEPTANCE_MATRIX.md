@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-insight-hydrate-v2` (local, not yet pushed) · Tests A–C **PASS** (frozen) · Tests **D** and **E** **REOPENED** — live regressions: AMI label/hydrate, portfolio revert, workflow greens  
+**Status:** Deploy marker `investment-durable-restore-v1` (local fix for Test D reboot restore, not yet pushed) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (reboot/hard refresh restores defaults on `51fd4e6`) · Test **E** **BLOCKED** until Test D passes after reboot  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -18,8 +18,8 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 | **A** | Page / tab sync | `investment_active_tab`, `health_active_tab` | Set non-default tab (e.g. ③ Build Portfolio) → wait for `tab_change` save → hard refresh other device | **PASS** — frozen 2026-06-11 (PR2 scope A `c4bb94b`); re-open only on trace regression |
 | **B** | Global sidebar settings sync | `experience`, `_suite_persisted_experience`, `sidebar_portfolio_value`, `analysis_start`/`analysis_end`, `risk_free_pct`, `portfolio_preset` | Change global sidebar settings on Dell → save trace → hard refresh phone → compare Test B block | **PASS** — frozen 2026-06-11 (PR2 scope B `7dc3595`); re-open only on trace regression |
 | **C** | Page-specific filters sync | `overview_subtab`, `mc_assumption_mode`, `health_run_optimizer`, `health_bond_min`, `frontier_points`, macro keys | Set non-default filters on Dell → wait 8–10s → Test C block → phone hard refresh → compare | **PASS** — frozen 2026-06-11; re-open only on trace regression |
-| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Custom holdings (50% VYM / 50% BND) → confirm fingerprints match → phone hard refresh after AMI | **REOPENED** — 50/50 reverted to default mix post-AMI; holdings default guard + `portfolio_change` re-verify |
-| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **REOPENED** — Test D PASS pre-AMI; **AMI return overwrite bug** (restore overwrote 50/50 with default); fix: holdings in source_state + deferred restore + finalize_ami_return_restore |
+| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Set 50% VYM / 50% BND → confirm save/readback fingerprints + row count → **reboot/hard refresh** Dell + phone | **REOPENED** — reboot on `51fd4e6` restores defaults; fix `investment-durable-restore-v1` local, pending live verify |
+| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **BLOCKED** — do not run until Test D passes after reboot (`51fd4e6` AMI fix shipped; durable restore still failing) |
 
 ---
 
@@ -188,7 +188,19 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 
 ## Test D — Portfolio / ticker / analysis restore
 
-**Status: RE-VERIFY** — Test E exposed stale cloud portfolio; scoped `portfolio_change` autosave added. Re-confirm save/readback before re-running Test E.
+**Status: REOPENED (2026-06-11)** — Live on `51fd4e6`: 50% BND / 50% VYM saves during session but **reboot/hard refresh** restores default VTI/VXUS/BND/VNQ. Test E **blocked** until Test D passes after reboot. Local fix: deploy marker `investment-durable-restore-v1` (not yet pushed).
+
+### Failure on reboot (`51fd4e6`, not AMI-only)
+- Before reboot: Dell + phone show 50% BND / 50% VYM; save/readback fingerprints match.
+- After reboot: default holdings + Choose Goal workflow.
+- Root cause: `apply_investment_disk_state` applied `DEFAULT_HOLDINGS` whenever restore blob omitted `holdings_df`, even when `holdings_fingerprint` / `portfolio_built` indicated a saved portfolio; end-of-run autosave could then overwrite cloud with defaults.
+
+### Scoped fix (`investment-durable-restore-v1`)
+- Defer `DEFAULT_HOLDINGS` when blob has `holdings_fingerprint` or `portfolio_built`; cloud refetch fallback for missing `holdings_df` rows.
+- Block end-of-run autosave when `default_holdings_applied` or holdings fingerprint mismatches cloud.
+- `init_holdings()` guard: do not seed defaults when restore left a saved-portfolio signal.
+- Autosave/save trace: `payload_holdings_row_count`, `cloud_readback_has_holdings_df`, `cloud_readback_holdings_row_count`.
+- Restore trace: `cloud_fetch_holdings_fingerprint`, `restored_holdings_fingerprint`, `final_holdings_fingerprint`, `cloud_blob_has_holdings_df`, `default_holdings_applied`, `holdings_restore_source`, `portfolio_built_restored`, `workflow_restore_source`.
 
 ### Failure that triggered re-verify (Test E prep)
 - Expected cloud portfolio: `BND:50.0:Bonds|VYM:50.0:Dividend ETF`
@@ -215,6 +227,17 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 | `workflow_state_exists` | `workflow_state` | bool — checklist blob present |
 | `restore_decision` | trace only | Receiver restore path taken |
 | `page_overwrite_source` | trace only | What overwrote session on load |
+| `cloud_fetch_holdings_fingerprint` | trace only | Fingerprint from cloud at restore |
+| `restored_holdings_fingerprint` | trace only | Fingerprint from picked restore blob |
+| `final_holdings_fingerprint` | trace only | Live fingerprint after restore completes |
+| `cloud_blob_has_holdings_df` | trace only | Restore blob included `holdings_df` rows |
+| `cloud_blob_holdings_row_count` | trace only | Row count in restore blob |
+| `cloud_readback_has_holdings_df` | save trace | Cloud readback includes `holdings_df` after save |
+| `default_holdings_applied` | trace only | Whether factory defaults were applied on restore |
+| `default_holdings_apply_reason` | trace only | Why defaults were or were not applied |
+| `holdings_restore_source` | trace only | `restore_blob` or `cloud_refetch` |
+| `portfolio_built_restored` | trace only | `portfolio_built` from restore blob |
+| `workflow_restore_source` | trace only | cloud/disk pick source for restore |
 
 Also verify **§5 Portfolio trace** in sidebar (same fields minus device/timestamp rows).
 

@@ -664,6 +664,117 @@ def _df_to_records(df: pd.DataFrame | None) -> list[dict[str, Any]]:
     return df.to_dict(orient="records")
 
 
+def _holdings_records_from_blob(val: Any) -> list[dict[str, Any]]:
+    if isinstance(val, list) and val:
+        return [row for row in val if isinstance(row, dict)]
+    return []
+
+
+def _apply_holdings_df_records(st: Any, records: list[dict[str, Any]], *, source: str) -> bool:
+    if not records:
+        return False
+    try:
+        df = pd.DataFrame(records)
+    except Exception:
+        st.session_state["_suite_inv_holdings_restore_issue"] = "invalid_saved_holdings"
+        return False
+    if df.empty or "Ticker" not in df.columns:
+        st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
+        return False
+    st.session_state.holdings_df = df
+    st.session_state["_suite_inv_holdings_from_saved_blob"] = True
+    st.session_state["holdings_restore_source"] = source
+    st.session_state.pop("_suite_inv_holdings_restore_issue", None)
+    st.session_state["default_holdings_applied"] = False
+    st.session_state.pop("default_holdings_apply_reason", None)
+    return True
+
+
+def _cloud_holdings_refetch(blob_fingerprint: str = "") -> tuple[list[dict[str, Any]], str]:
+    """Load holdings_df records from cloud full_session when restore blob omitted them."""
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, _ = load_cloud_full_session(APP_ID)
+        if not isinstance(cloud_state, dict):
+            return [], ""
+        cloud_fp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+        if blob_fingerprint and cloud_fp and cloud_fp != blob_fingerprint:
+            return [], cloud_fp
+        records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
+        return records, cloud_fp
+    except Exception:
+        return [], ""
+
+
+def _finalize_holdings_restore(st: Any, state: dict[str, Any]) -> None:
+    """Apply DEFAULT_HOLDINGS only when no saved portfolio exists in the restore blob."""
+    import portfolio_core as core
+
+    ss = st.session_state
+    if isinstance(ss.get("holdings_df"), pd.DataFrame):
+        return
+
+    blob_fp = str(state.get("holdings_fingerprint") or "").strip()
+    portfolio_built = bool(state.get("portfolio_built"))
+    saved_portfolio = bool(blob_fp or portfolio_built)
+
+    if saved_portfolio:
+        records, cloud_fp = _cloud_holdings_refetch(blob_fp)
+        if records and _apply_holdings_df_records(st, records, source="cloud_refetch"):
+            ss["cloud_fetch_holdings_fingerprint"] = cloud_fp or blob_fp
+            ss["default_holdings_applied"] = False
+            ss.pop("default_holdings_apply_reason", None)
+            return
+        ss["holdings_df"] = pd.DataFrame()
+        ss["_suite_inv_holdings_restore_issue"] = "holdings_missing_after_portfolio_save"
+        ss["default_holdings_applied"] = False
+        ss["default_holdings_apply_reason"] = "missing_holdings_with_fingerprint"
+        return
+
+    ss["holdings_df"] = pd.DataFrame(core.DEFAULT_HOLDINGS)
+    ss["default_holdings_applied"] = True
+    ss["default_holdings_apply_reason"] = "no_saved_portfolio"
+    ss.pop("_suite_inv_holdings_from_saved_blob", None)
+    ss.pop("_suite_inv_holdings_restore_issue", None)
+    ss.pop("holdings_restore_source", None)
+
+
+def _record_holdings_restore_trace(st: Any, state: dict[str, Any]) -> None:
+    ss = st.session_state
+    records = _holdings_records_from_blob(state.get("holdings_df"))
+    blob_fp = str(state.get("holdings_fingerprint") or "").strip()
+    cloud_fp = ""
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, _ = load_cloud_full_session(APP_ID)
+        if isinstance(cloud_state, dict):
+            cloud_fp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+            ss["cloud_fetch_holdings_fingerprint"] = cloud_fp
+            ss["cloud_blob_has_holdings_df"] = bool(_holdings_records_from_blob(cloud_state.get("holdings_df")))
+            ss["cloud_blob_holdings_row_count"] = len(
+                _holdings_records_from_blob(cloud_state.get("holdings_df"))
+            )
+    except Exception:
+        pass
+    ss["cloud_blob_has_holdings_df"] = bool(records) if "cloud_blob_has_holdings_df" not in ss else ss.get(
+        "cloud_blob_has_holdings_df"
+    )
+    if "cloud_blob_holdings_row_count" not in ss:
+        ss["cloud_blob_holdings_row_count"] = len(records)
+    ss["restored_holdings_fingerprint"] = blob_fp or None
+    ss["portfolio_built_restored"] = bool(state.get("portfolio_built"))
+    ss["workflow_restore_source"] = ss.get("_suite_persist_last_restore_source")
+    ss["final_holdings_fingerprint"] = portfolio_fingerprint_from_session(ss) or None
+    try:
+        from investment_persistence_trace import record_holdings_restore_trace
+
+        record_holdings_restore_trace(st)
+    except Exception:
+        pass
+
+
 def _normalize_restored_state(state: dict[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(state)
     if INVESTMENT_ACTIVE_TAB_KEY not in out and _LEGACY_TAB_KEY in out:
@@ -804,6 +915,19 @@ def _end_of_run_autosave_blocked(st: Any) -> tuple[bool, str]:
     attempt = current_experience_mode(st)
     if cloud_exp in EXPERIENCE_OPTIONS and attempt != cloud_exp:
         return True, "experience mismatch vs cloud peek"
+    if ss.get("default_holdings_applied"):
+        return True, "default_holdings_applied_after_restore"
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, _ = load_cloud_full_session(APP_ID)
+        if isinstance(cloud_state, dict) and cloud_state:
+            cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+            live_hfp = portfolio_fingerprint_from_session(ss)
+            if cloud_hfp and live_hfp and cloud_hfp != live_hfp:
+                return True, "holdings_fingerprint mismatch vs cloud"
+    except Exception:
+        pass
     return False, ""
 
 
@@ -860,12 +984,19 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
             state[key] = val
     if INVESTMENT_ACTIVE_TAB_KEY in state:
         state[_LEGACY_TAB_KEY] = state[INVESTMENT_ACTIVE_TAB_KEY]
-    if "holdings_df" in ss and isinstance(ss["holdings_df"], pd.DataFrame):
-        state["holdings_df"] = _df_to_records(ss["holdings_df"])
+    df = ss.get("holdings_df")
+    if isinstance(df, pd.DataFrame):
+        if not df.empty:
+            state["holdings_df"] = _df_to_records(df)
         try:
             from components.beginner_navigation import _holdings_fingerprint
 
-            state["holdings_fingerprint"] = _holdings_fingerprint(ss["holdings_df"])
+            if not df.empty:
+                state["holdings_fingerprint"] = _holdings_fingerprint(df)
+            elif ss.get("portfolio_built"):
+                fp = portfolio_fingerprint_from_session(ss)
+                if fp:
+                    state["holdings_fingerprint"] = fp
         except Exception:
             pass
     summary = ss.get("health_summary")
@@ -911,23 +1042,9 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             if ami_expected_fp and blob_holdings_fp and blob_holdings_fp != ami_expected_fp:
                 st.session_state["_suite_page_overwrite_source"] = "ami_return_deferred_holdings"
                 continue
-            st.session_state["_suite_inv_holdings_from_saved_blob"] = True
-            if val:
-                try:
-                    df = pd.DataFrame(val)
-                except Exception:
-                    st.session_state.holdings_df = pd.DataFrame()
-                    st.session_state["_suite_inv_holdings_restore_issue"] = "invalid_saved_holdings"
-                    continue
-                if df.empty:
-                    st.session_state.holdings_df = df
-                    st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
-                else:
-                    st.session_state.holdings_df = df
-                    st.session_state.pop("_suite_inv_holdings_restore_issue", None)
-            else:
-                st.session_state.holdings_df = pd.DataFrame()
-                st.session_state["_suite_inv_holdings_restore_issue"] = "empty_saved_holdings"
+            records = _holdings_records_from_blob(val)
+            if records:
+                _apply_holdings_df_records(st, records, source="restore_blob")
             continue
         if key in ("analysis_start_date", "analysis_end_date"):
             coerced = _coerce_persisted_analysis_date(val)
@@ -950,10 +1067,8 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         st.session_state[EXPERIENCE_KEY] = exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = exp
 
-    if "holdings_df" not in st.session_state:
-        st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
-        st.session_state.pop("_suite_inv_holdings_from_saved_blob", None)
-        st.session_state.pop("_suite_inv_holdings_restore_issue", None)
+    _finalize_holdings_restore(st, state)
+    _record_holdings_restore_trace(st, state)
 
     try:
         from components.beginner_navigation import sync_beginner_goal_keys_from_portfolio
@@ -1237,8 +1352,11 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         event["blob_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)
         event["payload_global_portfolio_value"] = state.get("sidebar_portfolio_value")
         event["payload_risk_free_pct"] = state.get("risk_free_pct")
+        holdings_records = state.get("holdings_df") if isinstance(state.get("holdings_df"), list) else []
         event["payload_holdings_fingerprint"] = state.get("holdings_fingerprint")
         event["blob_holdings_fingerprint"] = state.get("holdings_fingerprint")
+        event["payload_holdings_row_count"] = len(holdings_records)
+        event["cloud_blob_has_holdings_df"] = bool(holdings_records)
 
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
@@ -1279,6 +1397,9 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
                 event["cloud_readback_portfolio_value"] = cloud_state.get("sidebar_portfolio_value")
                 event["cloud_readback_risk_free_pct"] = cloud_state.get("risk_free_pct")
                 event["cloud_readback_holdings_fingerprint"] = cloud_state.get("holdings_fingerprint")
+                readback_records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
+                event["cloud_readback_holdings_row_count"] = len(readback_records)
+                event["cloud_readback_has_holdings_df"] = bool(readback_records)
             event["cloud_readback_ts"] = cloud_ts
         except Exception as exc:
             event["cloud_save_error"] = str(exc)
