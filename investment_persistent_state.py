@@ -1126,10 +1126,12 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         _WF_BLOB = "workflow_state"
 
     ami_return_live = False
+    url_insight_id = ""
     try:
         from applied_math_return_insight import insight_return_query_id
 
-        ami_return_live = bool(insight_return_query_id(st))
+        url_insight_id = str(insight_return_query_id(st) or "").strip()
+        ami_return_live = bool(url_insight_id)
     except ImportError:
         ami_return_live = False
     if not ami_return_live:
@@ -1163,6 +1165,16 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             if coerced is not None:
                 st.session_state[key] = coerced
             continue
+        if (
+            ami_return_live
+            and url_insight_id
+            and key == "_ami_pending_insight"
+            and isinstance(val, dict)
+        ):
+            blob_id = str(val.get("insight_id") or "").strip()
+            if blob_id and blob_id != url_insight_id:
+                st.session_state["_suite_inv_stale_ami_pending_skipped"] = blob_id
+                continue
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)

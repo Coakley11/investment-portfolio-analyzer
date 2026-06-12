@@ -145,6 +145,65 @@ def insight_return_query_id(st: Any) -> str:
     return _query_param(st, "suite_ami_insight")
 
 
+def _pending_insight_id(st: Any) -> str:
+    pending = st.session_state.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict):
+        return str(pending.get("insight_id") or "").strip()
+    return ""
+
+
+def _clear_stale_return_insight_cache(st: Any, query_iid: str) -> dict[str, Any]:
+    """Drop session pending insight when URL ``suite_ami_insight`` id differs."""
+    ss = st.session_state
+    query_iid = str(query_iid or "").strip()
+    pending_before = _pending_insight_id(st) or None
+    stale_ignored = bool(query_iid and pending_before and pending_before != query_iid)
+    if stale_ignored:
+        ss.pop(SESSION_PENDING_KEY, None)
+        ss.pop(SESSION_RETURN_CONTEXT_KEY, None)
+        prev_hydrated = str(ss.get("_ami_hydrated_insight_id") or "").strip()
+        if prev_hydrated and prev_hydrated != query_iid:
+            ss.pop("_ami_hydrated_insight_id", None)
+    return {
+        "pending_insight_id_before_return": pending_before,
+        "pending_insight_id_after_query_override": _pending_insight_id(st) or None,
+        "query_insight_id_used_for_load": query_iid or None,
+        "stale_pending_insight_ignored": stale_ignored,
+        "loaded_insight_id": None,
+    }
+
+
+def _load_return_insight_for_query(
+    st: Any,
+    app_key: str,
+    query_iid: str,
+    *,
+    question_id_qp: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load return insight using URL query id only (never a mismatched pending cache)."""
+    key = str(app_key or "").strip().lower()
+    query_iid = str(query_iid or "").strip()
+    trace = _clear_stale_return_insight_cache(st, query_iid)
+    if not query_iid:
+        return {}, trace
+
+    loaded = load_applied_math_insight(query_iid, source_app=key)
+    if loaded:
+        insight = dict(loaded)
+    else:
+        insight = {
+            "insight_id": query_iid,
+            "conclusion": "Applied Investment Insight loaded.",
+            "question": "",
+            "source_app": key,
+        }
+    insight["insight_id"] = query_iid
+    insight = _enrich_insight_from_question_blob(insight, question_id_qp=question_id_qp)
+    trace["loaded_insight_id"] = query_iid
+    trace["pending_insight_id_after_query_override"] = query_iid
+    return insight, trace
+
+
 def _source_state_has_restore_payload(state: Any) -> bool:
     """True when a source_state dict can restore page/holdings (not empty shell)."""
     if not isinstance(state, dict) or not state:
@@ -209,10 +268,19 @@ def diagnose_ami_return_source_state_resolution(
     insight: dict[str, Any],
     *,
     question_id_qp: str = "",
+    load_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Inspect insight/question blobs for AMI return source_state (Test E debug)."""
+    query_iid = str(insight_return_query_id(st) or "").strip()
     insight = dict(insight or {})
-    iid = str(insight.get("insight_id") or insight_return_query_id(st) or "").strip()
+    if query_iid and str(insight.get("insight_id") or "").strip() != query_iid:
+        insight, load_trace = _load_return_insight_for_query(
+            st,
+            app_key,
+            query_iid,
+            question_id_qp=question_id_qp,
+        )
+    iid = query_iid or str(insight.get("insight_id") or "").strip()
     qid = str(
         insight.get("question_id")
         or question_id_qp
@@ -241,6 +309,8 @@ def diagnose_ami_return_source_state_resolution(
         "question_blob_holdings_fingerprint": None,
         "resolved_source_state_source": "none",
     }
+    if load_trace:
+        diag.update(load_trace)
     question_ss: dict[str, Any] = {}
     if qid:
         try:
@@ -587,9 +657,11 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
 
     url_iid = insight_return_query_id(st)
     if url_iid:
+        _clear_stale_return_insight_cache(st, url_iid)
         prev = str(ss.get("_ami_hydrated_insight_id") or "").strip()
         pending = _pending_insight_valid(st)
-        if prev != url_iid or not pending:
+        pending_id = _pending_insight_id(st)
+        if prev != url_iid or pending_id != url_iid or not pending:
             apply_ami_insight_from_query(st, key)
         pending = _pending_insight_valid(st)
         if pending:
@@ -1230,21 +1302,14 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
     already_applied = bool(ss.get("_ami_return_source_applied"))
 
     insight: dict[str, Any] = {}
+    load_trace: dict[str, Any] = {}
     if iid:
-        loaded = load_applied_math_insight(iid, source_app=key)
-        pending = _pending_insight_valid(st)
-        if loaded:
-            insight = dict(loaded)
-        elif pending and str(pending.get("insight_id") or "") == iid:
-            insight = dict(pending)
-        else:
-            insight = {
-                "insight_id": iid,
-                "conclusion": "Applied Investment Insight loaded.",
-                "question": "",
-                "source_app": key,
-            }
-        insight = _enrich_insight_from_question_blob(insight, question_id_qp=qid_qp)
+        insight, load_trace = _load_return_insight_for_query(
+            st,
+            key,
+            iid,
+            question_id_qp=qid_qp,
+        )
 
     if insight:
         ss[SESSION_PENDING_KEY] = insight
@@ -1257,7 +1322,11 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
         ss["_ami_hydrated_insight_id"] = iid or str(insight.get("insight_id") or "")
 
     storage_diag = diagnose_ami_return_source_state_resolution(
-        st, key, insight, question_id_qp=qid_qp
+        st,
+        key,
+        insight,
+        question_id_qp=qid_qp,
+        load_trace=load_trace,
     )
     source_state = _resolve_return_source_state(st, key, insight, question_id_qp=qid_qp)
     _record_investment_ami_return_diagnostics(
@@ -1334,26 +1403,21 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
     iid = _qp("suite_ami_insight")
     if not iid:
         return False
-    pending = st.session_state.get(SESSION_PENDING_KEY)
-
-    insight = dict(pending) if isinstance(pending, dict) else {}
-    if iid:
-        loaded = load_applied_math_insight(iid, source_app=app_key)
-        if loaded:
-            insight = loaded
-        elif not insight.get("insight_id"):
-            insight = {"insight_id": iid, "source_app": app_key}
-        insight = _enrich_insight_from_question_blob(
-            insight,
-            question_id_qp=_qp("suite_ai_question_id"),
-        )
-        st.session_state[SESSION_PENDING_KEY] = insight
+    load_trace: dict[str, Any] = {}
+    insight, load_trace = _load_return_insight_for_query(
+        st,
+        app_key,
+        iid,
+        question_id_qp=_qp("suite_ai_question_id"),
+    )
+    st.session_state[SESSION_PENDING_KEY] = insight
 
     storage_diag = diagnose_ami_return_source_state_resolution(
         st,
         app_key,
         insight,
         question_id_qp=_qp("suite_ai_question_id"),
+        load_trace=load_trace,
     )
     source_state = st.session_state.get(SESSION_RETURN_CONTEXT_KEY)
     if not _source_state_has_restore_payload(source_state):
@@ -1422,8 +1486,10 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     if not iid:
         return False
 
+    _clear_stale_return_insight_cache(st, iid)
     prev = str(st.session_state.get("_ami_hydrated_insight_id") or "").strip()
-    if prev == iid and isinstance(st.session_state.get(SESSION_PENDING_KEY), dict):
+    pending_id = _pending_insight_id(st)
+    if prev == iid and pending_id == iid and isinstance(st.session_state.get(SESSION_PENDING_KEY), dict):
         return False
 
     insight = load_applied_math_insight(iid, source_app=app_key)

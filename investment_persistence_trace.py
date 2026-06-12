@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v7"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v8"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -126,6 +126,11 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "question_blob_has_holdings_df",
     "question_blob_holdings_fingerprint",
     "resolved_source_state_source",
+    "pending_insight_id_before_return",
+    "pending_insight_id_after_query_override",
+    "query_insight_id_used_for_load",
+    "stale_pending_insight_ignored",
+    "loaded_insight_id",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
@@ -651,6 +656,11 @@ def record_investment_ami_return_diagnostics(
             "question_blob_has_holdings_df",
             "question_blob_holdings_fingerprint",
             "resolved_source_state_source",
+            "pending_insight_id_before_return",
+            "pending_insight_id_after_query_override",
+            "query_insight_id_used_for_load",
+            "stale_pending_insight_ignored",
+            "loaded_insight_id",
         )},
     )
     if applied:

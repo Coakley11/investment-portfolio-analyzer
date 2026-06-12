@@ -10,8 +10,10 @@ import pandas as pd
 from applied_math_context import apply_source_state_to_session, build_source_state
 from applied_math_return_insight import (
     SESSION_PENDING_KEY,
+    _clear_stale_return_insight_cache,
     _enrich_insight_from_question_blob,
     _insight_blob_restore_score,
+    _load_return_insight_for_query,
     _resolve_return_source_state,
     _source_state_has_restore_payload,
     ami_return_navigation_active,
@@ -233,6 +235,62 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
         ent = resolved.get("entity_params") or {}
         self.assertIn("holdings_df", ent)
         self.assertEqual(ent.get("holdings_fingerprint"), question_ss["entity_params"]["holdings_fingerprint"])
+
+    def test_stale_pending_insight_ignored_for_url_return(self) -> None:
+        st = _FakeSt({"suite_ami_insight": "2d34be69c720ebf0"})
+        st.session_state[SESSION_PENDING_KEY] = {
+            "insight_id": "674475f5a3c1c57a",
+            "conclusion": "stale insight",
+            "source_app": "investment",
+        }
+        new_blob = {
+            "insight_id": "2d34be69c720ebf0",
+            "source_app": "investment",
+            "question_id": "q-new",
+            "source_state": {
+                "source_app": "investment",
+                "source_page": "Portfolio Health",
+                "entity_params": {"holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF"},
+                "page_params": {"page": "Portfolio Health"},
+            },
+        }
+        with patch("applied_math_return_insight.load_applied_math_insight", return_value=new_blob):
+            insight, trace = _load_return_insight_for_query(st, "investment", "2d34be69c720ebf0")
+        self.assertTrue(trace["stale_pending_insight_ignored"])
+        self.assertEqual(trace["pending_insight_id_before_return"], "674475f5a3c1c57a")
+        self.assertEqual(insight["insight_id"], "2d34be69c720ebf0")
+        self.assertEqual(trace["loaded_insight_id"], "2d34be69c720ebf0")
+
+    def test_hydrate_uses_url_insight_id_not_stale_pending(self) -> None:
+        st = _FakeSt({"suite_ami_insight": "2d34be69c720ebf0"})
+        st.session_state[SESSION_PENDING_KEY] = {
+            "insight_id": "674475f5a3c1c57a",
+            "conclusion": "stale",
+            "source_app": "investment",
+        }
+        new_blob = {
+            "insight_id": "2d34be69c720ebf0",
+            "source_app": "investment",
+            "question_id": "q-hydrate",
+            "source_state": {
+                "source_app": "investment",
+                "source_page": "Portfolio Health",
+                "entity_params": {
+                    "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+                    "holdings_df": [{"Ticker": "BND", "Weight (%)": 50.0}],
+                },
+                "page_params": {"page": "Portfolio Health"},
+            },
+        }
+        with patch("applied_math_return_insight.load_applied_math_insight", return_value=new_blob):
+            ok = hydrate_investment_ami_return_state(st, "investment")
+        self.assertTrue(ok)
+        self.assertEqual(st.session_state.get("suite_ami_insight_query_value"), "2d34be69c720ebf0")
+        self.assertEqual(st.session_state.get("return_insight_id"), "2d34be69c720ebf0")
+        self.assertEqual(
+            st.session_state.get("suite_ami_insight_query_value"),
+            st.session_state.get("return_insight_id"),
+        )
 
     def test_load_applied_math_insight_prefers_blob_with_source_state(self) -> None:
         iid = "674475f5a3c1c57a"
