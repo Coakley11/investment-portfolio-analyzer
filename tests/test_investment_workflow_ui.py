@@ -150,7 +150,21 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         request_recommendations_navigation(st, beginner=False)
         self.assertEqual(ss["investment_active_tab"], ADVANCED_TAB_LABELS[4])
         self.assertEqual(ss["_pending_scroll_target"], RECOMMENDATIONS_SCROLL_ANCHOR)
+        self.assertTrue(ss.get("_force_open_recommendations"))
         self.assertNotIn("health_subtab", ss)
+
+    def test_request_health_navigation_resets_beginner_subtab(self) -> None:
+        from components.beginner_navigation import HEALTH_SUBTAB_LABELS
+
+        st = _FakeSt()
+        ss = st.session_state
+        ss["health_subtab"] = RECOMMENDATIONS_HEALTH_SUBTAB
+        ss["_pending_scroll_target"] = RECOMMENDATIONS_SCROLL_ANCHOR
+        ss["_force_open_recommendations"] = True
+        request_core_step_navigation("health", beginner=True, st_obj=st)
+        self.assertEqual(ss["health_subtab"], HEALTH_SUBTAB_LABELS[0])
+        self.assertNotIn("_pending_scroll_target", ss)
+        self.assertNotIn("_force_open_recommendations", ss)
 
 
 if __name__ == "__main__":

@@ -2479,6 +2479,27 @@ if active_main_tab(_active_tab, "analytics", beginner=beginner_mode) and _requir
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
 if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_analytics("Portfolio Health"):
+    from components.beginner_navigation import (
+        HEALTH_SUBTAB_LABELS,
+        RECOMMENDATIONS_HEALTH_SUBTAB,
+        RECOMMENDATIONS_SCROLL_ANCHOR,
+    )
+
+    _pending_rec_focus = (
+        st.session_state.get("_pending_scroll_target") == RECOMMENDATIONS_SCROLL_ANCHOR
+        or st.session_state.get("_force_open_recommendations")
+    )
+    _health_prev_main = st.session_state.get("_health_section_prev_main_tab")
+    if _health_prev_main != _active_tab:
+        if _pending_rec_focus:
+            if beginner_mode:
+                st.session_state["health_subtab"] = RECOMMENDATIONS_HEALTH_SUBTAB
+        else:
+            if beginner_mode:
+                st.session_state["health_subtab"] = HEALTH_SUBTAB_LABELS[0]
+            st.session_state.pop("_force_open_recommendations", None)
+    st.session_state["_health_section_prev_main_tab"] = _active_tab
+
     _health_debug_loaded = False
     section_header(
         "Portfolio Health",
@@ -2806,20 +2827,31 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 for item in health.whats_not_working:
                     st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
 
-            section_header(
-                "Recommendations with model reasoning",
-                "Issue, triggers, and tradeoffs for each model recommendation.",
+            _open_recommendations = bool(
+                st.session_state.pop("_force_open_recommendations", False)
+                or st.session_state.get("_pending_scroll_target") == RECOMMENDATIONS_SCROLL_ANCHOR
             )
-            render_recommendations_panel(health, settings)
             try:
-                from components.workflow_actions import render_recommendations_review_action
+                from components.ui_helpers import render_portfolio_recommendations_anchor
 
-                if render_recommendations_review_action(
-                    st, key="adv_rec_review_btn", beginner=False
-                ):
-                    st.rerun()
+                render_portfolio_recommendations_anchor()
             except ImportError:
                 pass
+            with st.expander(
+                "📋 Recommendations with model reasoning",
+                expanded=_open_recommendations,
+            ):
+                st.caption("Issue, triggers, and tradeoffs for each model recommendation.")
+                render_recommendations_panel(health, settings)
+                try:
+                    from components.workflow_actions import render_recommendations_review_action
+
+                    if render_recommendations_review_action(
+                        st, key="adv_rec_review_btn", beginner=False
+                    ):
+                        st.rerun()
+                except ImportError:
+                    pass
             try:
                 from components.ui_helpers import apply_pending_scroll_to_target
 

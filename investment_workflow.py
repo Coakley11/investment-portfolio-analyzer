@@ -1119,9 +1119,18 @@ def request_core_step_navigation(
     st_obj: Any | None = None,
 ) -> None:
     request_workflow_tab_navigation(_STEP_TO_WORKFLOW[step], beginner=beginner, st_obj=st_obj)
+    if step == "health":
+        ss = _sess(st_obj)
+        if beginner:
+            from components.beginner_navigation import HEALTH_SUBTAB_LABELS
+
+            ss["health_subtab"] = HEALTH_SUBTAB_LABELS[0]
+        ss.pop(_FORCE_OPEN_RECOMMENDATIONS_KEY, None)
+        ss.pop(_PENDING_SCROLL_TARGET_KEY, None)
 
 
 _PENDING_SCROLL_TARGET_KEY = "_pending_scroll_target"
+_FORCE_OPEN_RECOMMENDATIONS_KEY = "_force_open_recommendations"
 
 
 def request_recommendations_navigation(
@@ -1138,6 +1147,7 @@ def request_recommendations_navigation(
     ss = _sess(st_obj)
     request_core_step_navigation("recommendations", beginner=beginner, st_obj=st_obj)
     ss[_PENDING_SCROLL_TARGET_KEY] = RECOMMENDATIONS_SCROLL_ANCHOR
+    ss[_FORCE_OPEN_RECOMMENDATIONS_KEY] = True
     if beginner:
         ss["health_subtab"] = RECOMMENDATIONS_HEALTH_SUBTAB
 
