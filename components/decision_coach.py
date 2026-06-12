@@ -112,6 +112,9 @@ def render_recommendations_panel(
     health: core.PortfolioHealthResult,
     settings: dict,
 ) -> None:
+    from components.ui_helpers import render_portfolio_recommendations_anchor
+
+    render_portfolio_recommendations_anchor()
     beginner = is_beginner_mode(settings)
     title = "Your portfolio coach — suggestions" if beginner else "Recommendations with model reasoning"
     lead = (

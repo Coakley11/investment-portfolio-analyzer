@@ -88,6 +88,38 @@ TECHNICAL_METRIC_HELP = {
 PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY = "pending_sidebar_portfolio_value"
 
 
+def render_portfolio_recommendations_anchor() -> None:
+    """Stable scroll target for recommendations navigation."""
+    from components.beginner_navigation import RECOMMENDATIONS_SCROLL_ANCHOR
+
+    st.markdown(
+        f'<div id="{RECOMMENDATIONS_SCROLL_ANCHOR}" style="scroll-margin-top: 5rem;"></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def apply_pending_scroll_to_target(st_obj: Any | None = None) -> None:
+    """Scroll to a one-shot anchor after workflow navigation (post-rerun)."""
+    ss = st.session_state if st_obj is None else st_obj.session_state
+    target = ss.pop("_pending_scroll_target", None)
+    if not target:
+        return
+    import streamlit.components.v1 as components
+
+    components.html(
+        f"""<script>
+        (function() {{
+          const doc = window.parent.document;
+          const el = doc.getElementById({target!r});
+          if (el) {{
+            el.scrollIntoView({{behavior: "smooth", block: "start"}});
+          }}
+        }})();
+        </script>""",
+        height=0,
+    )
+
+
 def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> None:
     """Apply a deferred portfolio value update before the sidebar number_input is drawn."""
     if PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY not in st.session_state:

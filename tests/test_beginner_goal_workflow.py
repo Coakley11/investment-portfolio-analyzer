@@ -8,11 +8,14 @@ from components.beginner_coach import GOAL_CARDS, _resolved_goal_card, render_be
 from components.beginner_navigation import (
     ADVANCED_TAB_LABELS,
     BEGINNER_TAB_LABELS,
+    RECOMMENDATIONS_HEALTH_SUBTAB,
+    RECOMMENDATIONS_SCROLL_ANCHOR,
     _checklist_state,
     _goal_step_complete,
     normalize_tab_label_for_mode,
     sync_beginner_goal_keys_from_portfolio,
 )
+from investment_workflow import apply_pending_investment_tab
 
 
 class _FakeSessionState(dict):
@@ -68,6 +71,26 @@ class TestGoalWorkflow(unittest.TestCase):
         beginner = BEGINNER_TAB_LABELS[3]
         advanced = normalize_tab_label_for_mode(beginner, beginner=False)
         self.assertEqual(advanced, ADVANCED_TAB_LABELS[3])
+
+    def test_etf_explorer_beginner_fallback_no_crash(self) -> None:
+        result = normalize_tab_label_for_mode("ETF Holdings Explorer", beginner=True)
+        self.assertIn(result, BEGINNER_TAB_LABELS)
+
+    def test_etf_explorer_advanced_mode(self) -> None:
+        self.assertEqual(
+            normalize_tab_label_for_mode("ETF Holdings Explorer", beginner=False),
+            "ETF Holdings Explorer",
+        )
+
+    def test_apply_pending_etf_tab_advanced(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        from components.beginner_navigation import ADVANCED_TAB_LABELS
+
+        ss["_pending_investment_tab"] = "ETF Holdings Explorer"
+        applied = apply_pending_investment_tab(st, ADVANCED_TAB_LABELS, beginner_mode=False)
+        self.assertTrue(applied)
+        self.assertEqual(ss["investment_active_tab"], "ETF Holdings Explorer")
 
     def test_render_beginner_goal_tab_exists(self) -> None:
         self.assertTrue(callable(render_beginner_goal_tab))

@@ -100,6 +100,10 @@ def render_workflow_navigator(
             ):
                 if step == "goal":
                     open_goal_step_navigation(st_obj, beginner=beginner_mode)
+                elif step == "recommendations":
+                    from investment_workflow import request_recommendations_navigation
+
+                    request_recommendations_navigation(st_obj, beginner=beginner_mode)
                 else:
                     request_core_step_navigation(step, beginner=beginner_mode, st_obj=st_obj)
                 clicked = True

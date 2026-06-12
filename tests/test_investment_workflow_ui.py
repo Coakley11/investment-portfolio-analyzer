@@ -15,10 +15,11 @@ from investment_workflow import (
     reconcile_workflow_health,
     record_workflow_health_status,
     request_core_step_navigation,
+    request_recommendations_navigation,
     request_workflow_tab_navigation,
     workflow_checklist,
 )
-from components.beginner_navigation import BEGINNER_TAB_LABELS
+from components.beginner_navigation import BEGINNER_TAB_LABELS, RECOMMENDATIONS_HEALTH_SUBTAB, RECOMMENDATIONS_SCROLL_ANCHOR
 
 
 class _FakeSessionState(dict):
@@ -132,6 +133,24 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         state = workflow_checklist(st)
         self.assertTrue(state["goal"])
         self.assertFalse(state["analyze"])
+
+    def test_request_recommendations_navigation_sets_scroll_and_subtab(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        request_recommendations_navigation(st, beginner=True)
+        self.assertEqual(ss["investment_active_tab"], BEGINNER_TAB_LABELS[4])
+        self.assertEqual(ss["health_subtab"], RECOMMENDATIONS_HEALTH_SUBTAB)
+        self.assertEqual(ss["_pending_scroll_target"], RECOMMENDATIONS_SCROLL_ANCHOR)
+
+    def test_request_recommendations_navigation_advanced(self) -> None:
+        from components.beginner_navigation import ADVANCED_TAB_LABELS
+
+        st = _FakeSt()
+        ss = st.session_state
+        request_recommendations_navigation(st, beginner=False)
+        self.assertEqual(ss["investment_active_tab"], ADVANCED_TAB_LABELS[4])
+        self.assertEqual(ss["_pending_scroll_target"], RECOMMENDATIONS_SCROLL_ANCHOR)
+        self.assertNotIn("health_subtab", ss)
 
 
 if __name__ == "__main__":

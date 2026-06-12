@@ -96,27 +96,51 @@ try:
 except ImportError:
     GOAL_WORKFLOW_DEBUG_BUILD = "2026-06-03-goal-change-fix"
 
-# Beginner and advanced main tabs share the same index order (10 tabs).
+# Beginner and advanced main tabs share workflow order for the first 10 tabs; advanced adds ETF explorer.
 _TAB_INDEX_BY_BEGINNER = {label: i for i, label in enumerate(BEGINNER_TAB_LABELS)}
 _TAB_INDEX_BY_ADVANCED = {label: i for i, label in enumerate(ADVANCED_TAB_LABELS)}
+
+_ADVANCED_TO_BEGINNER_BY_LABEL: dict[str, str] = {
+    ADVANCED_TAB_LABELS[i]: BEGINNER_TAB_LABELS[i]
+    for i in range(min(len(ADVANCED_TAB_LABELS), len(BEGINNER_TAB_LABELS)))
+}
+_BEGINNER_TO_ADVANCED_BY_LABEL: dict[str, str] = {
+    BEGINNER_TAB_LABELS[i]: ADVANCED_TAB_LABELS[i]
+    for i in range(min(len(BEGINNER_TAB_LABELS), len(ADVANCED_TAB_LABELS)))
+}
+
+HEALTH_SUBTAB_LABELS: tuple[str, ...] = (
+    "📍 Action Plan",
+    "❤️ Score",
+    "✓ Working / Not",
+    "📋 Recommendations",
+    "🔄 Rebalance",
+    "📊 Charts",
+)
+
+RECOMMENDATIONS_SCROLL_ANCHOR = "portfolio-recommendations"
+RECOMMENDATIONS_HEALTH_SUBTAB = HEALTH_SUBTAB_LABELS[3]
 
 
 def normalize_tab_label_for_mode(label: str, *, beginner: bool) -> str:
     """Map a saved tab from the other experience mode to the active label set."""
     cleaned = str(label or "").strip()
+    fallback = BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
     if not cleaned:
-        return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+        return fallback
     if beginner:
         if cleaned in BEGINNER_TAB_LABELS:
             return cleaned
-        if cleaned in ADVANCED_TAB_LABELS:
-            return BEGINNER_TAB_LABELS[ADVANCED_TAB_LABELS.index(cleaned)]
-    else:
-        if cleaned in ADVANCED_TAB_LABELS:
-            return cleaned
-        if cleaned in BEGINNER_TAB_LABELS:
-            return ADVANCED_TAB_LABELS[BEGINNER_TAB_LABELS.index(cleaned)]
-    return BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
+        mapped = _ADVANCED_TO_BEGINNER_BY_LABEL.get(cleaned)
+        if mapped:
+            return mapped
+        return fallback
+    if cleaned in ADVANCED_TAB_LABELS:
+        return cleaned
+    mapped = _BEGINNER_TO_ADVANCED_BY_LABEL.get(cleaned)
+    if mapped:
+        return mapped
+    return fallback
 
 
 def _sess(st_obj: Any | None = None):
@@ -275,7 +299,7 @@ def get_recommended_next_step(st_obj: Any | None = None) -> tuple[str, str, str]
         return (
             f"Step 5 of {total}",
             tab,
-            f"Open **{tab}** → **Recommendations** sub-tab and read each suggestion.",
+            "Click **Open Recommendations** to jump straight to your coaching suggestions.",
         )
     return ("All done", STEP_TAB_LABEL["health"], "Great work! Optional tabs ⑦–⑩ are extra tools.")
 
@@ -450,12 +474,19 @@ def render_recommended_next_step_card() -> bool:
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
         elif not state["recommendations"]:
-            clicked = st.button(f"Go to {STEP_TAB_LABEL['health']}", type="primary", use_container_width=True, key="cta_rec")
+            clicked = st.button(
+                "Open Recommendations",
+                type="primary",
+                use_container_width=True,
+                key="cta_rec",
+            )
             if clicked:
                 try:
-                    from investment_workflow import request_core_step_navigation
+                    from investment_workflow import request_recommendations_navigation
 
-                    request_core_step_navigation("health", beginner=True)
+                    request_recommendations_navigation(st, beginner=True)
                 except ImportError:
                     st.session_state["_pending_investment_tab"] = STEP_TAB_LABEL["health"]
+                    st.session_state["health_subtab"] = RECOMMENDATIONS_HEALTH_SUBTAB
+                    st.session_state["_pending_scroll_target"] = RECOMMENDATIONS_SCROLL_ANCHOR
     return clicked

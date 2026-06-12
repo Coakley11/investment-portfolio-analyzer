@@ -1121,6 +1121,27 @@ def request_core_step_navigation(
     request_workflow_tab_navigation(_STEP_TO_WORKFLOW[step], beginner=beginner, st_obj=st_obj)
 
 
+_PENDING_SCROLL_TARGET_KEY = "_pending_scroll_target"
+
+
+def request_recommendations_navigation(
+    st_obj: Any | None = None,
+    *,
+    beginner: bool,
+) -> None:
+    """Navigate to Portfolio Health and focus the recommendations section."""
+    from components.beginner_navigation import (
+        RECOMMENDATIONS_HEALTH_SUBTAB,
+        RECOMMENDATIONS_SCROLL_ANCHOR,
+    )
+
+    ss = _sess(st_obj)
+    request_core_step_navigation("recommendations", beginner=beginner, st_obj=st_obj)
+    ss[_PENDING_SCROLL_TARGET_KEY] = RECOMMENDATIONS_SCROLL_ANCHOR
+    if beginner:
+        ss["health_subtab"] = RECOMMENDATIONS_HEALTH_SUBTAB
+
+
 def apply_pending_investment_tab(
     st_obj: Any | None,
     tab_labels: list[str],

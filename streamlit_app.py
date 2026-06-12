@@ -2684,19 +2684,31 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
             pass
 
         if beginner_mode:
-            health_tabs = st.tabs(
-                ["📍 Action Plan", "❤️ Score", "✓ Working / Not", "📋 Recommendations", "🔄 Rebalance", "📊 Charts"]
+            from components.beginner_navigation import HEALTH_SUBTAB_LABELS
+            from investment_persistent_state import validate_state_option
+
+            _health_subtab_labels = list(HEALTH_SUBTAB_LABELS)
+            validate_state_option(
+                st, "health_subtab", _health_subtab_labels, _health_subtab_labels[0]
             )
-            with health_tabs[0]:
+            _active_health_sub = st.radio(
+                "Health section",
+                _health_subtab_labels,
+                key="health_subtab",
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+            if _active_health_sub == _health_subtab_labels[0]:
                 render_action_plan(
                     health.action_plan,
                     score=health.score,
                     objective=health_objective,
                     beginner=True,
                 )
-            with health_tabs[1]:
+            elif _active_health_sub == _health_subtab_labels[1]:
                 render_health_score_card(health)
-            with health_tabs[2]:
+            elif _active_health_sub == _health_subtab_labels[2]:
                 wn1, wn2 = st.columns(2)
                 with wn1:
                     st.markdown("**What's Working**")
@@ -2706,7 +2718,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                     st.markdown("**What's Not Working**")
                     for item in health.whats_not_working:
                         st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
-            with health_tabs[3]:
+            elif _active_health_sub == _health_subtab_labels[3]:
                 render_recommendations_panel(health, settings)
                 try:
                     from components.workflow_actions import render_recommendations_review_action
@@ -2717,7 +2729,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                         st.rerun()
                 except ImportError:
                     pass
-            with health_tabs[4]:
+            elif _active_health_sub == _health_subtab_labels[4]:
                 render_rebalancing_panel(health, settings=settings, key_prefix="health_rebal")
                 render_guided_portfolio_adjustment(
                     health,
@@ -2730,7 +2742,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                     assumptions=macro_assumptions_from_session(),
                     key_prefix="health_guided",
                 )
-            with health_tabs[5]:
+            elif _active_health_sub == _health_subtab_labels[5]:
                 st.caption("Optional charts — summary tabs above are enough for most checkups.")
                 d1, d2 = st.columns(2)
                 with d1:
@@ -2747,6 +2759,12 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                         ),
                         use_container_width=True,
                     )
+            try:
+                from components.ui_helpers import apply_pending_scroll_to_target
+
+                apply_pending_scroll_to_target(st)
+            except ImportError:
+                pass
             st.caption(
                 f"Implementation guide: **💼 Portfolio Inputs** → **Implementation Guide** tab. {APP_DISCLAIMER}"
             )
@@ -2798,6 +2816,12 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                     st, key="adv_rec_review_btn", beginner=False
                 ):
                     st.rerun()
+            except ImportError:
+                pass
+            try:
+                from components.ui_helpers import apply_pending_scroll_to_target
+
+                apply_pending_scroll_to_target(st)
             except ImportError:
                 pass
 
