@@ -14,6 +14,8 @@ from applied_math_return_insight import (
     _source_state_has_restore_payload,
     ami_return_navigation_active,
     hydrate_investment_ami_return_state,
+    resolve_ami_return_source_state_for_store,
+    store_applied_math_insight,
 )
 
 class _FakeSessionState(dict):
@@ -192,6 +194,86 @@ class TestInvestmentAmiReturnRestore(unittest.TestCase):
             st.session_state.get("apply_source_state_skip_reason"),
             "no_usable_source_state_on_return",
         )
+
+    def test_resolve_ami_return_source_state_for_store_prefers_question_blob(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        question_ss = build_source_state(
+            "Portfolio Health",
+            {"investment_active_tab": "Portfolio Health", "holdings_df": holdings},
+        )
+        st = _FakeSt()
+        st.session_state["_suite_ai_source_state"] = {"source_app": "investment"}
+        insight = {
+            "insight_id": "insight-store",
+            "question_id": "q-store-1",
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+        }
+        with patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value=question_ss,
+        ):
+            resolved = resolve_ami_return_source_state_for_store(
+                st,
+                insight,
+                source_state={"source_app": "investment"},
+                return_context={"page": "Portfolio Health"},
+            )
+        self.assertTrue(_source_state_has_restore_payload(resolved))
+        ent = resolved.get("entity_params") or {}
+        self.assertIn("holdings_df", ent)
+        self.assertEqual(ent.get("holdings_fingerprint"), question_ss["entity_params"]["holdings_fingerprint"])
+
+    def test_store_applied_math_insight_embeds_resolved_source_state(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "Ticker": ["BND", "VYM"],
+                "Weight (%)": [50.0, 50.0],
+                "Asset Type": ["Bonds", "Dividend ETF"],
+            }
+        )
+        question_ss = build_source_state(
+            "Portfolio Health",
+            {"investment_active_tab": "Portfolio Health", "holdings_df": holdings},
+        )
+        st = _FakeSt()
+        insight = {
+            "insight_id": "insight-embed",
+            "question_id": "q-embed-1",
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+            "conclusion": "Holdings look balanced.",
+        }
+        captured: list[dict] = []
+
+        def _remember_saved_item(app, item_type, item_key, *, title="", payload=None, **_kwargs):
+            captured.append({"app": app, "item_type": item_type, "payload": dict(payload or {})})
+            return True
+
+        with patch(
+            "suite_analytical_question.load_analytical_question_source_state",
+            return_value=question_ss,
+        ), patch(
+            "suite_account.remember_saved_item",
+            side_effect=_remember_saved_item,
+        ), patch(
+            "suite_activity_client.record_activity",
+            return_value=None,
+        ):
+            store_applied_math_insight(insight, st=st)
+
+        self.assertTrue(captured)
+        blob = captured[0]["payload"]
+        self.assertTrue(_source_state_has_restore_payload(blob.get("source_state")))
+        self.assertEqual(blob.get("question_id"), "q-embed-1")
+        ent = (blob.get("source_state") or {}).get("entity_params") or {}
+        self.assertIn("holdings_df", ent)
 
 
 if __name__ == "__main__":

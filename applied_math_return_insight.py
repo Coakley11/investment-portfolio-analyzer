@@ -804,11 +804,93 @@ def build_source_app_return_url(
         return ""
 
 
+def _question_id_from_insight_or_session(st: Any, data: dict[str, Any]) -> str:
+    qid = str(data.get("question_id") or "").strip()
+    if qid:
+        return qid
+    try:
+        return str(st.session_state.get("_suite_ai_question_id") or "").strip()
+    except Exception:
+        return ""
+
+
+def resolve_ami_return_source_state_for_store(
+    st: Any,
+    insight_data: dict[str, Any],
+    *,
+    source_state: dict[str, Any] | None = None,
+    return_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Resolve page-restore source_state for insight store + return URL.
+
+    Question-send snapshot (``load_analytical_question_source_state``) is authoritative
+    over partial session/context when present.
+    """
+    data = dict(insight_data or {})
+    app = str(data.get("source_app") or "").strip().lower()
+    ss: dict[str, Any] = dict(source_state) if _source_state_has_restore_payload(source_state) else {}
+
+    try:
+        session_ss = dict(st.session_state.get("_suite_ai_source_state") or {})
+    except Exception:
+        session_ss = {}
+    if _source_state_has_restore_payload(session_ss) and not _source_state_has_restore_payload(ss):
+        ss = session_ss
+
+    for blob_key in ("source_state", "return_context"):
+        blob_ss = data.get(blob_key)
+        if _source_state_has_restore_payload(blob_ss):
+            ss = dict(blob_ss)
+            break
+
+    qid = _question_id_from_insight_or_session(st, data)
+    if qid:
+        try:
+            from suite_analytical_question import load_analytical_question_source_state
+
+            loaded = load_analytical_question_source_state(qid)
+            if _source_state_has_restore_payload(loaded):
+                ss = dict(loaded)
+        except Exception:
+            pass
+
+    rc = dict(return_context) if isinstance(return_context, dict) else {}
+    if not _source_state_has_restore_payload(ss) and app == "investment" and rc:
+        page = str(data.get("source_page") or rc.get("page") or "").strip()
+        hfp = str(rc.get("holdings_fingerprint") or "").strip()
+        ent: dict[str, Any] = {}
+        if hfp:
+            ent["holdings_fingerprint"] = hfp
+        if page or ent:
+            ss = {
+                "source_app": app,
+                "source_page": page,
+                "entity_params": ent,
+                "widget_params": {},
+                "page_params": {"page": page, "tab": page},
+            }
+
+    if ss:
+        ss.setdefault("source_app", app or ss.get("source_app") or "investment")
+        page = str(data.get("source_page") or ss.get("source_page") or "").strip()
+        if page:
+            ss.setdefault("source_page", page)
+            pp = ss.get("page_params")
+            if not isinstance(pp, dict):
+                pp = {}
+                ss["page_params"] = pp
+            pp.setdefault("page", page)
+            pp.setdefault("tab", page)
+    return ss
+
+
 def store_applied_math_insight(
     insight: AppliedMathInsight | dict[str, Any],
     *,
     return_context: dict[str, Any] | None = None,
     source_state: dict[str, Any] | None = None,
+    st: Any | None = None,
 ) -> str:
     """Persist insight for retrieval on source app return."""
     data = insight.to_dict() if isinstance(insight, AppliedMathInsight) else dict(insight)
@@ -816,12 +898,26 @@ def store_applied_math_insight(
     if not iid:
         return ""
     blob = dict(data)
-    rc = dict(return_context or source_state or data.get("return_context") or data.get("source_state") or {})
-    ss = dict(source_state or data.get("source_state") or rc)
-    if rc:
-        blob["return_context"] = rc
-    if ss:
+    ss = dict(source_state) if isinstance(source_state, dict) else {}
+    if st is not None and not _source_state_has_restore_payload(ss):
+        ss = resolve_ami_return_source_state_for_store(
+            st,
+            data,
+            source_state=ss,
+            return_context=return_context,
+        )
+    elif not _source_state_has_restore_payload(ss):
+        for key in ("source_state", "return_context"):
+            candidate = data.get(key)
+            if _source_state_has_restore_payload(candidate):
+                ss = dict(candidate)
+                break
+    if _source_state_has_restore_payload(ss):
         blob["source_state"] = ss
+        blob["return_context"] = ss
+    qid = str(data.get("question_id") or blob.get("question_id") or "").strip()
+    if qid:
+        blob["question_id"] = qid
     try:
         from suite_account import remember_saved_item
 
@@ -1317,42 +1413,25 @@ def render_return_to_source_button(
 
     label = source_app_label(app)
 
-    ss = dict(source_state or {})
-    if not ss:
-        try:
-            ss = dict(st.session_state.get("_suite_ai_source_state") or {})
-        except Exception:
-            ss = {}
-    if not ss and return_context and isinstance(return_context.get("widget_params"), dict):
-        ss = dict(return_context)
-    if not ss and return_context:
-        ss = {
-            "source_app": app,
-            "source_page": data.get("source_page") or return_context.get("page") or "",
-            "entity_params": {
-                k: v
-                for k, v in return_context.items()
-                if k in ("player_a", "player_b", "player", "team", "opponent", "holdings")
-            },
-            "widget_params": {},
-            "page_params": {"page": data.get("source_page") or return_context.get("page") or ""},
-        }
-    qid = str(data.get("question_id") or "").strip()
-    if qid and not ss:
-        try:
-            from suite_analytical_question import load_analytical_question_source_state
-
-            ss = load_analytical_question_source_state(qid)
-        except Exception:
-            pass
+    ss = resolve_ami_return_source_state_for_store(
+        st,
+        data,
+        source_state=source_state if isinstance(source_state, dict) else None,
+        return_context=return_context,
+    )
 
     blob_data = dict(data)
-    if ss:
-        blob_data["source_state"] = ss
-        blob_data["return_context"] = ss
+    page = str(data.get("source_page") or ss.get("source_page") or "").strip()
+    if page:
+        blob_data["source_page"] = page
+        if ss and not ss.get("source_page"):
+            ss["source_page"] = page
+    qid = str(blob_data.get("question_id") or _question_id_from_insight_or_session(st, blob_data) or "").strip()
+    if qid:
+        blob_data["question_id"] = qid
 
     rk = str(resume_key or build_return_resume_key(blob_data, source_state=ss) or "").strip()
-    store_applied_math_insight(blob_data, return_context=ss or return_context, source_state=ss)
+    store_applied_math_insight(blob_data, return_context=ss or None, source_state=ss or None, st=st)
     url = build_source_app_return_url(
         blob_data,
         resume_key=rk,

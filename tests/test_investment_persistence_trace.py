@@ -35,7 +35,7 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         st = self._st()
         self.assertTrue(investment_trace_enabled(st, persistence_ok=True))
         self.assertFalse(investment_trace_enabled(st, persistence_ok=False))
-        self.assertEqual(INVESTMENT_PERSIST_DEPLOY_VERSION, "investment-durable-restore-v5")
+        self.assertEqual(INVESTMENT_PERSIST_DEPLOY_VERSION, "investment-durable-restore-v6")
 
     def test_render_pass_dedupes_trace_ui(self) -> None:
         from investment_persistence_trace import (

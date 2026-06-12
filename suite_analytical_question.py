@@ -361,13 +361,18 @@ def _store_question_context_blob(payload: dict[str, Any]) -> None:
     try:
         from suite_account import remember_saved_item
 
-        remember_saved_item(
-            "applied_intelligence",
-            _CONTEXT_ITEM_TYPE,
-            qid,
-            title=str(payload.get("question") or "Applied Math question")[:200],
-            payload=blob,
-        )
+        store_apps: list[str] = ["applied_intelligence"]
+        src_app = str(payload.get("source_app") or "").strip().lower()
+        if src_app and src_app not in store_apps:
+            store_apps.append(src_app)
+        for app_name in store_apps:
+            remember_saved_item(
+                app_name,
+                _CONTEXT_ITEM_TYPE,
+                qid,
+                title=str(payload.get("question") or "Applied Math question")[:200],
+                payload=blob,
+            )
         return
     except Exception as exc:
         log.warning("remember_saved_item failed for analytical context: %s", exc)
@@ -384,15 +389,26 @@ def load_analytical_question_payload(question_id: str) -> dict[str, Any]:
     if not qid:
         return {}
     resume_key = f"ai:question:{qid}"
+    search_apps = ["applied_intelligence"]
     try:
         from suite_account import load_saved_items
 
-        rows = load_saved_items(app="applied_intelligence", item_type=_CONTEXT_ITEM_TYPE, limit=50)
-        for row in rows:
-            if str(row.get("item_key") or "") == qid:
-                payload = row.get("payload")
-                if isinstance(payload, dict):
-                    return copy.deepcopy(payload)
+        for app_name in search_apps:
+            rows = load_saved_items(app=app_name, item_type=_CONTEXT_ITEM_TYPE, limit=80)
+            for row in rows:
+                if str(row.get("item_key") or "") == qid:
+                    payload = row.get("payload")
+                    if isinstance(payload, dict):
+                        return copy.deepcopy(payload)
+        for app_name in ("investment", "baseball", "nba", "music"):
+            if app_name in search_apps:
+                continue
+            rows = load_saved_items(app=app_name, item_type=_CONTEXT_ITEM_TYPE, limit=80)
+            for row in rows:
+                if str(row.get("item_key") or "") == qid:
+                    payload = row.get("payload")
+                    if isinstance(payload, dict):
+                        return copy.deepcopy(payload)
     except Exception as exc:
         log.warning("load_saved_items failed for question context: %s", exc)
     try:
