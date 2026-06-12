@@ -197,6 +197,7 @@ ensure_investment_active_tab = _fallback_ensure_investment_active_tab
 autosave_investment_state = _fallback_noop_persistence
 default_reset_investment_session = _fallback_noop_persistence
 finalize_persistence_debug = _fallback_noop_persistence
+finalize_startup_holdings_restore = _fallback_noop_persistence
 reconcile_investment_cloud_drift_if_needed = _fallback_noop_persistence
 restore_investment_disk_state_once = _fallback_noop_persistence
 render_persistence_debug_sidebar = _fallback_noop_persistence
@@ -212,6 +213,7 @@ try:
         ensure_experience_mode,
         ensure_investment_active_tab,
         finalize_persistence_debug,
+        finalize_startup_holdings_restore,
         reconcile_investment_cloud_drift_if_needed,
         render_persistence_debug_sidebar,
         restore_investment_disk_state_once,
@@ -977,7 +979,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v1` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v2` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar
@@ -1242,10 +1244,27 @@ def render_sidebar() -> dict:
 
 def init_holdings():
     if "holdings_df" not in st.session_state:
-        if st.session_state.get("portfolio_built") or st.session_state.get("_suite_inv_holdings_restore_issue"):
+        cloud_saved = False
+        if _PERSISTENCE_OK:
+            try:
+                from investment_persistent_state import _cloud_has_saved_portfolio
+
+                cloud_state, _ = _cloud_has_saved_portfolio()
+                cloud_saved = cloud_state is not None
+            except Exception:
+                cloud_saved = False
+        if cloud_saved:
             st.session_state.holdings_df = pd.DataFrame()
+            st.session_state["_suite_inv_holdings_restore_issue"] = "holdings_pending_startup_cloud_fixup"
+            st.session_state["default_holdings_applied"] = False
+            st.session_state["default_holdings_apply_reason"] = "deferred_for_cloud_fixup"
+        elif st.session_state.get("portfolio_built") or st.session_state.get("_suite_inv_holdings_restore_issue"):
+            st.session_state.holdings_df = pd.DataFrame()
+            st.session_state["default_holdings_applied"] = False
         else:
             st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+            st.session_state["default_holdings_applied"] = True
+            st.session_state["default_holdings_apply_reason"] = "init_holdings_no_saved_portfolio"
 
 
 def apply_asset_preset(name: str):
@@ -1827,6 +1846,11 @@ HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 health_badge_slot = st.empty()
 init_holdings()
+if _PERSISTENCE_OK:
+    try:
+        finalize_startup_holdings_restore(st)
+    except Exception:
+        pass
 apply_asset_preset(settings["asset_preset"])
 
 _main_tab_labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS

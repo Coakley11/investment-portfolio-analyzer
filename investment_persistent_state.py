@@ -740,6 +740,100 @@ def _finalize_holdings_restore(st: Any, state: dict[str, Any]) -> None:
     ss.pop("holdings_restore_source", None)
 
 
+def _cloud_has_saved_portfolio() -> tuple[dict[str, Any] | None, str]:
+    """Return cloud full_session when it records a built/saved portfolio."""
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
+        if not isinstance(cloud_state, dict) or not cloud_state:
+            return None, ""
+        cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+        if cloud_hfp or cloud_state.get("portfolio_built"):
+            return cloud_state, cloud_ts or ""
+    except Exception:
+        pass
+    return None, ""
+
+
+def _session_holdings_aligned_with_cloud(st: Any, cloud_state: dict[str, Any]) -> bool:
+    cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+    if not cloud_hfp and not cloud_state.get("portfolio_built"):
+        return True
+    live_hfp = portfolio_fingerprint_from_session(st.session_state)
+    df = st.session_state.get("holdings_df")
+    has_rows = isinstance(df, pd.DataFrame) and not df.empty
+    if not has_rows:
+        return False
+    if cloud_hfp and live_hfp != cloud_hfp:
+        return False
+    return True
+
+
+def align_session_holdings_with_cloud(
+    st: Any,
+    cloud_state: dict[str, Any] | None,
+    *,
+    source: str,
+) -> bool:
+    """
+    Re-apply cloud holdings when restore picked incomplete disk state or left rows missing.
+
+    Safe at bootstrap: cloud is authoritative when ``holdings_fingerprint`` / ``portfolio_built``
+    exist in cloud but live session has defaults, empty rows, or fingerprint drift.
+    """
+    if not isinstance(cloud_state, dict) or not cloud_state:
+        return False
+    if _session_holdings_aligned_with_cloud(st, cloud_state):
+        return False
+    ss = st.session_state
+    pick = str(ss.get("_suite_persist_last_restore_source") or "unknown").strip()
+    ss["startup_holdings_fixup_source"] = source
+    ss["startup_holdings_fixup_pick"] = pick
+    apply_investment_disk_state(st, cloud_state)
+    ss["holdings_restore_source"] = source
+    ss["workflow_restore_source"] = pick
+    _record_holdings_restore_trace(st, cloud_state)
+    return True
+
+
+def finalize_startup_holdings_restore(st: Any) -> bool:
+    """
+    One-shot post-``init_holdings`` guard for Dell startup restore.
+
+    ``reconcile_investment_cloud_drift_if_needed`` runs before sidebar/init; when restore
+    leaves no ``holdings_df``, early reconcile could not detect fingerprint drift. This
+    re-checks cloud after init and overrides defaults before end-of-run autosave.
+    """
+    ss = st.session_state
+    if ss.get("_suite_inv_startup_holdings_finalized"):
+        return False
+    ss["_suite_inv_startup_holdings_finalized"] = True
+    cloud_state, _cloud_ts = _cloud_has_saved_portfolio()
+    if not cloud_state:
+        ss["startup_holdings_finalize_source"] = "no_cloud_saved_portfolio"
+        return False
+    if _session_holdings_aligned_with_cloud(st, cloud_state):
+        ss["startup_holdings_finalize_source"] = "session_already_aligned"
+        return False
+    aligned = align_session_holdings_with_cloud(
+        st,
+        cloud_state,
+        source="startup_post_init_cloud",
+    )
+    ss["startup_holdings_finalize_source"] = (
+        "startup_post_init_cloud" if aligned else "startup_post_init_cloud_failed"
+    )
+    try:
+        from investment_persistence_trace import record_holdings_restore_trace, record_startup_restore_trace
+
+        record_holdings_restore_trace(st)
+        record_startup_restore_trace(st)
+    except Exception:
+        pass
+    return aligned
+
+
 def _record_holdings_restore_trace(st: Any, state: dict[str, Any]) -> None:
     ss = st.session_state
     records = _holdings_records_from_blob(state.get("holdings_df"))
@@ -830,16 +924,13 @@ def investment_cloud_resync_needed(
         if cloud.get(key) != live_val:
             reasons.append(key)
 
-    cloud_hfp = cloud.get("holdings_fingerprint")
+    cloud_hfp = str(cloud.get("holdings_fingerprint") or "").strip()
     if cloud_hfp:
-        try:
-            from components.beginner_navigation import _holdings_fingerprint
-
-            df = st.session_state.get("holdings_df")
-            if isinstance(df, pd.DataFrame) and _holdings_fingerprint(df) != cloud_hfp:
-                reasons.append("holdings_fingerprint")
-        except ImportError:
-            pass
+        live_hfp = portfolio_fingerprint_from_session(st.session_state)
+        df = st.session_state.get("holdings_df")
+        has_rows = isinstance(df, pd.DataFrame) and not df.empty
+        if not live_hfp or not has_rows or live_hfp != cloud_hfp:
+            reasons.append("holdings_fingerprint")
 
     try:
         import json
@@ -1232,6 +1323,12 @@ def restore_investment_disk_state_once(st: Any) -> bool:
         apply_state=lambda st_obj, s: apply_investment_disk_state(st_obj, s),
         cloud_resync_needed=investment_cloud_resync_needed,
     )
+    if isinstance(cloud_state, dict) and cloud_state:
+        align_session_holdings_with_cloud(
+            st,
+            cloud_state,
+            source="post_restore_cloud_align",
+        )
     st.session_state["_suite_inv_debug_restore_ran"] = restored
     st.session_state["_suite_inv_debug_restore_source"] = st.session_state.get(
         "_suite_persist_last_restore_source"

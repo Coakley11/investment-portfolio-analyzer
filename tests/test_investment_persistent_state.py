@@ -540,6 +540,76 @@ def test_apply_state_fingerprint_without_holdings_skips_defaults_when_cloud_empt
     assert st.session_state.get("default_holdings_apply_reason") == "missing_holdings_with_fingerprint"
 
 
+def test_cloud_resync_needed_when_live_holdings_missing(monkeypatch):
+    st = _FakeSt()
+    cloud_fp = "BND:50.0:Bonds|VYM:50.0:Dividend ETF"
+    needed, detail = ips.investment_cloud_resync_needed(
+        st,
+        {"holdings_fingerprint": cloud_fp, "portfolio_built": True},
+    )
+    assert needed is True
+    assert "holdings_fingerprint" in detail
+
+
+def test_align_session_holdings_with_cloud_after_incomplete_disk_restore(monkeypatch):
+    st = _FakeSt()
+    cloud_state = {
+        "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+        "portfolio_built": True,
+        "holdings_df": [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ],
+        "guide_goal_choice": "Generate income",
+        "beginner_goal_card": "income",
+    }
+    st.session_state["_suite_persist_last_restore_source"] = "disk"
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+            "portfolio_built": True,
+        },
+    )
+    assert st.session_state.holdings_df.empty
+    aligned = ips.align_session_holdings_with_cloud(
+        st,
+        cloud_state,
+        source="post_restore_cloud_align",
+    )
+    assert aligned is True
+    assert set(st.session_state.holdings_df["Ticker"].tolist()) == {"BND", "VYM"}
+    assert st.session_state.get("holdings_restore_source") == "post_restore_cloud_align"
+    assert st.session_state.get("default_holdings_applied") is False
+
+
+def test_finalize_startup_holdings_restore_overrides_init_defaults(monkeypatch):
+    import portfolio_core as core
+
+    st = _FakeSt()
+    cloud_state = {
+        "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+        "portfolio_built": True,
+        "holdings_df": [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ],
+    }
+
+    def _fake_cloud_saved():
+        return cloud_state, "2026-06-11T18:00:00Z"
+
+    monkeypatch.setattr(ips, "_cloud_has_saved_portfolio", _fake_cloud_saved)
+    st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+    st.session_state["default_holdings_applied"] = True
+    st.session_state["default_holdings_apply_reason"] = "init_holdings_no_saved_portfolio"
+    fixed = ips.finalize_startup_holdings_restore(st)
+    assert fixed is True
+    assert set(st.session_state.holdings_df["Ticker"].tolist()) == {"BND", "VYM"}
+    assert st.session_state.get("default_holdings_applied") is False
+    assert st.session_state.get("startup_holdings_finalize_source") == "startup_post_init_cloud"
+
+
 def test_end_of_run_autosave_blocked_when_default_holdings_applied(monkeypatch):
     st = _FakeSt()
     st.session_state["default_holdings_applied"] = True

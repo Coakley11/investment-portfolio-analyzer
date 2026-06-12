@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-durable-restore-v1` (local fix for Test D reboot restore, not yet pushed) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (reboot/hard refresh restores defaults on `51fd4e6`) · Test **E** **BLOCKED** until Test D passes after reboot  
+**Status:** Deploy marker `investment-durable-restore-v2` (Dell startup restore fix — post-init cloud align) · Tests A–C **PASS** (frozen) · Test **D** **REOPENED** (Dell reboot failed on `da4f654`; phone cloud restore OK) · Test **E** **BLOCKED** until Test D passes after Dell reboot  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -188,7 +188,7 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 
 ## Test D — Portfolio / ticker / analysis restore
 
-**Status: REOPENED (2026-06-11)** — Live on `51fd4e6`: 50% BND / 50% VYM saves during session but **reboot/hard refresh** restores default VTI/VXUS/BND/VNQ. Test E **blocked** until Test D passes after reboot. Local fix: deploy marker `investment-durable-restore-v1` (not yet pushed).
+**Status: REOPENED (2026-06-11)** — Live on `da4f654`: save + phone cloud restore OK; **Dell reboot/hard refresh** still restores default VTI/VXUS/BND/VNQ + Long-Term Growth. Root cause: early reconcile ran before `init_holdings()` and could not detect missing `holdings_df`; `init_holdings()` then applied defaults. Fix: `investment-durable-restore-v2` — post-init cloud align + missing-row fingerprint drift detection.
 
 ### Failure on reboot (`51fd4e6`, not AMI-only)
 - Before reboot: Dell + phone show 50% BND / 50% VYM; save/readback fingerprints match.

@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v1"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v2"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -256,6 +256,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
     {
         "investment-insight-hydrate-v2",
         "investment-durable-restore-v1",
+        "investment-durable-restore-v2",
     }
 )
 
@@ -549,7 +550,28 @@ def record_holdings_restore_trace(st: Any) -> None:
         holdings_restore_source=ss.get("holdings_restore_source"),
         portfolio_built_restored=ss.get("portfolio_built_restored"),
         workflow_restore_source=ss.get("workflow_restore_source"),
+        startup_holdings_finalize_source=ss.get("startup_holdings_finalize_source"),
+        startup_holdings_fixup_pick=ss.get("startup_holdings_fixup_pick"),
+        restore_pick_source=ss.get("_suite_persist_debug_pick_source")
+        or ss.get("_suite_persist_last_restore_source"),
     )
+
+
+def record_startup_restore_trace(st: Any) -> None:
+    """Capture post-init startup restore outcome (Dell reboot diagnostics)."""
+    ss = st.session_state
+    update_trace(
+        st,
+        restore_decision=ss.get("_suite_restore_decision")
+        or ss.get("_suite_persist_debug_pick_source")
+        or ss.get("_suite_persist_last_restore_source"),
+        restore_pick_source=ss.get("_suite_persist_debug_pick_source")
+        or ss.get("_suite_persist_last_restore_source"),
+        startup_holdings_finalize_source=ss.get("startup_holdings_finalize_source"),
+        startup_holdings_fixup_pick=ss.get("startup_holdings_fixup_pick"),
+        page_overwrite_source=ss.get("_suite_page_overwrite_source"),
+    )
+    record_holdings_restore_trace(st)
 
 
 def snapshot_portfolio_trace(st: Any) -> dict[str, Any]:
@@ -798,6 +820,7 @@ def record_restore_trace(st: Any) -> None:
         st,
         restore_attempted=True,
         restore_decision=ss.get("_suite_restore_decision") or pick_source,
+        restore_pick_source=pick_source or ss.get("_suite_persist_last_restore_source"),
         cloud_fetch_tab=cloud_tab or ss.get("_suite_cloud_fetch_active_page"),
         restored_tab=restored_tab,
         restored_investment_tab=restored_tab,
@@ -807,7 +830,12 @@ def record_restore_trace(st: Any) -> None:
         page_overwrite_source=ss.get("_suite_page_overwrite_source"),
         _suite_investment_page=ss.get("_suite_investment_page"),
         holdings_fingerprint_after_restore=_session_holdings_fingerprint(ss),
+        workflow_restore_source=restored_source,
     )
+    try:
+        record_holdings_restore_trace(st)
+    except Exception:
+        pass
 
 
 def record_save_trace(
@@ -1048,6 +1076,7 @@ def snapshot_full_trace(st: Any, *, persistence_ok: bool | None = None) -> dict[
     snapshot_ami_return_trace(st)
     snapshot_insight_card_trace(st)
     snapshot_save_trace(st)
+    record_startup_restore_trace(st)
     return get_trace(st)
 
 
