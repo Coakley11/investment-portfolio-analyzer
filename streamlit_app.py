@@ -1149,7 +1149,10 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
     st.sidebar.markdown("### Portfolio Presets")
-    st.sidebar.caption("Load a ready-made mix into your portfolio.")
+    st.sidebar.caption(
+        "Sample allocation mixes only — they do **not** change your investment goal. "
+        "Pick a goal on Step 1; use presets here to load example holdings."
+    )
     preset_names = ["— custom —", *core.PORTFOLIO_PRESETS.keys()]
     validate_state_option(st, "portfolio_preset", preset_names, "— custom —")
     portfolio_preset = st.sidebar.selectbox(
@@ -2047,8 +2050,7 @@ if _active_tab == _main_tab_labels[2]:
                 pass
             st.rerun()
         st.caption(
-            "**Step 2 of 4:** Confirm when holdings and weights look right — this marks **Portfolio** "
-            f"complete in the workflow bar and unlocks **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
+            f"**Step 2:** Click **Use this portfolio** when weights look right, then run **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
         )
     except ImportError:
         pass
@@ -2313,25 +2315,22 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
         "Sharpe/Sortino ratios, volatility, drawdown, correlation heatmap, and rolling performance charts.",
     )
     if beginner_mode:
-        section_header(
-            "Portfolio Analysis",
-            f"Click **{RUN_PORTFOLIO_ANALYSIS_LABEL}** to score your holdings. "
-            "Results stay tied to your current portfolio in both modes.",
-        )
-        st.caption(
-            "**Step 3 of 4:** After you confirm holdings on Portfolio, run analysis here, "
-            "then review the full score on **Portfolio Health**."
-        )
+        section_header("Portfolio Analysis", "Score your holdings in one click.")
         render_historical_metrics_banner()
-        if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="beg_analyze", use_container_width=True):
-            st.session_state.run_health = True
-            st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
-            try:
-                from investment_workflow import request_core_step_navigation
+        try:
+            from components.workflow_actions import render_analysis_workflow_cta
 
-                request_core_step_navigation("analyze", beginner=True)
-            except ImportError:
-                pass
+            if render_analysis_workflow_cta(st, key="beg_analyze", beginner=True):
+                try:
+                    from investment_workflow import request_core_step_navigation
+
+                    request_core_step_navigation("analyze", beginner=True, st_obj=st)
+                except ImportError:
+                    pass
+        except ImportError:
+            if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="beg_analyze", use_container_width=True):
+                st.session_state.run_health = True
+                st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         _beg_health = evaluate_portfolio_health_if_needed(
             settings=settings,
             tickers=tickers,
@@ -2352,16 +2351,7 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
                 objective=st.session_state.get("health_objective", "balanced growth"),
             )
             sync_workflow_health_status(tickers, weights)
-            try:
-                from investment_workflow import mark_health_reviewed_for_portfolio
-
-                mark_health_reviewed_for_portfolio(tickers, weights, st)
-            except ImportError:
-                pass
-            st.success(
-                "Analysis complete for your current portfolio. "
-                "Open **⑤ Portfolio Health** for the full score and recommendations."
-            )
+            st.success("Analysis complete. Open **⑤ Portfolio Health** and click **Review Portfolio Health**.")
             if st.session_state.pop("_workflow_analysis_just_completed", False):
                 st.rerun()
         else:
@@ -2382,10 +2372,45 @@ if _active_tab == _main_tab_labels[3] and _require_analytics("Analyze Portfolio"
         st.caption("Tabs **⑦–⑩** are optional. Advanced Mode has full risk charts.")
     else:
         section_header(
-            "Risk Analysis",
-            "Correlation, concentration, scenarios, and macro regimes.",
+            "Portfolio Analysis",
+            f"Workflow step — use **{RUN_PORTFOLIO_ANALYSIS_LABEL}** before the optional risk charts below.",
         )
         render_historical_metrics_banner()
+        try:
+            from components.workflow_actions import render_analysis_workflow_cta
+
+            if render_analysis_workflow_cta(st, key="adv_workflow_analyze", beginner=False):
+                pass
+        except ImportError:
+            if st.button(RUN_PORTFOLIO_ANALYSIS_LABEL, type="primary", key="adv_workflow_analyze"):
+                st.session_state.run_health = True
+                st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
+        _adv_workflow_health = evaluate_portfolio_health_if_needed(
+            settings=settings,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            metrics=metrics,
+            returns=returns,
+            mean_rets=mean_rets,
+            cov=cov,
+            base_risk_pack=base_risk_pack,
+            bench_rets=bench_rets,
+        )
+        if _adv_workflow_health is not None:
+            sync_workflow_health_status(tickers, weights)
+            c_s, c_d = st.columns([1, 2])
+            with c_s:
+                st.metric("Health Score", f"{_adv_workflow_health.score:.0f}/100")
+            with c_d:
+                st.caption(_adv_workflow_health.status_message)
+            if st.session_state.pop("_workflow_analysis_just_completed", False):
+                st.rerun()
+        st.markdown("---")
+        section_header(
+            "Risk & Macro Tools (optional)",
+            "Deep-dive charts — not required for the Analysis workflow step.",
+        )
         if st.button("Run Risk & Macro Analysis", key="run_risk_macro_btn"):
             st.session_state.run_risk_macro = True
         if not st.session_state.get("run_risk_macro", False):
@@ -2451,19 +2476,10 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
         else f"Model-based evaluation of performance, risk, drift, and macro fit. {APP_DISCLAIMER}",
     )
     if beginner_mode:
-        st.caption(
-            "**Step 4 of 4:** Review your health score, action plan, and recommendations. "
-            "If you already ran analysis on the previous tab, results appear below automatically."
-        )
-        what_why_do(
-            "Portfolio Health",
-            "A score and summary of how well your mix fits your goal in this model.",
-            "Gives you a simple answer to 'Am I in decent shape?' without reading every chart.",
-            f"Click **Refresh Portfolio Health** below if holdings changed, or open the **Recommendations** sub-tab.",
-        )
+        st.caption("**Step 4:** Review your score, then click **Review Portfolio Health** to mark this step done.")
         render_macro_assumptions_guide(expanded=False)
     render_historical_metrics_banner()
-    if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="primary"):
+    if st.button("Refresh Portfolio Health", key="refresh_health_btn", type="secondary"):
         st.session_state.health_refresh = st.session_state.get("health_refresh", 0) + 1
         st.session_state.run_health = True
 
@@ -2601,7 +2617,7 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                 )
             else:
                 st.info(
-                    "Run **Analyze Portfolio** on the previous step first, then open this tab — "
+                    f"Run **{RUN_PORTFOLIO_ANALYSIS_LABEL}** on the Analysis tab first, "
                     "or click **Refresh Portfolio Health** below."
                 )
     else:
@@ -2621,20 +2637,43 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
         if st.session_state.pop("_workflow_analysis_just_completed", False):
             st.rerun()
 
+    if health is None:
+        try:
+            from components.workflow_actions import render_health_review_action
+
+            render_health_review_action(
+                st,
+                tickers,
+                weights,
+                key="health_review_workflow_btn",
+                health_loaded=False,
+                beginner=beginner_mode,
+            )
+        except ImportError:
+            pass
+
     if health is not None:
         _health_debug_loaded = True
         sync_workflow_health_status(tickers, weights)
-        try:
-            from investment_workflow import mark_health_reviewed_for_portfolio
-
-            mark_health_reviewed_for_portfolio(tickers, weights, st)
-        except ImportError:
-            st.session_state.portfolio_health_reviewed = True
 
         st.markdown(
             f'<div class="insight-card">📋 <b>Status:</b> {health.status_message}</div>',
             unsafe_allow_html=True,
         )
+        try:
+            from components.workflow_actions import render_health_review_action
+
+            if render_health_review_action(
+                st,
+                tickers,
+                weights,
+                key="health_review_workflow_btn",
+                health_loaded=True,
+                beginner=beginner_mode,
+            ):
+                st.rerun()
+        except ImportError:
+            pass
 
         if beginner_mode:
             health_tabs = st.tabs(
@@ -2661,6 +2700,15 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                         st.markdown(f'<div class="health-not">⚠ {item}</div>', unsafe_allow_html=True)
             with health_tabs[3]:
                 render_recommendations_panel(health, settings)
+                try:
+                    from components.workflow_actions import render_recommendations_review_action
+
+                    if render_recommendations_review_action(
+                        st, key="beg_rec_review_btn", beginner=True
+                    ):
+                        st.rerun()
+                except ImportError:
+                    pass
             with health_tabs[4]:
                 render_rebalancing_panel(health, settings=settings, key_prefix="health_rebal")
                 render_guided_portfolio_adjustment(
@@ -2735,6 +2783,15 @@ if _active_tab == _main_tab_labels[4] and _require_analytics("Portfolio Health")
                 "Issue, triggers, and tradeoffs for each model recommendation.",
             )
             render_recommendations_panel(health, settings)
+            try:
+                from components.workflow_actions import render_recommendations_review_action
+
+                if render_recommendations_review_action(
+                    st, key="adv_rec_review_btn", beginner=False
+                ):
+                    st.rerun()
+            except ImportError:
+                pass
 
             st.markdown("---")
             render_guided_portfolio_adjustment(

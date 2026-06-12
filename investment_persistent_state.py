@@ -310,8 +310,17 @@ def _last_persisted_tab(ss: Any) -> str | None:
     return None
 
 
+def _resolve_streamlit(st_obj: Any | None) -> Any:
+    """Use explicit Streamlit ctx when provided; otherwise fall back to active ``st``."""
+    if st_obj is not None and hasattr(st_obj, "session_state"):
+        return st_obj
+    import streamlit as st
+
+    return st
+
+
 def notify_investment_tab_change(
-    st: Any,
+    st_obj: Any | None,
     tab: str,
     *,
     source: str = "unknown",
@@ -323,6 +332,7 @@ def notify_investment_tab_change(
     Mirrors ``sync_experience_after_widget`` — immediate ``tab_change`` save bypasses
     end-of-run cloud-drift block and unchanged-fingerprint skip.
     """
+    st = _resolve_streamlit(st_obj)
     ss = st.session_state
     new_tab = str(tab or "").strip()
     if not new_tab:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+import investment_persistent_state as ips
 from investment_workflow import (
     _health_is_fresh,
     apply_pending_investment_tab,
@@ -12,6 +14,7 @@ from investment_workflow import (
     portfolio_analysis_fingerprint,
     reconcile_workflow_health,
     record_workflow_health_status,
+    request_core_step_navigation,
     request_workflow_tab_navigation,
     workflow_checklist,
 )
@@ -101,6 +104,19 @@ class TestWorkflowChecklistUI(unittest.TestCase):
         reconcile_workflow_health(["SPY", "BND"], [0.6, 0.4], st)
         self.assertEqual(ss["_workflow_health_status"], "fresh")
         self.assertTrue(_health_is_fresh(st))
+
+    def test_core_step_navigation_without_st_obj(self) -> None:
+        """Regression: CTA handlers that omit st_obj must not crash notify_investment_tab_change."""
+        import streamlit as st
+
+        fake_ss = _FakeSessionState()
+        fake_ss["investment_active_tab"] = BEGINNER_TAB_LABELS[0]
+        fake_ss[ips._LAST_PERSISTED_TAB_KEY] = BEGINNER_TAB_LABELS[0]
+        with patch.object(st, "session_state", fake_ss), patch.object(
+            ips, "autosave_investment_state", lambda *_a, **_k: None
+        ):
+            request_core_step_navigation("analyze", beginner=True)
+        self.assertEqual(fake_ss["investment_active_tab"], BEGINNER_TAB_LABELS[3])
 
     def test_portfolio_invalidate_keeps_goal(self) -> None:
         st = _FakeSt()

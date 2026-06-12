@@ -939,7 +939,7 @@ def workflow_tab_label_for_core_step(step: WorkflowCoreKey, *, beginner: bool) -
 
 
 def commit_investment_tab_navigation(
-    st_obj: Any,
+    st_obj: Any | None,
     label: str,
     *,
     beginner_mode: bool,
@@ -1122,7 +1122,7 @@ def request_core_step_navigation(
 
 
 def apply_pending_investment_tab(
-    st_obj: Any,
+    st_obj: Any | None,
     tab_labels: list[str],
     *,
     beginner_mode: bool,
@@ -1145,7 +1145,7 @@ def apply_pending_investment_tab(
     ss.pop(_PENDING_INVESTMENT_TAB_KEY, None)
     if ss.get(INVESTMENT_ACTIVE_TAB_KEY) != label:
         ss[INVESTMENT_ACTIVE_TAB_KEY] = label
-        notify_investment_tab_change(st_obj, label, source="apply_pending")
+        notify_investment_tab_change(st_obj or st, label, source="apply_pending")
     return True
 
 

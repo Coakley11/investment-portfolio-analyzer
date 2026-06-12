@@ -280,6 +280,33 @@ def test_notify_tab_change_sets_dirty_and_autosaves(monkeypatch):
     assert evt["autosave_triggered"] is True
 
 
+def test_notify_tab_change_accepts_none_st_obj(monkeypatch):
+    """Regression: workflow navigation must not crash when st_obj is omitted."""
+    import streamlit as st
+
+    from components.beginner_navigation import BEGINNER_TAB_LABELS
+
+    fake_ss = _FakeSessionState()
+    fake_ss["investment_active_tab"] = BEGINNER_TAB_LABELS[0]
+    fake_ss[ips._LAST_PERSISTED_TAB_KEY] = BEGINNER_TAB_LABELS[0]
+    monkeypatch.setattr(st, "session_state", fake_ss)
+    triggers: list[str] = []
+
+    monkeypatch.setattr(
+        ips,
+        "autosave_investment_state",
+        lambda _st, *, end_of_run=False, trigger="unknown": triggers.append(trigger),
+    )
+    changed = ips.notify_investment_tab_change(
+        None,
+        BEGINNER_TAB_LABELS[2],
+        source="test_none_st_obj",
+    )
+    assert changed is True
+    assert triggers == ["tab_change"]
+    assert fake_ss["investment_active_tab"] == BEGINNER_TAB_LABELS[2]
+
+
 def test_notify_tab_change_skips_when_tab_unchanged(monkeypatch):
     from components.beginner_navigation import BEGINNER_TAB_LABELS
 

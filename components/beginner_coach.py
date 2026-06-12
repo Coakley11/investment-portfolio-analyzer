@@ -304,10 +304,7 @@ def render_beginner_goal_tab(*, change_goal_mode: bool = False) -> None:
         f'<p style="color:#f5d08a;font-size:0.85rem;">{APP_DISCLAIMER}</p>',
         unsafe_allow_html=True,
     )
-    st.caption(
-        "**Step 1 of 4:** Pick the goal that best matches what you're investing for. "
-        "The workflow bar above turns **Goal** green when you select a card."
-    )
+    st.caption("**Step 1:** Tap a goal card below. The **Goal** chip turns green when you pick one.")
     render_goal_cards(change_goal_mode=change_goal_mode)
     try:
         from components.ui_helpers import render_beginner_lookback_vs_horizon_education
