@@ -221,6 +221,33 @@ def _source_state_has_restore_payload(state: Any) -> bool:
     return False
 
 
+def _ami_insight_store_trace(
+    *,
+    insight_id: str,
+    question_id: str,
+    source_state: dict[str, Any],
+    return_context_exists: bool,
+    blob_written_success: bool,
+    return_link_insight_id: str = "",
+) -> dict[str, Any]:
+    ent = source_state.get("entity_params") if isinstance(source_state, dict) else {}
+    return {
+        "store_insight_id": insight_id or None,
+        "store_question_id": question_id or None,
+        "store_source_state_exists": _source_state_has_restore_payload(source_state),
+        "store_source_state_keys": (
+            sorted(str(k) for k in source_state.keys()) if isinstance(source_state, dict) and source_state else None
+        ),
+        "store_source_state_has_holdings_df": bool(isinstance(ent, dict) and ent.get("holdings_df")),
+        "store_source_state_holdings_fingerprint": (
+            str(ent.get("holdings_fingerprint") or "").strip() or None if isinstance(ent, dict) else None
+        ),
+        "store_return_context_exists": return_context_exists,
+        "store_blob_written_success": blob_written_success,
+        "return_link_insight_id": str(return_link_insight_id or insight_id or "").strip() or None,
+    }
+
+
 def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
     """Rank stored insight payloads — prefer blobs with usable source_state."""
     if not isinstance(payload, dict) or not payload:
@@ -311,6 +338,9 @@ def diagnose_ami_return_source_state_resolution(
     }
     if load_trace:
         diag.update(load_trace)
+    store_trace = insight.get("_ami_store_trace")
+    if isinstance(store_trace, dict) and store_trace:
+        diag.update(store_trace)
     question_ss: dict[str, Any] = {}
     if qid:
         try:
@@ -1125,19 +1155,15 @@ def store_applied_math_insight(
         blob["return_context"] = ss
     if qid:
         blob["question_id"] = qid
-    if st is not None:
-        ent = ss.get("entity_params") if isinstance(ss, dict) else {}
-        st.session_state["_ami_insight_store_trace"] = {
-            "insight_id": iid,
-            "question_id": qid or None,
-            "insight_blob_has_source_state": _source_state_has_restore_payload(ss),
-            "insight_blob_source_state_keys": sorted(str(k) for k in ss.keys()) if isinstance(ss, dict) and ss else None,
-            "insight_blob_has_question_id": bool(qid),
-            "insight_blob_has_holdings_df": bool(isinstance(ent, dict) and ent.get("holdings_df")),
-            "insight_blob_holdings_fingerprint": (
-                str(ent.get("holdings_fingerprint") or "").strip() or None if isinstance(ent, dict) else None
-            ),
-        }
+    store_trace = _ami_insight_store_trace(
+        insight_id=iid,
+        question_id=qid,
+        source_state=ss if isinstance(ss, dict) else {},
+        return_context_exists=_source_state_has_restore_payload(ss),
+        blob_written_success=False,
+    )
+    blob["_ami_store_trace"] = store_trace
+    written_ok = False
     try:
         from suite_account import remember_saved_item
 
@@ -1156,8 +1182,13 @@ def store_applied_math_insight(
                 title=str(data.get("conclusion") or default_title)[:120],
                 payload=blob,
             )
+        written_ok = True
     except Exception as exc:
         log.warning("remember_saved_item insight failed: %s", exc)
+    store_trace["store_blob_written_success"] = written_ok
+    blob["_ami_store_trace"] = store_trace
+    if st is not None:
+        st.session_state["_ami_insight_store_trace"] = dict(store_trace)
     try:
         from suite_activity_client import record_activity
 

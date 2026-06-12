@@ -378,6 +378,11 @@ def _store_question_context_blob(payload: dict[str, Any]) -> None:
         log.warning("remember_saved_item failed for analytical context: %s", exc)
 
 
+def persist_question_context_blob(payload: dict[str, Any]) -> None:
+    """Public wrapper: persist question send snapshot (context + source_state) by question_id."""
+    _store_question_context_blob(payload)
+
+
 def load_analytical_question_context(question_id: str) -> dict[str, Any]:
     """Load full context blob by question_id from saved items or resume subtitle."""
     return load_analytical_question_payload(question_id).get("context") or {}

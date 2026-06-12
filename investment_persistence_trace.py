@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v8"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v9"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -131,6 +131,15 @@ AMI_RETURN_TRACE_LABELS: tuple[str, ...] = (
     "query_insight_id_used_for_load",
     "stale_pending_insight_ignored",
     "loaded_insight_id",
+    "store_insight_id",
+    "store_question_id",
+    "store_source_state_exists",
+    "store_source_state_keys",
+    "store_source_state_has_holdings_df",
+    "store_source_state_holdings_fingerprint",
+    "store_return_context_exists",
+    "store_blob_written_success",
+    "return_link_insight_id",
 )
 
 INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
@@ -299,6 +308,8 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v5",
         "investment-durable-restore-v6",
         "investment-durable-restore-v7",
+        "investment-durable-restore-v8",
+        "investment-durable-restore-v9",
     }
 )
 
@@ -661,6 +672,15 @@ def record_investment_ami_return_diagnostics(
             "query_insight_id_used_for_load",
             "stale_pending_insight_ignored",
             "loaded_insight_id",
+            "store_insight_id",
+            "store_question_id",
+            "store_source_state_exists",
+            "store_source_state_keys",
+            "store_source_state_has_holdings_df",
+            "store_source_state_holdings_fingerprint",
+            "store_return_context_exists",
+            "store_blob_written_success",
+            "return_link_insight_id",
         )},
     )
     if applied:
