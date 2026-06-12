@@ -583,6 +583,26 @@ def notify_portfolio_change(
     return True
 
 
+def _autosave_would_clobber_saved_portfolio(st: Any, state: dict[str, Any]) -> tuple[bool, str]:
+    """Block writes that would replace a saved cloud portfolio with empty/default holdings."""
+    cloud_state, _ = _cloud_has_saved_portfolio()
+    if not isinstance(cloud_state, dict) or not cloud_state:
+        return False, ""
+    cloud_records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
+    cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+    if not cloud_records and not cloud_hfp:
+        return False, ""
+    payload_records = _holdings_records_from_blob(state.get("holdings_df"))
+    payload_hfp = str(state.get("holdings_fingerprint") or "").strip()
+    if payload_records:
+        return False, ""
+    if payload_hfp and cloud_hfp and payload_hfp == cloud_hfp:
+        return False, ""
+    if st.session_state.get("default_holdings_applied"):
+        return True, "default_holdings_would_overwrite_cloud"
+    return True, "empty_holdings_would_overwrite_cloud"
+
+
 def notify_pending_insight_change(
     st: Any,
     *,
@@ -594,9 +614,23 @@ def notify_pending_insight_change(
     pending = ss.get("_ami_pending_insight")
     if not isinstance(pending, dict) or not (pending.get("conclusion") or pending.get("question")):
         return
+    if not ss.get("_suite_inv_persistence_bootstrapped"):
+        ss["_ami_defer_insight_autosave"] = True
+        return
     dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
     ss[dirty_key] = True
     if trigger_save:
+        try:
+            payload = build_investment_disk_state(st)
+        except Exception:
+            payload = {}
+        blocked, block_reason = _autosave_would_clobber_saved_portfolio(
+            st, payload if isinstance(payload, dict) else {}
+        )
+        if blocked:
+            ss["_ami_insight_autosave_blocked"] = block_reason
+            return
+        ss.pop("_ami_insight_autosave_blocked", None)
         autosave_investment_state(st, trigger=source)
 
 
@@ -1522,6 +1556,20 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
     state: dict[str, Any] | None = None
     try:
         state = build_investment_disk_state(st)
+        blocked, block_reason = _autosave_would_clobber_saved_portfolio(st, state)
+        if blocked:
+            event = {
+                "at": _utc_now_iso(),
+                "trigger": trigger,
+                "end_of_run": end_of_run,
+                "mode_at_autosave": attempt_mode,
+                "outcome": "skipped_cloud_portfolio_clobber_guard",
+                "skip_reason": block_reason,
+            }
+            ss["_ami_insight_autosave_blocked"] = block_reason
+            _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
+            ss["_suite_inv_debug_last_autosave_event"] = event
+            return
         event["blob_experience"] = state.get(EXPERIENCE_KEY)
         event["blob_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
         event["blob_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)

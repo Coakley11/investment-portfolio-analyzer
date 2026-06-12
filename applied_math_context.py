@@ -209,6 +209,103 @@ _INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (
     "health_regime",
 )
 
+def _holdings_records_from_session(session_state: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = session_state.get("holdings_df")
+    try:
+        import pandas as pd
+
+        if isinstance(raw, pd.DataFrame) and not raw.empty and "Ticker" in raw.columns:
+            return raw.to_dict(orient="records")
+    except Exception:
+        pass
+    if isinstance(raw, list) and raw:
+        return [dict(row) for row in raw if isinstance(row, dict)]
+    return []
+
+
+def enrich_investment_entity_params_holdings(
+    session_state: dict[str, Any],
+    entity_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Ensure AMI entity_params carry portfolio rows/fingerprint when session or cloud has them."""
+    ent = dict(entity_params or {})
+    if ent.get("holdings_df"):
+        return ent
+
+    records = _holdings_records_from_session(session_state)
+    if records:
+        ent["holdings_df"] = records
+        try:
+            import pandas as pd
+
+            from components.beginner_navigation import _holdings_fingerprint
+
+            hfp = str(_holdings_fingerprint(pd.DataFrame(records))).strip()
+            if hfp:
+                ent["holdings_fingerprint"] = hfp
+        except Exception:
+            pass
+    elif not str(ent.get("holdings_fingerprint") or "").strip():
+        hfp = str(session_state.get("holdings_fingerprint") or "").strip()
+        if not hfp:
+            try:
+                from investment_persistent_state import portfolio_fingerprint_from_session
+
+                hfp = str(portfolio_fingerprint_from_session(session_state)).strip()
+            except Exception:
+                pass
+        if hfp:
+            ent["holdings_fingerprint"] = hfp
+            try:
+                from suite_cloud_state import load_cloud_full_session
+
+                cloud_state, _ = load_cloud_full_session("investment")
+                if isinstance(cloud_state, dict):
+                    cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+                    cloud_records = cloud_state.get("holdings_df")
+                    if cloud_hfp == hfp and isinstance(cloud_records, list) and cloud_records:
+                        ent["holdings_df"] = [dict(row) for row in cloud_records if isinstance(row, dict)]
+            except Exception:
+                pass
+
+    if session_state.get("portfolio_built"):
+        ent["portfolio_built"] = True
+    for key in (
+        "preset_applied",
+        "selected_portfolio",
+        "beginner_goal_card",
+        "guide_goal_choice",
+        "health_objective",
+    ):
+        val = session_state.get(key)
+        if val is not None and val != "" and key not in ent:
+            ent[key] = val
+    return ent
+
+
+def enrich_investment_source_state_holdings(
+    session_state: dict[str, Any],
+    source_state: dict[str, Any],
+) -> dict[str, Any]:
+    state = dict(source_state or {})
+    state["entity_params"] = enrich_investment_entity_params_holdings(
+        session_state,
+        dict(state.get("entity_params") or {}),
+    )
+    return state
+
+
+def investment_source_state_has_portfolio_payload(source_state: dict[str, Any] | None) -> bool:
+    if not isinstance(source_state, dict):
+        return False
+    ent = source_state.get("entity_params")
+    if not isinstance(ent, dict):
+        return False
+    if ent.get("holdings_df"):
+        return True
+    return bool(str(ent.get("holdings_fingerprint") or "").strip())
+
+
 _INVESTMENT_SOURCE_GLOBAL_KEYS: tuple[str, ...] = (
     "experience",
     "_suite_persisted_experience",
@@ -280,6 +377,7 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
             entity_params["holdings_df"] = df.to_dict(orient="records")
     except Exception:
         pass
+    entity_params = enrich_investment_entity_params_holdings(session_state, entity_params)
 
     hr = session_state.get("health_result")
     if hr is not None:
@@ -290,16 +388,19 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
     if isinstance(summary, dict) and summary.get("score") is not None:
         entity_params.setdefault("health_score", summary.get("score"))
 
-    return {
-        "source_app": "investment",
-        "source_page": tab,
-        "page_params": {"page": tab, "tab": tab},
-        "entity_params": entity_params,
-        "widget_params": widget_params,
-        "filter_params": filter_params,
-        "chart_params": {},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    return enrich_investment_source_state_holdings(
+        session_state,
+        {
+            "source_app": "investment",
+            "source_page": tab,
+            "page_params": {"page": tab, "tab": tab},
+            "entity_params": entity_params,
+            "widget_params": widget_params,
+            "filter_params": filter_params,
+            "chart_params": {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 def ensure_investment_source_state(page: str, session_state: dict[str, Any]) -> dict[str, Any]:
@@ -307,19 +408,22 @@ def ensure_investment_source_state(page: str, session_state: dict[str, Any]) -> 
     try:
         state = build_source_state(page, session_state)
         if isinstance(state, dict) and state.get("source_app"):
-            return state
+            return enrich_investment_source_state_holdings(session_state, state)
     except Exception:
         pass
     tab = str(session_state.get("investment_active_tab") or page or "").strip()
-    return {
-        "source_app": "investment",
-        "source_page": tab,
-        "page_params": {"page": tab, "tab": tab},
-        "entity_params": {"tab": tab, "page": tab},
-        "widget_params": {},
-        "filter_params": {},
-        "chart_params": {},
-    }
+    return enrich_investment_source_state_holdings(
+        session_state,
+        {
+            "source_app": "investment",
+            "source_page": tab,
+            "page_params": {"page": tab, "tab": tab},
+            "entity_params": {"tab": tab, "page": tab},
+            "widget_params": {},
+            "filter_params": {},
+            "chart_params": {},
+        },
+    )
 
 
 def _apply_holdings_df_from_entity(session_state: dict[str, Any], ent: dict[str, Any]) -> bool:

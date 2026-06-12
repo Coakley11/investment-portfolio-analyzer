@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v11"
+INVESTMENT_PERSIST_DEPLOY_VERSION = "investment-durable-restore-v12"
 TRACE_KEY = "_investment_persist_trace"
 APP_ID = "investment"
 PR1_DIAG_CHECKBOX_KEY = "investment_pr1_diagnostics_enabled"
@@ -324,6 +324,7 @@ _PR1_BASELINE_DEPLOY_MARKERS = frozenset(
         "investment-durable-restore-v9",
         "investment-durable-restore-v10",
         "investment-durable-restore-v11",
+        "investment-durable-restore-v12",
     }
 )
 
@@ -1117,10 +1118,12 @@ def record_investment_ami_launch(
         state_keys = sorted(str(k) for k in source_state.keys())  # type: ignore[union-attr]
     url = str(action_url or "").strip()
     hfp = _source_state_holdings_fingerprint(source_state)
+    ent = (source_state or {}).get("entity_params") if isinstance(source_state, dict) else {}
     fields: dict[str, Any] = {
         "ami_launch_button_clicked": True if button_clicked else None,
         "ami_launch_entrypoint": entrypoint or None,
         "current_investment_tab": ss.get("investment_active_tab"),
+        "source_state_has_holdings_df": bool(isinstance(ent, dict) and ent.get("holdings_df")),
     }
     if build_source_state_called:
         fields["build_source_state_called"] = True

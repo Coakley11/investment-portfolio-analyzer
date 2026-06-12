@@ -274,6 +274,13 @@ if _PERSISTENCE_OK:
             except Exception:
                 pass
             st.session_state["_suite_inv_persistence_bootstrapped"] = True
+            if st.session_state.pop("_ami_defer_insight_autosave", False):
+                try:
+                    from investment_persistent_state import notify_pending_insight_change
+
+                    notify_pending_insight_change(st, source="insight_hydrate_deferred")
+                except Exception:
+                    pass
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
     apply_pending_sidebar_portfolio_value()
@@ -1008,7 +1015,7 @@ def render_sidebar() -> dict:
     except Exception:
         pass
     # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v11` · branch `dev`")
+    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v12` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar

@@ -994,11 +994,23 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
 
             apply_source_state_to_session(ss, source_state)
         elif app == "investment":
-            from applied_math_context import apply_source_state_to_session
+            from applied_math_context import (
+                apply_source_state_to_session,
+                investment_source_state_has_portfolio_payload,
+            )
 
             fp_before = _session_holdings_fingerprint(ss)
+            has_portfolio = investment_source_state_has_portfolio_payload(source_state)
             apply_source_state_to_session(ss, source_state)
             fp_after = _session_holdings_fingerprint(ss)
+            apply_success = has_portfolio
+            if not has_portfolio:
+                ss["_ami_return_partial_source_state"] = True
+                ss["_ami_return_allow_cloud_restore"] = True
+                ss["apply_source_state_skip_reason"] = "source_state_missing_portfolio_payload"
+            else:
+                ss.pop("_ami_return_partial_source_state", None)
+                ss.pop("apply_source_state_skip_reason", None)
             ss["_ami_return_source_applied"] = True
             try:
                 from investment_persistence_trace import record_ami_apply_trace
@@ -1006,7 +1018,7 @@ def apply_return_source_state(st: Any, app_key: str, source_state: dict[str, Any
                 record_ami_apply_trace(
                     st,
                     source_state=source_state,
-                    success=True,
+                    success=apply_success,
                     holdings_fp_before=fp_before,
                     holdings_fp_after=fp_after,
                 )
@@ -1429,11 +1441,20 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
         return True
 
     if _source_state_has_restore_payload(source_state):
+        from applied_math_context import investment_source_state_has_portfolio_payload
+
         apply_return_source_state(st, key, source_state)
         ss["_ami_return_source_applied"] = True
         ss["_ami_insight_hydrate_success"] = True
         ss["_ami_insight_hydrate_source"] = "url"
-        _record_investment_ami_return_diagnostics(st, insight=insight, source_state=source_state, applied=True)
+        has_portfolio = investment_source_state_has_portfolio_payload(source_state)
+        _record_investment_ami_return_diagnostics(
+            st,
+            insight=insight,
+            source_state=source_state,
+            applied=has_portfolio,
+            skip_reason=None if has_portfolio else "source_state_missing_portfolio_payload",
+        )
         try:
             from investment_persistence_trace import record_ami_return_hydrate_trace
 
@@ -1441,12 +1462,15 @@ def hydrate_investment_ami_return_state(st: Any, app_key: str = "investment") ->
         except Exception:
             pass
         _sync_investment_insight_tab_keys(st, key, insight=insight)
-        try:
-            from investment_persistent_state import notify_pending_insight_change
+        if has_portfolio:
+            try:
+                from investment_persistent_state import notify_pending_insight_change
 
-            notify_pending_insight_change(st, source="insight_hydrate")
-        except Exception:
-            pass
+                notify_pending_insight_change(st, source="insight_hydrate")
+            except Exception:
+                pass
+        else:
+            ss["_ami_defer_insight_autosave"] = True
         return True
 
     skip_reason = "no_usable_source_state_on_return"

@@ -955,6 +955,13 @@ def render_analyze_with_applied_math_sidebar(
                     build_source_state_called = True
                 except Exception:
                     log.exception("Investment AMI source_state fallback failed")
+            if is_investment and isinstance(submit_source_state, dict):
+                try:
+                    from applied_math_context import enrich_investment_source_state_holdings
+
+                    submit_source_state = enrich_investment_source_state_holdings(ss, submit_source_state)
+                except Exception:
+                    log.exception("Investment AMI source_state holdings enrich failed")
             result = submit_analytical_question(
                 source_app=source_app,
                 source_page=source_page,
