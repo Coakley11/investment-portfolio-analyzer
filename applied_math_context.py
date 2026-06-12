@@ -256,17 +256,20 @@ def enrich_investment_entity_params_holdings(
                 pass
         if hfp:
             ent["holdings_fingerprint"] = hfp
-            try:
-                from suite_cloud_state import load_cloud_full_session
 
-                cloud_state, _ = load_cloud_full_session("investment")
-                if isinstance(cloud_state, dict):
-                    cloud_hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
-                    cloud_records = cloud_state.get("holdings_df")
-                    if cloud_hfp == hfp and isinstance(cloud_records, list) and cloud_records:
-                        ent["holdings_df"] = [dict(row) for row in cloud_records if isinstance(row, dict)]
-            except Exception:
-                pass
+    if not ent.get("holdings_df"):
+        try:
+            from suite_analytical_question import peek_investment_portfolio_entity_params
+
+            peek = peek_investment_portfolio_entity_params()
+            if peek.get("holdings_df"):
+                ent["holdings_df"] = peek["holdings_df"]
+            if not str(ent.get("holdings_fingerprint") or "").strip() and peek.get("holdings_fingerprint"):
+                ent["holdings_fingerprint"] = peek["holdings_fingerprint"]
+            if peek.get("portfolio_built"):
+                ent["portfolio_built"] = True
+        except Exception:
+            pass
 
     if session_state.get("portfolio_built"):
         ent["portfolio_built"] = True

@@ -625,6 +625,112 @@ def _upsert_applied_intelligence_resume(
         log.warning("suite_storage upsert_resume_item failed: %s", exc)
 
 
+def _holdings_records_from_blob(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list) and raw:
+        return [dict(row) for row in raw if isinstance(row, dict)]
+    return []
+
+
+def _holdings_fingerprint_from_records(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return ""
+    try:
+        import pandas as pd
+
+        from components.beginner_navigation import _holdings_fingerprint
+
+        return str(_holdings_fingerprint(pd.DataFrame(records))).strip()
+    except Exception:
+        rows: list[tuple[str, float, str]] = []
+        for row in records:
+            ticker = str(row.get("Ticker", "")).strip().upper()
+            try:
+                weight = round(float(row.get("Weight (%)", 0) or 0), 2)
+            except (TypeError, ValueError):
+                weight = 0.0
+            atype = str(row.get("Asset Type", "")).strip()
+            if ticker:
+                rows.append((ticker, weight, atype))
+        rows.sort(key=lambda item: item[0])
+        return "|".join(f"{t}:{w}:{a}" for t, w, a in rows)
+
+
+def peek_investment_portfolio_entity_params() -> dict[str, Any]:
+    """Read-only portfolio snapshot for AMI source_state (cloud, then local disk)."""
+    ent: dict[str, Any] = {}
+    try:
+        from suite_cloud_state import load_cloud_full_session
+
+        cloud_state, _ = load_cloud_full_session("investment")
+        if isinstance(cloud_state, dict):
+            records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
+            hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
+            if records:
+                ent["holdings_df"] = records
+            if hfp:
+                ent["holdings_fingerprint"] = hfp
+            elif records:
+                ent["holdings_fingerprint"] = _holdings_fingerprint_from_records(records)
+            if cloud_state.get("portfolio_built"):
+                ent["portfolio_built"] = True
+    except Exception:
+        pass
+    if ent.get("holdings_df"):
+        return ent
+    try:
+        from suite_user_persistence import load_user_state
+
+        disk_state, _ = load_user_state("investment")
+        if isinstance(disk_state, dict):
+            records = _holdings_records_from_blob(disk_state.get("holdings_df"))
+            hfp = str(disk_state.get("holdings_fingerprint") or "").strip()
+            if records:
+                ent["holdings_df"] = records
+            if hfp:
+                ent["holdings_fingerprint"] = hfp
+            elif records:
+                ent["holdings_fingerprint"] = _holdings_fingerprint_from_records(records)
+            if disk_state.get("portfolio_built"):
+                ent["portfolio_built"] = True
+    except Exception:
+        pass
+    return ent
+
+
+def investment_source_state_has_portfolio_payload(source_state: dict[str, Any] | None) -> bool:
+    if not isinstance(source_state, dict):
+        return False
+    ent = source_state.get("entity_params")
+    if not isinstance(ent, dict):
+        return False
+    if ent.get("holdings_df"):
+        return True
+    return bool(str(ent.get("holdings_fingerprint") or "").strip())
+
+
+def ensure_investment_source_state_portfolio_payload(
+    source_state: dict[str, Any] | None,
+    *,
+    session_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Embed portfolio rows/fingerprint into investment AMI source_state when missing."""
+    state = dict(source_state or {})
+    if str(state.get("source_app") or "investment").strip().lower() not in ("", "investment"):
+        return state
+    try:
+        from applied_math_context import enrich_investment_source_state_holdings
+
+        return enrich_investment_source_state_holdings(session_state or {}, state)
+    except ImportError:
+        ent = dict(state.get("entity_params") or {})
+        if not investment_source_state_has_portfolio_payload(state):
+            peek = peek_investment_portfolio_entity_params()
+            if peek:
+                ent.update(peek)
+                state["entity_params"] = ent
+        return state
+
+
 def build_question_payload(
     *,
     source_app: str,
@@ -634,6 +740,7 @@ def build_question_payload(
     context_summary: str = "",
     quant_area: str = "",
     source_state: dict[str, Any] | None = None,
+    session_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     q = str(question or "").strip()
     if not q:
@@ -649,6 +756,12 @@ def build_question_payload(
         summary = _short_context_summary(ctx)
     qid = question_id(q, source_app=app, source_page=page, context=ctx)
     ctx_display = format_context_lines(ctx)
+    resolved_source_state = dict(source_state or {})
+    if app.strip().lower() == "investment":
+        resolved_source_state = ensure_investment_source_state_portfolio_payload(
+            resolved_source_state,
+            session_state=session_state or {},
+        )
     return {
         "question": q,
         "question_id": qid,
@@ -659,7 +772,7 @@ def build_question_payload(
         "context_display": " · ".join(ctx_display),
         "quant_area": area,
         "resume_key": f"ai:question:{qid}",
-        "source_state": dict(source_state or {}),
+        "source_state": resolved_source_state,
     }
 
 
@@ -739,6 +852,7 @@ def submit_analytical_question(
         context_summary=context_summary,
         quant_area=quant_area,
         source_state=source_state,
+        session_state=session_state,
     )
     action_url = build_applied_math_resume_url(payload)
     duplicate = _recent_duplicate_send(session_state, payload["question_id"])

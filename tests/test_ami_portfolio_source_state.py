@@ -95,6 +95,40 @@ class TestAmiPortfolioSourceState(unittest.TestCase):
             "source_state_missing_portfolio_payload",
         )
 
+    def test_build_question_payload_enriches_from_cloud_when_session_empty(self) -> None:
+        from suite_analytical_question import build_question_payload
+
+        cloud_records = [
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+        ]
+        with patch(
+            "suite_cloud_state.load_cloud_full_session",
+            return_value=(
+                {
+                    "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+                    "holdings_df": cloud_records,
+                    "portfolio_built": True,
+                },
+                "2026-06-11T12:00:00",
+            ),
+        ):
+            payload = build_question_payload(
+                source_app="investment",
+                source_page="Portfolio Health",
+                question="What is my portfolio risk?",
+                source_state={
+                    "source_app": "investment",
+                    "source_page": "Portfolio Health",
+                    "entity_params": {"tab": "Portfolio Health"},
+                    "widget_params": {},
+                },
+                session_state={"investment_active_tab": "Portfolio Health"},
+            )
+        ent = payload["source_state"]["entity_params"]
+        self.assertIn("holdings_df", ent)
+        self.assertIn("BND:50.0:Bonds", ent["holdings_fingerprint"])
+
     def test_autosave_clobber_guard_blocks_empty_payload_vs_cloud(self) -> None:
         import investment_persistent_state as ips
 

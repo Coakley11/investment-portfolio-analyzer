@@ -1146,6 +1146,18 @@ def resolve_ami_return_source_state_for_store(
                 ss["page_params"] = pp
             pp.setdefault("page", page)
             pp.setdefault("tab", page)
+    if app == "investment" and ss:
+        try:
+            from suite_analytical_question import ensure_investment_source_state_portfolio_payload
+
+            session_ss: dict[str, Any] = {}
+            try:
+                session_ss = dict(st.session_state.get("_suite_ai_source_state") or {})
+            except Exception:
+                session_ss = {}
+            ss = ensure_investment_source_state_portfolio_payload(ss, session_state=session_ss)
+        except Exception:
+            pass
     return ss
 
 
