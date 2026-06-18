@@ -873,6 +873,59 @@ def build_return_insight_payload(
     )
 
 
+def build_submit_fallback_insight(
+    *,
+    question: str,
+    source_app: str,
+    source_page: str = "",
+    question_id: str = "",
+    full_analysis_url: str = "",
+    resume_key: str = "",
+    reason: str = "",
+) -> AppliedMathInsight:
+    """Stage an immediate insight card when local solver is unavailable."""
+    q = str(question or "").strip()
+    app = str(source_app or "").strip().lower()
+    page = str(source_page or "").strip()
+    qid = str(question_id or "").strip()
+    why = (
+        "Local solver is unavailable on this server — your question was saved and "
+        "the full Applied Math analysis opens via **Open full analysis**."
+    )
+    if reason and reason not in ("ok", "solver_ok", "solver_unavailable", "ami_repo_not_found"):
+        why += f" ({reason})"
+    elif reason == "ami_repo_not_found":
+        why = (
+            "Instant solver is not bundled on this deploy — your question was sent to "
+            "Command Center. Use **Open full analysis** for the complete answer."
+        )
+    conclusion = (
+        "Question received — open **full analysis** for your Investment Insight answer."
+        if app == "investment"
+        else "Question received — open full analysis for details."
+    )
+    iid = _insight_id(qid or hashlib.sha256(q.encode()).hexdigest()[:12], conclusion)
+    return AppliedMathInsight(
+        insight_id=iid,
+        question_id=qid,
+        question=q,
+        source_app=app,
+        source_page=page,
+        conclusion=conclusion,
+        method="Investment Insight",
+        model_name="Applied Math (full analysis)",
+        math_summary=why,
+        assumptions=[],
+        confidence="medium",
+        confidence_pct=None,
+        key_numbers={"routing_reason": reason or "fallback_insight"},
+        full_analysis_url=str(full_analysis_url or "").strip(),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        resume_key=str(resume_key or "").strip(),
+    )
+
+
+
 def build_applied_math_full_analysis_url(payload: dict[str, Any], *, base_url: str = "") -> str:
     """Deep link back into Applied Intelligence for the same question."""
     try:
@@ -1320,6 +1373,43 @@ def load_applied_math_insight(insight_id: str, *, source_app: str = "") -> dict[
     except Exception as exc:
         log.warning("load_applied_math_insight failed: %s", exc)
     return best
+
+
+def load_applied_math_insight_for_question(question_id: str, *, source_app: str = "") -> dict[str, Any]:
+    """Load the stored insight tied to a question_id (instant / canonical answer)."""
+    qid = str(question_id or "").strip()
+    if not qid:
+        return {}
+    app_filter = str(source_app or "").strip().lower()
+    search_apps: list[str] = []
+    if app_filter:
+        search_apps.append(app_filter)
+    for app_key in ("investment", "applied_intelligence"):
+        if app_key not in search_apps:
+            search_apps.append(app_key)
+    best: dict[str, Any] = {}
+    best_score = -1
+    try:
+        from suite_account import load_saved_items
+
+        for app_key in search_apps:
+            rows = load_saved_items(app=app_key, item_type=INSIGHT_ITEM_TYPE, limit=100)
+            for row in rows:
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if str(payload.get("question_id") or "") != qid:
+                    continue
+                score = _insight_blob_restore_score(payload)
+                if payload.get("canonical_instant"):
+                    score += 10
+                if score > best_score:
+                    best = dict(payload)
+                    best_score = score
+    except Exception as exc:
+        log.warning("load_applied_math_insight_for_question failed: %s", exc)
+    return best
+
 
 
 def _resolve_return_source_state(

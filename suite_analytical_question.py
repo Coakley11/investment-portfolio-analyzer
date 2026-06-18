@@ -20,6 +20,11 @@ from activity_time import parse_activity_timestamp, utc_now_iso
 
 log = logging.getLogger(__name__)
 
+from investment_ami_context import (
+    INVESTMENT_AMI_STARTER_QUESTIONS,
+    investment_ami_default_question,
+)
+
 AMI_SIDEBAR_DEPLOY_LABEL = "Applied Math question sender live"
 AMI_SIDEBAR_DEPLOY_VERSION = "2026-06-08-return-insight-restore-v12"
 _CTX_JSON_SUBTITLE_LIMIT = 8000
@@ -139,6 +144,14 @@ _PUBLIC_CONTEXT_KEYS = (
     "rebalance_recommendation",
     "total_drift",
     "historical_comparison",
+    "draft_snapshot",
+    "roster",
+    "recommended_players",
+    "sleepers",
+    "scoring_settings",
+    "ami_guidance",
+    "projection",
+    "watchlist",
 )
 
 _CONTEXT_LABELS = {
@@ -215,10 +228,10 @@ def source_question_card_title(
     app = normalize_source_app_id(source_app, context)
     if app == "music":
         return "Music Coach question from Music"
-    label = _SOURCE_LABELS.get(app, app.replace("_", " ").title())
     if app == "investment":
-        return f"Applied Investment Insight question from {label}"
-    if app in {"baseball", "nba"}:
+        return "Applied Investment Insight question from Investment"
+    label = _SOURCE_LABELS.get(app, app.replace("_", " ").title())
+    if app in {"baseball", "nba", "investment"}:
         return f"Applied Math question from {label}"
     return f"Question from {label}"
 
@@ -229,29 +242,6 @@ def music_coach_question_placeholder(source_page: str) -> str:
         page,
         "e.g. What notes are in C minor?",
     )
-
-
-INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
-    "Is this portfolio too risky for my goal?",
-    "Which holding contributes most to portfolio risk?",
-    "How would higher interest rates affect this portfolio?",
-    "Is this allocation diversified enough?",
-    "What is the biggest weakness in this portfolio?",
-    "How could I make this portfolio more conservative?",
-)
-
-
-def investment_ami_default_question(source_page: str) -> str:
-    """Rotate Investment-specific starter questions by active tab."""
-    page = str(source_page or "").strip().lower()
-    if not INVESTMENT_AMI_STARTER_QUESTIONS:
-        return ""
-    idx = sum(ord(c) for c in page) % len(INVESTMENT_AMI_STARTER_QUESTIONS)
-    return INVESTMENT_AMI_STARTER_QUESTIONS[idx]
-
-
-def investment_ami_question_placeholder(source_page: str) -> str:
-    return investment_ami_default_question(source_page)
 
 
 def _normalize_question(text: str) -> str:
@@ -358,6 +348,9 @@ def _store_question_context_blob(payload: dict[str, Any]) -> None:
         "context": dict(payload.get("context") or {}),
         "source_state": dict(payload.get("source_state") or {}),
     }
+    instant = payload.get("instant_insight")
+    if isinstance(instant, dict) and instant:
+        blob["instant_insight"] = dict(instant)
     try:
         from suite_account import remember_saved_item
 
@@ -463,20 +456,39 @@ def hydrate_applied_intelligence_session(st: Any, *, metrics: dict[str, Any] | N
     page = str(m.get("page") or _qp("suite_page") or "Solve a Problem").strip()
 
     ctx: dict[str, Any] = {}
+    source_state: dict[str, Any] = {}
+    hydrate_source = "none"
+
+    # Blob-first: full context by question_id before metrics/URL (avoids truncated deep links).
+    if qid:
+        blob_payload = load_analytical_question_payload(qid)
+        blob_ctx = blob_payload.get("context") if isinstance(blob_payload.get("context"), dict) else {}
+        if blob_ctx:
+            ctx = copy.deepcopy(blob_ctx)
+            hydrate_source = "question_id_blob"
+        blob_ss = blob_payload.get("source_state") if isinstance(blob_payload.get("source_state"), dict) else {}
+        if blob_ss:
+            source_state = copy.deepcopy(blob_ss)
+
+    metrics_ctx: dict[str, Any] = {}
     if isinstance(m.get("context"), dict):
-        ctx = copy.deepcopy(m["context"])
+        metrics_ctx = copy.deepcopy(m["context"])
     elif m.get("context_json"):
         try:
             parsed = json.loads(str(m["context_json"]))
             if isinstance(parsed, dict):
-                ctx = parsed
+                metrics_ctx = parsed
         except json.JSONDecodeError:
             pass
-    if not ctx and qid:
-        ctx = load_analytical_question_context(qid)
-    source_state: dict[str, Any] = {}
-    if qid:
-        source_state = load_analytical_question_source_state(qid)
+    if metrics_ctx:
+        if not ctx:
+            ctx = metrics_ctx
+            hydrate_source = "metrics"
+        else:
+            for key, val in metrics_ctx.items():
+                if key not in ctx or not ctx.get(key):
+                    ctx[key] = val
+
     if not ctx:
         raw_ctx = _qp("suite_ai_context")
         if raw_ctx:
@@ -484,6 +496,7 @@ def hydrate_applied_intelligence_session(st: Any, *, metrics: dict[str, Any] | N
                 parsed = json.loads(raw_ctx)
                 if isinstance(parsed, dict):
                     ctx = parsed
+                    hydrate_source = "url_query"
             except json.JSONDecodeError:
                 pass
 
@@ -504,6 +517,7 @@ def hydrate_applied_intelligence_session(st: Any, *, metrics: dict[str, Any] | N
         ss["_suite_ai_context"] = json.dumps(ctx, ensure_ascii=False)
     if source_state:
         ss["_suite_ai_source_state"] = copy.deepcopy(source_state)
+    ss["_suite_ai_hydrate_source"] = hydrate_source
 
 
 def _format_context_value(key: str, val: Any) -> str:
@@ -572,7 +586,8 @@ def metrics_for_applied_math_resume(payload: dict[str, Any]) -> dict[str, Any]:
     """Metrics bundle for deep links into Applied Intelligence."""
     ctx = dict(payload.get("context") or {})
     ctx_lines = format_context_lines(ctx)
-    return {
+    instant = payload.get("instant_insight") or ctx.get("instant_insight")
+    metrics = {
         "question": payload.get("question"),
         "question_id": payload.get("question_id"),
         "source_app": payload.get("source_app"),
@@ -586,6 +601,11 @@ def metrics_for_applied_math_resume(payload: dict[str, Any]) -> dict[str, Any]:
         "saved_item_type": _CONTEXT_ITEM_TYPE,
         "saved_item_key": payload.get("question_id"),
     }
+    if isinstance(instant, dict):
+        iid = str(instant.get("insight_id") or "").strip()
+        if iid:
+            metrics["ami_insight"] = iid
+    return metrics
 
 
 def _upsert_applied_intelligence_resume(
@@ -625,112 +645,6 @@ def _upsert_applied_intelligence_resume(
         log.warning("suite_storage upsert_resume_item failed: %s", exc)
 
 
-def _holdings_records_from_blob(raw: Any) -> list[dict[str, Any]]:
-    if isinstance(raw, list) and raw:
-        return [dict(row) for row in raw if isinstance(row, dict)]
-    return []
-
-
-def _holdings_fingerprint_from_records(records: list[dict[str, Any]]) -> str:
-    if not records:
-        return ""
-    try:
-        import pandas as pd
-
-        from components.beginner_navigation import _holdings_fingerprint
-
-        return str(_holdings_fingerprint(pd.DataFrame(records))).strip()
-    except Exception:
-        rows: list[tuple[str, float, str]] = []
-        for row in records:
-            ticker = str(row.get("Ticker", "")).strip().upper()
-            try:
-                weight = round(float(row.get("Weight (%)", 0) or 0), 2)
-            except (TypeError, ValueError):
-                weight = 0.0
-            atype = str(row.get("Asset Type", "")).strip()
-            if ticker:
-                rows.append((ticker, weight, atype))
-        rows.sort(key=lambda item: item[0])
-        return "|".join(f"{t}:{w}:{a}" for t, w, a in rows)
-
-
-def peek_investment_portfolio_entity_params() -> dict[str, Any]:
-    """Read-only portfolio snapshot for AMI source_state (cloud, then local disk)."""
-    ent: dict[str, Any] = {}
-    try:
-        from suite_cloud_state import load_cloud_full_session
-
-        cloud_state, _ = load_cloud_full_session("investment")
-        if isinstance(cloud_state, dict):
-            records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
-            hfp = str(cloud_state.get("holdings_fingerprint") or "").strip()
-            if records:
-                ent["holdings_df"] = records
-            if hfp:
-                ent["holdings_fingerprint"] = hfp
-            elif records:
-                ent["holdings_fingerprint"] = _holdings_fingerprint_from_records(records)
-            if cloud_state.get("portfolio_built"):
-                ent["portfolio_built"] = True
-    except Exception:
-        pass
-    if ent.get("holdings_df"):
-        return ent
-    try:
-        from suite_user_persistence import load_user_state
-
-        disk_state, _ = load_user_state("investment")
-        if isinstance(disk_state, dict):
-            records = _holdings_records_from_blob(disk_state.get("holdings_df"))
-            hfp = str(disk_state.get("holdings_fingerprint") or "").strip()
-            if records:
-                ent["holdings_df"] = records
-            if hfp:
-                ent["holdings_fingerprint"] = hfp
-            elif records:
-                ent["holdings_fingerprint"] = _holdings_fingerprint_from_records(records)
-            if disk_state.get("portfolio_built"):
-                ent["portfolio_built"] = True
-    except Exception:
-        pass
-    return ent
-
-
-def investment_source_state_has_portfolio_payload(source_state: dict[str, Any] | None) -> bool:
-    if not isinstance(source_state, dict):
-        return False
-    ent = source_state.get("entity_params")
-    if not isinstance(ent, dict):
-        return False
-    if ent.get("holdings_df"):
-        return True
-    return bool(str(ent.get("holdings_fingerprint") or "").strip())
-
-
-def ensure_investment_source_state_portfolio_payload(
-    source_state: dict[str, Any] | None,
-    *,
-    session_state: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Embed portfolio rows/fingerprint into investment AMI source_state when missing."""
-    state = dict(source_state or {})
-    if str(state.get("source_app") or "investment").strip().lower() not in ("", "investment"):
-        return state
-    try:
-        from applied_math_context import enrich_investment_source_state_holdings
-
-        return enrich_investment_source_state_holdings(session_state or {}, state)
-    except ImportError:
-        ent = dict(state.get("entity_params") or {})
-        if not investment_source_state_has_portfolio_payload(state):
-            peek = peek_investment_portfolio_entity_params()
-            if peek:
-                ent.update(peek)
-                state["entity_params"] = ent
-        return state
-
-
 def build_question_payload(
     *,
     source_app: str,
@@ -740,7 +654,6 @@ def build_question_payload(
     context_summary: str = "",
     quant_area: str = "",
     source_state: dict[str, Any] | None = None,
-    session_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     q = str(question or "").strip()
     if not q:
@@ -756,12 +669,6 @@ def build_question_payload(
         summary = _short_context_summary(ctx)
     qid = question_id(q, source_app=app, source_page=page, context=ctx)
     ctx_display = format_context_lines(ctx)
-    resolved_source_state = dict(source_state or {})
-    if app.strip().lower() == "investment":
-        resolved_source_state = ensure_investment_source_state_portfolio_payload(
-            resolved_source_state,
-            session_state=session_state or {},
-        )
     return {
         "question": q,
         "question_id": qid,
@@ -772,7 +679,7 @@ def build_question_payload(
         "context_display": " · ".join(ctx_display),
         "quant_area": area,
         "resume_key": f"ai:question:{qid}",
-        "source_state": resolved_source_state,
+        "source_state": dict(source_state or {}),
     }
 
 
@@ -842,17 +749,21 @@ def submit_analytical_question(
     quant_area: str = "",
     source_state: dict[str, Any] | None = None,
     session_state: dict[str, Any] | None = None,
+    pre_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Log event on source app and upsert Applied Intelligence resume item."""
-    payload = build_question_payload(
-        source_app=source_app,
-        source_page=source_page,
-        question=question,
-        context=context,
-        context_summary=context_summary,
-        quant_area=quant_area,
-        source_state=source_state,
-        session_state=session_state,
+    payload = (
+        dict(pre_payload)
+        if isinstance(pre_payload, dict) and pre_payload.get("question_id")
+        else build_question_payload(
+            source_app=source_app,
+            source_page=source_page,
+            question=question,
+            context=context,
+            context_summary=context_summary,
+            quant_area=quant_area,
+            source_state=source_state,
+        )
     )
     action_url = build_applied_math_resume_url(payload)
     duplicate = _recent_duplicate_send(session_state, payload["question_id"])
@@ -864,8 +775,6 @@ def submit_analytical_question(
         )
         if metrics["source_app"] == "music":
             summary = f"Asked Music Coach: {payload['question'][:80]}"
-        elif metrics["source_app"] == "investment":
-            summary = f"Asked Applied Investment Insight: {payload['question'][:80]}"
         else:
             summary = f"Asked Applied Math: {payload['question'][:80]}"
         try:
@@ -930,34 +839,114 @@ def build_submit_context(
     return ctx
 
 
-def _record_investment_ami_launch_trace(
-    session_state: dict[str, Any],
+def _investment_return_context(
+    submit_ctx: dict[str, Any] | None,
+    submit_source_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    rc = dict(submit_ctx or {})
+    if isinstance(submit_source_state, dict) and submit_source_state:
+        rc["source_state"] = submit_source_state
+    return rc
+
+
+def _stage_investment_instant_insight(
+    st: Any,
+    ss: dict[str, Any],
     *,
-    entrypoint: str = "unknown",
-    button_clicked: bool = False,
-    build_source_state_called: bool = False,
-    source_state: dict[str, Any] | None = None,
-    action_url: str = "",
-) -> None:
-    """Investment-only AMI launch diagnostics (Test E; no cross-app behavior change)."""
+    question: str,
+    source_app: str,
+    source_page: str,
+    submit_ctx: dict[str, Any],
+    submit_source_state: dict[str, Any] | None,
+    pre_payload: dict[str, Any],
+    action_url_pre: str,
+) -> bool:
+    """Try local Investment instant solve and stage an on-page insight card."""
     try:
-        from investment_persistence_trace import record_investment_ami_launch
-
-        class _StShim:
-            pass
-
-        shim = _StShim()
-        shim.session_state = session_state
-        record_investment_ami_launch(
-            shim,
-            entrypoint=entrypoint,
-            button_clicked=button_clicked,
-            build_source_state_called=build_source_state_called,
-            source_state=source_state,
-            action_url=action_url,
+        from applied_math_return_insight import (
+            SESSION_PENDING_KEY,
+            build_return_insight_payload,
+            build_submit_fallback_insight,
+            stage_pending_insight,
+            store_applied_math_insight,
         )
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID, solve_instant_investment_insight
     except Exception:
-        log.debug("Investment AMI launch trace skipped", exc_info=True)
+        log.exception("Investment instant insight imports failed")
+        return False
+
+    solved_pair = solve_instant_investment_insight(question, submit_ctx)
+    render_page = str(
+        (submit_source_state or {}).get("source_page")
+        or submit_ctx.get("page")
+        or source_page
+        or ""
+    ).strip()
+    if solved_pair:
+        route, solved = solved_pair
+        insight = build_return_insight_payload(
+            question=question,
+            source_app=source_app,
+            source_page=render_page,
+            question_id=str(pre_payload.get("question_id") or ""),
+            route=route,
+            result=solved,
+            full_analysis_url=action_url_pre,
+            context=submit_ctx,
+            resume_key=str(pre_payload.get("resume_key") or ""),
+        )
+    else:
+        insight = build_submit_fallback_insight(
+            question=question,
+            source_app=source_app,
+            source_page=render_page,
+            question_id=str(pre_payload.get("question_id") or ""),
+            full_analysis_url=action_url_pre,
+            resume_key=str(pre_payload.get("resume_key") or ""),
+            reason="investment_local_solver_pending",
+        )
+
+    return_context = _investment_return_context(submit_ctx, submit_source_state)
+    stage_pending_insight(st, insight, return_context=return_context)
+    store_blob = insight.to_dict() if hasattr(insight, "to_dict") else dict(insight)
+    if solved_pair:
+        route, _ = solved_pair
+        store_blob["canonical_instant"] = True
+        store_blob["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
+        store_blob["problem_type"] = str(getattr(route, "problem_type", "") or "")
+    store_applied_math_insight(
+        store_blob,
+        return_context=return_context,
+        source_state=submit_source_state,
+        st=st,
+    )
+    ss["_ami_force_insight_render"] = True
+    ss["_ami_submit_render_insight_this_run"] = True
+    ss["_ami_last_submit_source_page"] = render_page
+    ss["_ami_insight_return_preserve"] = True
+    insight_data = insight.to_dict() if hasattr(insight, "to_dict") else dict(insight)
+    canonical: dict[str, Any] = {
+        "insight_id": str(insight_data.get("insight_id") or ""),
+        "question_id": str(pre_payload.get("question_id") or ""),
+        "conclusion": str(insight_data.get("conclusion") or ""),
+        "method": str(insight_data.get("method") or ""),
+        "model_name": str(insight_data.get("model_name") or ""),
+        "assumptions": list(insight_data.get("assumptions") or [])[:6],
+        "problem_type": str(getattr(solved_pair[0], "problem_type", "") if solved_pair else ""),
+        "solver_build_id": INVESTMENT_AMI_BUILD_ID,
+        "canonical_instant": bool(solved_pair),
+        "source_app": source_app,
+        "source_page": render_page,
+    }
+    ss["_ami_investment_instant_canonical"] = canonical
+    ss["_ami_investment_submit_diagnostics"] = {
+        "question_id": str(pre_payload.get("question_id") or ""),
+        "insight_id": canonical.get("insight_id"),
+        "instant_solved": bool(solved_pair),
+        "solver_build_id": INVESTMENT_AMI_BUILD_ID,
+        "source_page": render_page,
+    }
+    return bool(ss.get(SESSION_PENDING_KEY))
 
 
 def render_analyze_with_applied_math_sidebar(
@@ -981,17 +970,16 @@ def render_analyze_with_applied_math_sidebar(
     question_key = f"ami_question_{source_app}_{page_suffix}_{send_gen}"
     submit_key = f"ami_submit_{source_app}_{page_suffix}"
 
-    app_key = str(source_app or "").strip().lower()
-    is_music = app_key == "music"
-    is_investment = app_key == "investment"
+    is_music = str(source_app or "").strip().lower() == "music"
+    is_investment = str(source_app or "").strip().lower() == "investment"
     if is_music:
         st.sidebar.markdown("### Ask the Music Coach")
         st.sidebar.caption(
             "Get help with practice, theory, navigation, backing tracks, karaoke, or this app."
         )
     elif is_investment:
-        st.sidebar.markdown("### Applied Investment Insight")
-        st.sidebar.caption("Ask an investment question about your portfolio and what you are viewing.")
+        st.sidebar.markdown("### Investment Insight")
+        st.sidebar.caption("Ask about your portfolio, risk, allocation, and holdings.")
     else:
         st.sidebar.markdown("### Analyze with Applied Math")
         st.sidebar.caption("Ask a math question about what you are viewing.")
@@ -1002,27 +990,24 @@ def render_analyze_with_applied_math_sidebar(
         and last.get("source_app") == source_app
         and _recent_duplicate_send(ss, str(last.get("question_id") or ""))
     ):
-        if is_music:
-            sent_msg = "Question sent to Command Center. Open Command Center to continue with the Music Coach."
-        elif is_investment:
-            sent_msg = (
-                "Question sent to Command Center. Open Command Center to continue your "
-                "Applied Investment Insight."
-            )
-        else:
-            sent_msg = "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+        sent_msg = (
+            "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+            if is_music
+            else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+        )
         st.sidebar.success(sent_msg)
 
-    inv_default_q = investment_ami_default_question(source_page) if is_investment else ""
     question = st.sidebar.text_area(
         "Question",
-        value=str(ss.get(question_key) or default_question or inv_default_q or "").strip(),
+        value=str(ss.get(question_key) or default_question or "").strip(),
         placeholder=(
             music_coach_question_placeholder(source_page)
             if is_music
-            else investment_ami_question_placeholder(source_page)
-            if is_investment
-            else "e.g. Is this trend meaningful statistically?"
+            else (
+                investment_ami_default_question(source_page)
+                if is_investment
+                else "e.g. Is this trend meaningful statistically?"
+            )
         ),
         height=88,
         key=question_key,
@@ -1036,13 +1021,6 @@ def render_analyze_with_applied_math_sidebar(
         type="primary",
     ):
         q = str(question or "").strip()
-        entrypoint = "sidebar_analyze_with_applied_math"
-        if is_investment:
-            _record_investment_ami_launch_trace(
-                ss,
-                entrypoint=entrypoint,
-                button_clicked=True,
-            )
         if not q:
             st.sidebar.warning("Enter a question first.")
         else:
@@ -1054,28 +1032,43 @@ def render_analyze_with_applied_math_sidebar(
                 context_extra=context,
             )
             submit_source_state: dict[str, Any] | None = None
-            build_source_state_called = False
             if source_state_builder is not None:
                 try:
                     submit_source_state = source_state_builder()
-                    build_source_state_called = True
                 except Exception:
                     log.exception("AMI source_state builder failed for %s (%s)", source_app, source_page)
-            if is_investment and not submit_source_state:
-                try:
-                    from applied_math_context import ensure_investment_source_state
-
-                    submit_source_state = ensure_investment_source_state(source_page, ss)
-                    build_source_state_called = True
-                except Exception:
-                    log.exception("Investment AMI source_state fallback failed")
-            if is_investment and isinstance(submit_source_state, dict):
-                try:
-                    from applied_math_context import enrich_investment_source_state_holdings
-
-                    submit_source_state = enrich_investment_source_state_holdings(ss, submit_source_state)
-                except Exception:
-                    log.exception("Investment AMI source_state holdings enrich failed")
+            pre_payload = build_question_payload(
+                source_app=source_app,
+                source_page=source_page,
+                question=q,
+                context=submit_ctx,
+                context_summary=context_summary,
+                source_state=submit_source_state,
+            )
+            action_url_pre = build_applied_math_resume_url(pre_payload)
+            if is_investment:
+                _stage_investment_instant_insight(
+                    st,
+                    ss,
+                    question=q,
+                    source_app=source_app,
+                    source_page=source_page,
+                    submit_ctx=submit_ctx,
+                    submit_source_state=submit_source_state,
+                    pre_payload=pre_payload,
+                    action_url_pre=action_url_pre,
+                )
+                canonical = ss.get("_ami_investment_instant_canonical")
+                if isinstance(canonical, dict) and canonical.get("insight_id"):
+                    submit_ctx = dict(submit_ctx)
+                    submit_ctx["instant_insight"] = canonical
+                    pre_payload = dict(pre_payload)
+                    pre_payload["context"] = submit_ctx
+                    pre_payload["instant_insight"] = canonical
+                    action_url_pre = build_applied_math_resume_url(pre_payload)
+                    pending = ss.get("_ami_pending_insight")
+                    if isinstance(pending, dict):
+                        pending["full_analysis_url"] = action_url_pre
             result = submit_analytical_question(
                 source_app=source_app,
                 source_page=source_page,
@@ -1084,48 +1077,36 @@ def render_analyze_with_applied_math_sidebar(
                 context_summary=context_summary,
                 source_state=submit_source_state,
                 session_state=ss,
+                pre_payload=pre_payload if is_investment else None,
             )
+            if is_investment and not result.get("duplicate"):
+                try:
+                    from applied_math_return_insight import render_suite_applied_math_insight_for_page
+
+                    render_suite_applied_math_insight_for_page(
+                        st,
+                        source_app=source_app,
+                        source_page=source_page,
+                    )
+                except Exception:
+                    log.exception("inline Investment insight render failed")
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
-            if is_investment:
-                _record_investment_ami_launch_trace(
-                    ss,
-                    entrypoint=entrypoint,
-                    button_clicked=True,
-                    build_source_state_called=build_source_state_called,
-                    source_state=result.get("source_state") or submit_source_state,
-                    action_url=str(result.get("action_url") or ""),
-                )
-            if is_music:
-                dup_msg = (
-                    "That question was already sent recently. Open Command Center to continue "
-                    "with the Music Coach."
-                )
-                ok_msg = (
-                    "Question sent to Command Center. Open Command Center to continue with the Music Coach."
-                )
-            elif is_investment:
-                dup_msg = (
-                    "That question was already sent recently. Open Command Center to continue your "
-                    "Applied Investment Insight."
-                )
-                ok_msg = (
-                    "Question sent to Command Center. Open Command Center to continue your "
-                    "Applied Investment Insight."
-                )
-            else:
-                dup_msg = (
-                    "That question was already sent recently. Open Command Center to continue "
-                    "in Applied Intelligence."
-                )
-                ok_msg = (
-                    "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
-                )
+            dup_msg = (
+                "That question was already sent recently. Open Command Center to continue with the Music Coach."
+                if is_music
+                else "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
+            )
+            ok_msg = (
+                "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+                if is_music
+                else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+            )
             if result.get("duplicate"):
                 st.sidebar.info(dup_msg)
             else:
                 st.sidebar.success(ok_msg)
-            if on_after_send is not None:
+            if on_after_send is not None and not result.get("duplicate"):
                 try:
                     on_after_send()
                 except Exception:
