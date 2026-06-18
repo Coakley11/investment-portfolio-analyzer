@@ -263,6 +263,12 @@ def _enrich_investment_ami_analytics(
     if scenario:
         ctx["scenario_params"] = scenario
 
+    valuation = session_state.get("health_valuation")
+    if valuation not in (None, ""):
+        ctx["health_valuation"] = str(valuation)
+        scenario.setdefault("valuation_environment", str(valuation))
+        ctx["scenario_params"] = scenario
+
     try:
         from investment_ami_exposure import build_tech_exposure_from_weights
 

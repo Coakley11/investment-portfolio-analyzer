@@ -111,6 +111,14 @@ class TestInvestmentAmiPhase2(unittest.TestCase):
         _, result = solved
         self.assertRegex(result.short_answer, r"(?i)diversified")
 
+    def test_valuation_intent_routes_to_phase2(self) -> None:
+        self.assertEqual(detect_investment_send_intent("Is VOO expensive?", ""), "valuation")
+        solved = solve_instant_investment_insight("Is VOO expensive?", self._CTX)
+        self.assertIsNotNone(solved)
+        _, result = solved
+        self.assertEqual(result.problem_type, "valuation")
+        self.assertIn("direct_answer", result.analyst_sections)
+
 
 if __name__ == "__main__":
     unittest.main()

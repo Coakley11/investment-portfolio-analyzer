@@ -15,6 +15,8 @@ INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
     "Should I own both VOO and QQQ?",
     "Am I diversified enough?",
     "What happens if tech falls 20%?",
+    "Is SCHD expensive?",
+    "What growth rate is implied for VOO?",
 )
 
 _INVESTMENT_SOLVER_INTENTS = frozenset(
@@ -28,6 +30,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "etf_overlap",
         "diversification",
         "scenario_stress",
+        "valuation",
     }
 )
 
@@ -112,6 +115,25 @@ _SCENARIO_PHRASES = (
     "stress testing",
 )
 
+_VALUATION_PHRASES = (
+    "expensive",
+    "overvalued",
+    "undervalued",
+    "cheap",
+    "fairly valued",
+    "fair value",
+    "p/e",
+    "pe ratio",
+    "price to earnings",
+    " valuation",
+    "implied growth",
+    "growth rate is implied",
+    "growth rate implied",
+    "assumptions matter",
+    "what assumptions",
+    "too rich",
+)
+
 
 def investment_ami_default_question(source_page: str) -> str:
     page = str(source_page or "").strip().lower()
@@ -138,6 +160,8 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         "both" in q and any(t in q for t in ("voo", "qqq", "vti", "spy", "ivv"))
     ):
         return "etf_overlap"
+    if any(p in q for p in _VALUATION_PHRASES) and not any(p in q for p in _SCENARIO_PHRASES):
+        return "valuation"
     if any(p in q for p in _SCENARIO_PHRASES):
         return "scenario_stress"
     if any(p in q for p in _DIVERSIFICATION_PHRASES):

@@ -1,6 +1,6 @@
 # Investment AMI Phase 2 Plan
 
-**Status:** Phase 2a started (`investment-ami-v2-phase2a`)  
+**Status:** Phase 2b valuation started (`investment-ami-v2-phase2b-valuation1`)  
 **Prerequisite:** Phase 1 milestone verified (canonical insight, immediate render, UX fixes)
 
 ---
@@ -41,13 +41,16 @@ Beginner mode: simpler labels, fewer metrics, shorter scenarios.
 - [x] Context enrichment: `etf_overlap_pairs`, `asset_class_breakdown`, `scenario_params`
 - [x] On-page + AMI canonical render of `analyst_sections`
 - [x] Fix scenario_stress crash (`health_valuation` was wrongly mapped to `tech_drawdown_pct`)
+- [x] Direct vs embedded tech exposure attribution (`investment_ami_exposure.py`)
 - [ ] Cloud verification of structured cards
 
-### Phase 2b — Valuation + stress testing
+### Phase 2b — Valuation + stress testing (in progress)
 
-- Valuation questions (P/E, growth assumptions, ETF richness)
-- Recession / rate-shock / sector drawdown templates
-- Tie to macro engine + health assumptions
+- [x] `valuation` intent + structured seven-section answers
+- [x] `investment_ami_valuation.py` — P/E lookup, style bands, implied growth, macro tie-in
+- [x] Context enrichment: `health_valuation` → AMI context
+- [ ] Macro scenario families (recession, rate shock, inflation, unemployment)
+- [ ] Cloud verification of valuation answers
 
 ### Phase 2c — Interactive sliders
 
