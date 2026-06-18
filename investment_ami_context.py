@@ -32,6 +32,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "scenario_stress",
         "valuation",
         "macro_rates",
+        "macro_recession",
     }
 )
 
@@ -104,16 +105,6 @@ _DIVERSIFICATION_PHRASES = (
     "how balanced",
 )
 
-_SCENARIO_PHRASES = (
-    "what happens if",
-    "what if",
-    "falls 20",
-    "fall 20",
-    "drawdown",
-    "stress test",
-    "stress testing",
-)
-
 _RATE_RISE_PHRASES = (
     "interest rate",
     "interest rates",
@@ -148,6 +139,23 @@ _VALUATION_PHRASES = (
     "too rich",
 )
 
+_SCENARIO_PHRASES = (
+    "what happens if",
+    "what if",
+    "falls 20",
+    "fall 20",
+    "drawdown",
+    "stress test",
+    "stress testing",
+)
+
+_RECESSION_PHRASES = (
+    "recession",
+    "economic downturn",
+    "economic slowdown",
+    "bear market recession",
+)
+
 
 def investment_ami_default_question(source_page: str) -> str:
     page = str(source_page or "").strip().lower()
@@ -178,6 +186,8 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "valuation"
     if _is_rate_rise_question(q):
         return "macro_rates"
+    if _is_recession_question(q):
+        return "macro_recession"
     if any(p in q for p in _SCENARIO_PHRASES):
         return "scenario_stress"
     if any(p in q for p in _DIVERSIFICATION_PHRASES):
@@ -217,3 +227,11 @@ def _is_rate_rise_question(q: str) -> bool:
     if re.search(r"duration", q) and any(w in q for w in ("rate", "bond", "rise", "rising")):
         return True
     return False
+
+
+def _is_recession_question(q: str) -> bool:
+    if not any(p in q for p in _RECESSION_PHRASES):
+        return False
+    if _is_rate_rise_question(q):
+        return False
+    return True

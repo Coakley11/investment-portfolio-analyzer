@@ -80,8 +80,8 @@ def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> I
         sections = build_analyst_sections(
             direct_answer=direct,
             portfolio_analyst_view=(
-                "Concentration measures how much of your portfolio sits in a few positions. "
-                "Without weights, I cannot score single-name or top-3 exposure."
+                "Concentration measures how much of your portfolio sits in a few fund sleeves. "
+                "Without weights, I cannot score top-fund or top-3 allocation exposure."
             ),
             recommended_actions="Enter tickers and target weights, then ask again.",
             risk_notes=_default_risk_notes(beginner),
@@ -106,15 +106,15 @@ def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> I
         elif top_pct >= 25:
             direct = f"Moderately concentrated — **{top_ticker}** is about **{top_pct:.1f}%**."
         else:
-            direct = f"Not highly concentrated on one name. Largest holding **{top_ticker}** is **{top_pct:.1f}%**."
+            direct = f"Not highly concentrated in one fund sleeve. Largest holding **{top_ticker}** is **{top_pct:.1f}%**."
         analyst = (
-            f"Your top three holdings (**{', '.join(t for t, _ in rows[:3])}**) add up to about **{top3:.1f}%**. "
-            "Portfolio performance will be heavily influenced by those top positions — returns and drawdowns "
+            f"Your top three fund sleeves (**{', '.join(t for t, _ in rows[:3])}**) add up to about **{top3:.1f}%**. "
+            "Portfolio performance will be heavily influenced by those top sleeves — returns and drawdowns "
             "will largely track their combined moves rather than a broad diversified index."
         )
         tradeoffs = (
-            "**More concentration** → simpler portfolio, clearer bets, but bigger swings from one position.\n"
-            "**More diversification** → smoother ride, less single-name shock, but you may lag a hot sector."
+            "**More concentration** → simpler portfolio, clearer bets, but bigger swings from one sleeve.\n"
+            "**More diversification** → smoother ride, less single-sleeve shock, but you may lag a hot sector."
         )
         actions = (
             "If concentration feels uncomfortable, consider trimming the largest weight toward your target mix "
@@ -123,17 +123,17 @@ def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> I
     else:
         direct = (
             f"Concentration scan ({_portfolio_label(ctx)}): top **{top_ticker}** **{top_pct:.1f}%**; "
-            f"top-3 **{top3:.1f}%** → **{flag}** single-name concentration."
+            f"top-3 **{top3:.1f}%** → **{flag}** fund-level concentration."
         )
         analyst = (
-            f"Top-3 weight **{top3:.1f}%** implies meaningful **idiosyncratic risk** — portfolio P&L will "
-            f"be driven primarily by {top_ticker} and the other top sleeves, not by market-wide diversification. "
+            f"Top-3 weight **{top3:.1f}%** implies meaningful **allocation concentration** — portfolio P&L will "
+            f"be driven primarily by {top_ticker} and the other top fund sleeves, not by market-wide diversification. "
             "Risk **increases** if top weights drift higher; it **eases** if you rebalance toward targets or add "
             "uncorrelated sleeves."
         )
         tradeoffs = (
             "Higher top-weight concentration increases tracking error vs a broad benchmark and amplifies "
-            "drawdowns if the dominant sleeve underperforms. Lower concentration reduces single-factor shock "
+            "drawdowns if the dominant sleeve underperforms. Lower concentration reduces sleeve-level shock "
             "but may dilute intentional tilts."
         )
         actions = (
@@ -251,7 +251,7 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
             )
         )
         tradeoffs = (
-            "Reducing concentration lowers single-name shock but may trim intentional factor bets. "
+            "Reducing concentration lowers sleeve-level shock but may trim intentional factor bets. "
             "Adding defensive assets cuts variance but creates opportunity cost in equity rallies."
         )
         what_if = (
@@ -807,6 +807,10 @@ def solve_phase2_or_structured(
         from investment_ami_macro import macro_rates_answer
 
         result = macro_rates_answer(ctx, beginner=beginner, question=question)
+    elif intent == "macro_recession":
+        from investment_ami_macro import macro_recession_answer
+
+        result = macro_recession_answer(ctx, beginner=beginner, question=question)
     elif intent == "valuation":
         result = valuation_answer(ctx, beginner=beginner, question=question)
     else:

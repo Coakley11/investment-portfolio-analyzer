@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2c-macro-rates1"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2d-macro-recession1"
 
 _TECH_TICKERS = frozenset(
     {
@@ -37,6 +37,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "scenario_stress",
         "valuation",
         "macro_rates",
+        "macro_recession",
     }
 )
 
@@ -149,18 +150,18 @@ def _concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentS
             )
         else:
             lines.append(
-                f"**Not highly concentrated** on one name. Largest holding **{top_ticker}** is about **{top_pct:.1f}%**."
+                f"**Not highly concentrated** in one fund sleeve. Largest holding **{top_ticker}** is about **{top_pct:.1f}%**."
             )
-        lines.append("Spreading across more assets can reduce single-position shock — not a guarantee of better returns.")
+        lines.append("Spreading across more fund sleeves can reduce single-sleeve shock — not a guarantee of better returns.")
     else:
         flag = "high" if top_pct >= 35 else "moderate" if top_pct >= 25 else "low"
         lines.append(
-            f"Concentration scan ({_portfolio_label(ctx)}): top position **{top_ticker}** **{top_pct:.1f}%**; "
-            f"top-3 weight **{top3:.1f}%** → **{flag}** single-name concentration."
+            f"Concentration scan ({_portfolio_label(ctx)}): top fund sleeve **{top_ticker}** **{top_pct:.1f}%**; "
+            f"top-3 weight **{top3:.1f}%** → **{flag}** fund-level concentration."
         )
         if top_pct >= 25:
             lines.append(
-                "Elevated top-weight concentration increases idiosyncratic risk — portfolio volatility tracks the dominant holding more closely."
+                "Elevated top-weight concentration increases sleeve-level risk — portfolio volatility tracks the dominant fund more closely."
             )
         else:
             lines.append("Weight distribution is relatively balanced versus a 25–35% concentration warning band.")
@@ -399,6 +400,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
         "scenario_stress": ("scenario_stress", "Portfolio scenario analyst"),
         "valuation": ("valuation", "Valuation analyst"),
         "macro_rates": ("macro_rates", "Interest rate scenario analyst"),
+        "macro_recession": ("macro_recession", "Recession scenario analyst"),
     }
     problem_type, model_name = labels.get(intent, ("investment_generic", "Investment analyst"))
     return InvestmentSolverRoute(
@@ -435,6 +437,7 @@ def solve_instant_investment_insight(
         "scenario_stress",
         "valuation",
         "macro_rates",
+        "macro_recession",
     }
     if intent in phase2_intents:
         from investment_ami_phase2_solvers import solve_phase2_or_structured
