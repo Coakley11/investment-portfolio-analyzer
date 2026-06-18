@@ -40,6 +40,7 @@ Beginner mode: simpler labels, fewer metrics, shorter scenarios.
 - [x] New families: `etf_overlap`, `diversification`, `scenario_stress`
 - [x] Context enrichment: `etf_overlap_pairs`, `asset_class_breakdown`, `scenario_params`
 - [x] On-page + AMI canonical render of `analyst_sections`
+- [x] Fix scenario_stress crash (`health_valuation` was wrongly mapped to `tech_drawdown_pct`)
 - [ ] Cloud verification of structured cards
 
 ### Phase 2b — Valuation + stress testing

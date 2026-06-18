@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2a"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2b-fix1"
 
 _TECH_TICKERS = frozenset(
     {
@@ -433,7 +433,7 @@ def solve_instant_investment_insight(
     if intent in phase2_intents:
         from investment_ami_phase2_solvers import solve_phase2_or_structured
 
-        pair = solve_phase2_or_structured(intent, ctx, beginner=beginner)
+        pair = solve_phase2_or_structured(intent, ctx, beginner=beginner, question=q)
         if pair:
             return pair
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from investment_ami_answer_format import build_analyst_sections
@@ -27,6 +28,43 @@ def _default_risk_notes(beginner: bool) -> str:
         "Educational portfolio analysis only; not investment advice. "
         "Metrics are snapshot-based from session weights and historical health metrics where available."
     )
+
+
+def _parse_scenario_drawdown_pct(
+    ctx: dict[str, Any],
+    *,
+    question: str = "",
+    default: float = 20.0,
+) -> float:
+    """Resolve tech/scenario drawdown % from params or question text (never raises)."""
+    params = dict(ctx.get("scenario_params") or {})
+    raw = params.get("tech_drawdown_pct")
+    parsed = _parse_weight_pct(raw)
+    if parsed is not None and 0 < parsed <= 100:
+        return parsed
+    if isinstance(raw, (int, float)) and 0 < float(raw) <= 100:
+        return float(raw)
+    q = str(question or ctx.get("question") or "").strip().lower()
+    for pattern in (
+        r"(?:fall|falls|drop|drops|decline|declines|down)[^\d%]{0,24}(\d+(?:\.\d+)?)\s*%?",
+        r"(\d+(?:\.\d+)?)\s*%\s*(?:drop|drawdown|fall|decline)",
+        r"tech[^\d%]{0,20}(\d+(?:\.\d+)?)\s*%?",
+    ):
+        match = re.search(pattern, q, flags=re.IGNORECASE)
+        if match:
+            try:
+                val = float(match.group(1))
+                if 0 < val <= 100:
+                    return val
+            except (TypeError, ValueError):
+                continue
+    return default
+
+
+def _tickers_mentioned_in_question(question: str) -> list[str]:
+    q = re.sub(r"[^A-Z0-9 ]", " ", str(question or "").upper())
+    known = ("VOO", "QQQ", "VTI", "SPY", "IVV", "SCHD", "VYM", "VNQ", "BND", "VXUS", "VGT", "MGK")
+    return [t for t in known if re.search(rf"\b{t}\b", q)]
 
 
 def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolverResult:
@@ -69,8 +107,8 @@ def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> I
             direct = f"Not highly concentrated on one name. Largest holding **{top_ticker}** is **{top_pct:.1f}%**."
         analyst = (
             f"Your top three holdings (**{', '.join(t for t, _ in rows[:3])}**) add up to about **{top3:.1f}%**. "
-            "When a few funds dominate, your portfolio tends to move with those positions — good when they rise, "
-            "painful when one falls sharply."
+            "Portfolio performance will be heavily influenced by those top positions — returns and drawdowns "
+            "will largely track their combined moves rather than a broad diversified index."
         )
         tradeoffs = (
             "**More concentration** → simpler portfolio, clearer bets, but bigger swings from one position.\n"
@@ -86,8 +124,10 @@ def structured_concentration_answer(ctx: dict[str, Any], *, beginner: bool) -> I
             f"top-3 **{top3:.1f}%** → **{flag}** single-name concentration."
         )
         analyst = (
-            f"Top-3 weight **{top3:.1f}%** implies meaningful **idiosyncratic risk** — portfolio volatility will "
-            f"track {top_ticker} and peers in the top bucket more than a diversified index-like mix."
+            f"Top-3 weight **{top3:.1f}%** implies meaningful **idiosyncratic risk** — portfolio P&L will "
+            f"be driven primarily by {top_ticker} and the other top sleeves, not by market-wide diversification. "
+            "Risk **increases** if top weights drift higher; it **eases** if you rebalance toward targets or add "
+            "uncorrelated sleeves."
         )
         tradeoffs = (
             "Higher top-weight concentration increases tracking error vs a broad benchmark and amplifies "
@@ -146,10 +186,12 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
     if beginner:
         direct = "Your biggest risks right now are concentration, sector tilt, and how much volatility you are carrying."
         analyst = (
-            f"Largest position **{top_ticker}** at **{top_pct:.1f}%** can move the whole portfolio. "
-            + (f"Tech-heavy funds add about **{tech_pct:.1f}%** of technology tilt. " if tech_pct >= 15 else "")
+            f"Largest position **{top_ticker}** at **{top_pct:.1f}%** can move the whole portfolio — "
+            "that is **concentration risk**: one sleeve drives outcomes. "
+            + (f"Tech-heavy funds add about **{tech_pct:.1f}%** of sector tilt — significant if tech sells off. " if tech_pct >= 15 else "")
             + (f"Health check labels risk as **{risk_level}**." if risk_level else "")
-        ).strip()
+            + " Risk **rises** if top weights grow; **falls** if you diversify or add defensive assets."
+        )
         key_vars = "\n".join(
             filter(
                 None,
@@ -181,7 +223,9 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
         )
         analyst = (
             "Risk stacks from **concentration** (idiosyncratic), **factor/sector tilt** (systematic), "
-            "and **historical volatility** where available. Dominant sleeve drives short-term P&L variance."
+            "and **historical volatility**. Dominant sleeves drive short-term variance. "
+            "Severity is **elevated** when top-3 exceeds ~60% or tech proxy exceeds ~35%; "
+            "**moderate** below those bands. Rebalancing and defensive sleeves reduce exposure."
         )
         key_vars = "\n".join(
             filter(
@@ -231,10 +275,29 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
     )
 
 
-def etf_overlap_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolverResult:
+def etf_overlap_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     pairs = ctx.get("etf_overlap_pairs")
     rows = _weight_rows(ctx)
     tickers = [t for t, _ in rows]
+    mentioned = _tickers_mentioned_in_question(question)
+
+    if isinstance(pairs, list) and mentioned and len(mentioned) >= 2:
+        for p in pairs:
+            pair_str = str(p.get("pair") or "")
+            if mentioned[0] in pair_str and mentioned[1] in pair_str:
+                pairs = [p] + [x for x in pairs if x is not p]
+                break
+        else:
+            try:
+                import etf_holdings as eh
+
+                t1, t2 = mentioned[0], mentioned[1]
+                h1 = eh.lookup_etf(t1).holdings
+                h2 = eh.lookup_etf(t2).holdings
+                ov = eh.pairwise_etf_overlap(h1, h2) * 100
+                pairs = [{"pair": f"{t1}/{t2}", "overlap_pct": round(ov, 1)}] + list(pairs or [])
+            except Exception:
+                pass
 
     if not isinstance(pairs, list) or not pairs:
         if len(tickers) >= 2:
@@ -261,8 +324,35 @@ def etf_overlap_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolv
     top_pair = max(pairs, key=lambda p: float(p.get("overlap_pct") or 0))
     t1, t2 = str(top_pair.get("pair", "/")).split("/", 1) if "/" in str(top_pair.get("pair", "")) else ("?", "?")
     ov = float(top_pair.get("overlap_pct") or 0)
+    compare_mode = len(mentioned) >= 2 and mentioned[0] in (t1, t2) and mentioned[1] in (t1, t2)
+    growth_tilt = t2 in {"QQQ", "VGT", "ARKK", "TQQQ"} or t1 in {"QQQ", "VGT", "ARKK", "TQQQ"}
 
-    if beginner:
+    if compare_mode and beginner:
+        if ov >= 50:
+            direct = (
+                f"**Usually not both** — **{t1}** and **{t2}** overlap about **{ov:.0f}%**. "
+                "You mostly duplicate the same large US stocks."
+            )
+        elif ov >= 35:
+            direct = (
+                f"**Optional, not both at large weights** — **{ov:.0f}%** overlap between **{t1}** and **{t2}**."
+            )
+        else:
+            direct = f"**Can own both** at moderate weights — overlap is **{ov:.0f}%**, lower duplication."
+        analyst = (
+            f"**{t1}** is a broad US market fund; **{t2}** is {'growth/tech tilted' if growth_tilt else 'a different factor sleeve'}. "
+            "Overlap means you double-count the same underlying names."
+        )
+    elif compare_mode and not beginner:
+        direct = (
+            f"ETF comparison **{t1} vs {t2}**: overlap **{ov:.1f}%** — "
+            + ("high duplication; prefer one core sleeve." if ov >= 35 else "moderate overlap; size sleeves intentionally.")
+        )
+        analyst = (
+            f"**{t1}** = broad beta exposure; **{t2}** = {'growth/tech concentration' if growth_tilt else 'alternate factor'}. "
+            "Combined overlap raises effective mega-cap weight and reduces independent diversification."
+        )
+    elif beginner:
         direct = (
             f"**{t1}** and **{t2}** share about **{ov:.0f}%** of the same underlying holdings — "
             + ("that is meaningful duplication." if ov >= 35 else "some overlap is normal for broad US funds.")
@@ -318,10 +408,20 @@ def diversification_answer(ctx: dict[str, Any], *, beginner: bool) -> Investment
         top_class, top_pct = items[0]
         equity_pct = sum(p for k, p in items if "equity" in k.lower())
         bond_pct = sum(p for k, p in items if "bond" in k.lower() or "bill" in k.lower())
+        n_classes = len(items)
+        if top_pct >= 70 or n_classes < 2:
+            judgment = "Not fully diversified"
+        elif n_classes >= 3 and top_pct < 50:
+            judgment = "Yes — moderately diversified"
+        elif n_classes >= 2 and top_pct < 60:
+            judgment = "Partially diversified — room to improve"
+        else:
+            judgment = "Moderately diversified with concentration in one sleeve"
     elif rows:
         top_class, top_pct = "Equity (default)", sum(p for _, p in rows)
         equity_pct, bond_pct = top_pct, 0.0
         items = [("Equity (default)", top_pct)]
+        judgment = "Partially diversified — single asset-class proxy from weights"
     else:
         direct = "Add holdings to assess diversification across asset classes."
         sections = build_analyst_sections(
@@ -339,7 +439,7 @@ def diversification_answer(ctx: dict[str, Any], *, beginner: bool) -> Investment
 
     if beginner:
         direct = (
-            f"Your mix is led by **{top_class}** at about **{top_pct:.1f}%**."
+            f"**{judgment}.** Your mix is led by **{top_class}** at about **{top_pct:.1f}%**."
             + (f" Equities total ~**{equity_pct:.1f}%**." if equity_pct else "")
         )
         analyst = (
@@ -352,7 +452,7 @@ def diversification_answer(ctx: dict[str, Any], *, beginner: bool) -> Investment
             actions = "Compare this mix to your goal; fill missing asset classes if the balance feels off."
     else:
         direct = (
-            f"Asset-class mix: **{top_class}** **{top_pct:.1f}%** dominant; "
+            f"**{judgment}.** Asset-class mix: **{top_class}** **{top_pct:.1f}%** dominant; "
             f"equity **{equity_pct:.1f}%**, defensive/bond **{bond_pct:.1f}%**."
         )
         analyst = "Diversification quality depends on asset-class balance, geographic spread, and correlation — not ticker count alone."
@@ -382,9 +482,9 @@ def diversification_answer(ctx: dict[str, Any], *, beginner: bool) -> Investment
     )
 
 
-def scenario_stress_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolverResult:
+def scenario_stress_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     params = dict(ctx.get("scenario_params") or {})
-    tech_dd = _parse_weight_pct(params.get("tech_drawdown_pct")) or float(params.get("tech_drawdown_pct") or 20)
+    tech_dd = _parse_scenario_drawdown_pct(ctx, question=question, default=20.0)
     rate_shock = str(params.get("rate_shock") or ctx.get("health_rate_env") or "").strip()
     rows = _weight_rows(ctx)
     tech_pct = sum(p for t, p in rows if t in _TECH_TICKERS)
@@ -447,17 +547,18 @@ def solve_phase2_or_structured(
     ctx: dict[str, Any],
     *,
     beginner: bool,
+    question: str = "",
 ) -> tuple[InvestmentSolverRoute, InvestmentSolverResult] | None:
     if intent == "portfolio_concentration":
         result = structured_concentration_answer(ctx, beginner=beginner)
     elif intent == "portfolio_risk":
         result = structured_portfolio_risk_answer(ctx, beginner=beginner)
     elif intent == "etf_overlap":
-        result = etf_overlap_answer(ctx, beginner=beginner)
+        result = etf_overlap_answer(ctx, beginner=beginner, question=question)
     elif intent == "diversification":
         result = diversification_answer(ctx, beginner=beginner)
     elif intent == "scenario_stress":
-        result = scenario_stress_answer(ctx, beginner=beginner)
+        result = scenario_stress_answer(ctx, beginner=beginner, question=question)
     else:
         return None
     route = _route_for_intent(intent)

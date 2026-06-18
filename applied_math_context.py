@@ -254,13 +254,12 @@ def _enrich_investment_ami_analytics(
         pass
 
     scenario: dict[str, Any] = dict(session_state.get("_ami_scenario_params") or {})
-    for key, ss_key in (
-        ("tech_drawdown_pct", "health_valuation"),
-        ("rate_shock", "health_rate_env"),
-        ("recession_scenario", "health_recession"),
-    ):
-        if key not in scenario and session_state.get(ss_key) not in (None, ""):
-            scenario.setdefault(key, session_state.get(ss_key))
+    rate = session_state.get("health_rate_env")
+    if rate not in (None, "") and "rate_shock" not in scenario:
+        scenario["rate_shock"] = str(rate)
+    recession = session_state.get("health_recession")
+    if recession not in (None, "") and "recession_scenario" not in scenario:
+        scenario["recession_scenario"] = str(recession)
     if scenario:
         ctx["scenario_params"] = scenario
 

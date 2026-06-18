@@ -876,7 +876,18 @@ def _stage_investment_instant_insight(
         log.exception("Investment instant insight imports failed")
         return False
 
-    solved_pair = solve_instant_investment_insight(question, submit_ctx)
+    solved_pair = None
+    solve_error = ""
+    detected_intent = ""
+    try:
+        from investment_ami_context import detect_investment_send_intent
+
+        detected_intent = detect_investment_send_intent(question, str(submit_ctx.get("page") or source_page or ""))
+        solved_pair = solve_instant_investment_insight(question, submit_ctx)
+    except Exception as exc:
+        solve_error = str(exc)
+        log.exception("Investment instant solve failed for %r", question)
+
     render_page = str(
         (submit_source_state or {}).get("source_page")
         or submit_ctx.get("page")
@@ -904,7 +915,7 @@ def _stage_investment_instant_insight(
             question_id=str(pre_payload.get("question_id") or ""),
             full_analysis_url=action_url_pre,
             resume_key=str(pre_payload.get("resume_key") or ""),
-            reason="investment_local_solver_pending",
+            reason="investment_local_solver_pending" if not solve_error else f"investment_solver_error:{solve_error[:80]}",
         )
 
     return_context = _investment_return_context(submit_ctx, submit_source_state)
@@ -953,6 +964,13 @@ def _stage_investment_instant_insight(
         "instant_solved": bool(solved_pair),
         "solver_build_id": INVESTMENT_AMI_BUILD_ID,
         "source_page": render_page,
+        "detected_intent": detected_intent,
+        "solver_selected": str(getattr(solved_pair[0], "problem_type", "") if solved_pair else ""),
+        "solver_returned_none": not bool(solved_pair),
+        "solver_error": solve_error or None,
+        "scenario_params_present": bool(submit_ctx.get("scenario_params")),
+        "canonical_insight_created": bool(canonical.get("insight_id")),
+        "command_center_send_attempted": True,
     }
     return bool(ss.get(SESSION_PENDING_KEY))
 

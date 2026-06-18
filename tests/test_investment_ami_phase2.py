@@ -68,11 +68,48 @@ class TestInvestmentAmiPhase2(unittest.TestCase):
             detect_investment_send_intent("What happens if tech falls 20%?", ""),
             "scenario_stress",
         )
-        ctx = {**self._CTX, "current_weights": {**self._CTX["current_weights"], "QQQ": "30%"}, "scenario_params": {"tech_drawdown_pct": 20}}
+        ctx = {
+            **self._CTX,
+            "current_weights": {**self._CTX["current_weights"], "QQQ": "30%"},
+            "scenario_params": {"tech_drawdown_pct": "Fair Value"},
+        }
         solved = solve_instant_investment_insight("What happens if tech falls 20%?", ctx)
         self.assertIsNotNone(solved)
         _, result = solved
+        self.assertEqual(result.problem_type, "scenario_stress")
         self.assertIn("what_if_scenarios", result.analyst_sections)
+        self.assertIn("20", result.short_answer)
+
+    def test_scenario_survives_health_valuation_in_params(self) -> None:
+        from investment_ami_phase2_solvers import scenario_stress_answer
+
+        ctx = {
+            "scenario_params": {"tech_drawdown_pct": "Overvalued", "rate_shock": "Rising"},
+            "current_weights": {"QQQ": "25%"},
+        }
+        result = scenario_stress_answer(ctx, beginner=False, question="What happens if tech falls 20%?")
+        self.assertIn("25", result.analyst_sections.get("key_variables", ""))
+
+    def test_voo_qqq_comparison_answer(self) -> None:
+        solved = solve_instant_investment_insight(
+            "Should I own both VOO and QQQ?",
+            {"etf_overlap_pairs": [{"pair": "VOO/QQQ", "overlap_pct": 72.0}]},
+        )
+        self.assertIsNotNone(solved)
+        _, result = solved
+        self.assertTrue(
+            "not both" in result.short_answer.lower() or "overlap" in result.short_answer.lower()
+        )
+
+    def test_diversification_judgment(self) -> None:
+        ctx = {
+            **self._CTX,
+            "asset_class_breakdown": {"Dividend ETF": 50.0, "REIT": 25.0, "Bonds": 10.0, "Equity": 15.0},
+        }
+        solved = solve_instant_investment_insight("Am I diversified enough?", ctx)
+        self.assertIsNotNone(solved)
+        _, result = solved
+        self.assertRegex(result.short_answer, r"(?i)diversified")
 
 
 if __name__ == "__main__":
