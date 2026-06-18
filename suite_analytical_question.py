@@ -1422,6 +1422,14 @@ def build_context_from_session(
             for k, v in inv_extra.items():
                 if v is not None and v != "":
                     ctx[k] = v
+        try:
+            from applied_math_context import current_weights_from_holdings_df
+
+            live_weights = current_weights_from_holdings_df(df)
+            if live_weights:
+                ctx["current_weights"] = live_weights
+        except Exception:
+            pass
         hr_obj = session_state.get("health_result")
         if hr_obj is not None:
             for attr, key in (

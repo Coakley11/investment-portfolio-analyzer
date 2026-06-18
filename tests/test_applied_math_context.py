@@ -95,6 +95,33 @@ class TestInvestmentAppliedMathContext(unittest.TestCase):
         tickers = set(restored["Ticker"].astype(str).str.upper())
         self.assertEqual(tickers, {"BND", "VYM"})
 
+    def test_current_weights_from_live_holdings_df(self) -> None:
+        """AMI must use Weight (%) from the editor — not equal-weight fallback."""
+        session = {
+            "investment_active_tab": "Portfolio Inputs",
+            "holdings_df": pd.DataFrame(
+                {
+                    "Ticker": ["VTI", "QQQ", "VXUS", "VNQ"],
+                    "Weight (%)": [50.0, 20.0, 20.0, 10.0],
+                    "Asset Type": ["Equity", "Equity", "Equity", "REIT"],
+                }
+            ),
+            # Stale health cache from a prior portfolio — must not override live editor.
+            "_ami_investment_context": {
+                "current_weights": {
+                    "SCHD": "25.0%",
+                    "VYM": "25.0%",
+                    "VNQ": "25.0%",
+                }
+            },
+        }
+        ctx = build_investment_applied_math_context("Portfolio Inputs", session)
+        weights = ctx.get("current_weights") or {}
+        self.assertEqual(weights.get("VTI"), "50.0%")
+        self.assertEqual(weights.get("QQQ"), "20.0%")
+        self.assertEqual(weights.get("VXUS"), "20.0%")
+        self.assertEqual(weights.get("VNQ"), "10.0%")
+
     def test_rebalance_drift_captured_from_health(self) -> None:
         class _HR:
             score = 72.0

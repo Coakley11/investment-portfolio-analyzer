@@ -10,6 +10,48 @@ def cache_investment_context(session_state: dict[str, Any], ctx: dict[str, Any])
         session_state["_ami_investment_context"] = dict(ctx)
 
 
+def _holdings_weight_column(df: Any) -> str | None:
+    try:
+        import pandas as pd
+
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return None
+        if "Weight (%)" in df.columns:
+            return "Weight (%)"
+        if "Weight" in df.columns:
+            return "Weight"
+    except Exception:
+        pass
+    return None
+
+
+def current_weights_from_holdings_df(df: Any) -> dict[str, str]:
+    """Build ticker → weight% map from the live portfolio editor dataframe."""
+    try:
+        import pandas as pd
+
+        if not isinstance(df, pd.DataFrame) or df.empty or "Ticker" not in df.columns:
+            return {}
+        weight_col = _holdings_weight_column(df)
+        if not weight_col:
+            return {}
+        weights: dict[str, str] = {}
+        for _, row in df.dropna(subset=["Ticker"]).iterrows():
+            ticker = str(row.get("Ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            raw = row.get(weight_col)
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                weights[ticker] = f"{float(raw):.1f}%"
+            except (TypeError, ValueError):
+                weights[ticker] = str(raw)
+        return weights
+    except Exception:
+        return {}
+
+
 def record_rebalance_from_health(session_state: dict[str, Any], health: Any) -> None:
     """Cache drift/target weights and rebalance recommendations for Applied Math."""
     if health is None:
@@ -140,18 +182,6 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
             tickers = [str(t).strip() for t in df["Ticker"].dropna().tolist() if str(t).strip()]
             if tickers:
                 ctx["holdings"] = tickers[:12]
-            if "Weight" in df.columns:
-                weights = {}
-                for _, row in df.iterrows():
-                    t = str(row.get("Ticker") or "").strip()
-                    w = row.get("Weight")
-                    if t and w is not None:
-                        try:
-                            weights[t] = f"{float(w):.1f}%"
-                        except (TypeError, ValueError):
-                            weights[t] = str(w)
-                if weights:
-                    ctx["current_weights"] = weights
     except Exception:
         pass
 
@@ -200,6 +230,11 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
             _enrich_investment_ami_analytics(ctx, df_ami, session_state)
     except Exception:
         pass
+
+    # Live portfolio editor weights always win over cached health/rebalance snapshots.
+    live_weights = current_weights_from_holdings_df(session_state.get("holdings_df"))
+    if live_weights:
+        ctx["current_weights"] = live_weights
     return ctx
 
 
