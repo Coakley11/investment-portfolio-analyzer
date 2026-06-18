@@ -803,6 +803,10 @@ def solve_phase2_or_structured(
         result = diversification_answer(ctx, beginner=beginner)
     elif intent == "scenario_stress":
         result = scenario_stress_answer(ctx, beginner=beginner, question=question)
+    elif intent == "macro_rates":
+        from investment_ami_macro import macro_rates_answer
+
+        result = macro_rates_answer(ctx, beginner=beginner, question=question)
     elif intent == "valuation":
         result = valuation_answer(ctx, beginner=beginner, question=question)
     else:

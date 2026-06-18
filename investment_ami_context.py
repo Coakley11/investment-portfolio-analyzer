@@ -31,6 +31,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "diversification",
         "scenario_stress",
         "valuation",
+        "macro_rates",
     }
 )
 
@@ -109,10 +110,23 @@ _SCENARIO_PHRASES = (
     "falls 20",
     "fall 20",
     "drawdown",
-    "rate shock",
-    "recession",
     "stress test",
     "stress testing",
+)
+
+_RATE_RISE_PHRASES = (
+    "interest rate",
+    "interest rates",
+    "rates rise",
+    "rates rising",
+    "rate rise",
+    "rate shock",
+    "rising rates",
+    "fed hike",
+    "fed rate",
+    "higher rates",
+    "rates go up",
+    "rates increase",
 )
 
 _VALUATION_PHRASES = (
@@ -162,6 +176,8 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "etf_overlap"
     if any(p in q for p in _VALUATION_PHRASES) and not any(p in q for p in _SCENARIO_PHRASES):
         return "valuation"
+    if _is_rate_rise_question(q):
+        return "macro_rates"
     if any(p in q for p in _SCENARIO_PHRASES):
         return "scenario_stress"
     if any(p in q for p in _DIVERSIFICATION_PHRASES):
@@ -191,3 +207,13 @@ def intent_supported(intent: str) -> bool:
 
 def _normalize_question(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _is_rate_rise_question(q: str) -> bool:
+    if any(p in q for p in _RATE_RISE_PHRASES):
+        return True
+    if "rate" in q and any(w in q for w in ("rise", "rising", "increase", "hike", "higher", "go up")):
+        return True
+    if re.search(r"duration", q) and any(w in q for w in ("rate", "bond", "rise", "rising")):
+        return True
+    return False
