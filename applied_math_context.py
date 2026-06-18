@@ -263,6 +263,24 @@ def _enrich_investment_ami_analytics(
     if scenario:
         ctx["scenario_params"] = scenario
 
+    try:
+        from investment_ami_exposure import build_tech_exposure_from_weights
+
+        weights: dict[str, float] = {}
+        if "Weight (%)" in holdings_df.columns and "Ticker" in holdings_df.columns:
+            for _, row in holdings_df.dropna(subset=["Ticker"]).iterrows():
+                t = str(row.get("Ticker") or "").strip().upper()
+                try:
+                    w = float(row.get("Weight (%)") or 0)
+                except (TypeError, ValueError):
+                    w = 0.0
+                if t and w > 0:
+                    weights[t] = w
+        if weights:
+            ctx["tech_exposure"] = build_tech_exposure_from_weights(weights)
+    except Exception:
+        pass
+
 
 _INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (
     "overview_subtab",

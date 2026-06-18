@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from investment_ami_answer_format import build_analyst_sections
+from investment_ami_exposure import resolve_tech_exposure
 from investment_ami_instant_solver import (
     InvestmentSolverResult,
     InvestmentSolverRoute,
@@ -179,7 +180,9 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
     rows = _weight_rows(ctx)
     risk_level = str(ctx.get("risk_level") or "").strip()
     vol = str(ctx.get("volatility") or "").strip()
-    tech_pct = sum(p for t, p in rows if t in _TECH_TICKERS)
+    exposure = resolve_tech_exposure(ctx)
+    tech_pct = float(exposure.get("total_pct") or 0)
+    embedded_tech = float(exposure.get("embedded_pct") or 0)
     top_ticker, top_pct = rows[0] if rows else ("—", 0.0)
     top3 = sum(p for _, p in rows[:3]) if rows else 0.0
 
@@ -188,7 +191,13 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
         analyst = (
             f"Largest position **{top_ticker}** at **{top_pct:.1f}%** can move the whole portfolio — "
             "that is **concentration risk**: one sleeve drives outcomes. "
-            + (f"Tech-heavy funds add about **{tech_pct:.1f}%** of sector tilt — significant if tech sells off. " if tech_pct >= 15 else "")
+            + (
+                f"Estimated technology exposure is **{tech_pct:.1f}%** "
+                f"({'including embedded exposure in broad/dividend funds' if embedded_tech > 0 else 'direct tech sleeves'}) — "
+                "meaningful if tech sells off. "
+                if tech_pct >= 10
+                else ""
+            )
             + (f"Health check labels risk as **{risk_level}**." if risk_level else "")
             + " Risk **rises** if top weights grow; **falls** if you diversify or add defensive assets."
         )
@@ -198,7 +207,7 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
                 [
                     f"- Largest holding: **{top_ticker}** **{top_pct:.1f}%**" if rows else None,
                     f"- Top-3 concentration: **{top3:.1f}%**" if rows else None,
-                    f"- Tech/growth proxy: **{tech_pct:.1f}%**" if tech_pct else None,
+                    f"- Technology exposure (direct + embedded): **{tech_pct:.1f}%**" if tech_pct else None,
                     f"- Risk label: **{risk_level}**" if risk_level else None,
                     f"- Historical volatility: **{vol}**" if vol else None,
                 ],
@@ -233,7 +242,7 @@ def structured_portfolio_risk_answer(ctx: dict[str, Any], *, beginner: bool) -> 
                 [
                     f"- Top-weight risk: **{top_ticker}** **{top_pct:.1f}%**" if rows else None,
                     f"- Top-3 concentration: **{top3:.1f}%**" if rows else None,
-                    f"- Technology/growth proxy: **{tech_pct:.1f}%**" if tech_pct else None,
+                    f"- Technology exposure (direct + embedded): **{tech_pct:.1f}%**" if tech_pct else None,
                     f"- Historical volatility: **{vol}**" if vol else None,
                     f"- Health risk level: **{risk_level}**" if risk_level else None,
                     f"- Max drawdown (historical): **{ctx.get('max_drawdown')}**" if ctx.get("max_drawdown") else None,
@@ -487,48 +496,106 @@ def scenario_stress_answer(ctx: dict[str, Any], *, beginner: bool, question: str
     tech_dd = _parse_scenario_drawdown_pct(ctx, question=question, default=20.0)
     rate_shock = str(params.get("rate_shock") or ctx.get("health_rate_env") or "").strip()
     rows = _weight_rows(ctx)
-    tech_pct = sum(p for t, p in rows if t in _TECH_TICKERS)
+    exposure = resolve_tech_exposure(ctx)
+    direct_pct = float(exposure.get("direct_pct") or 0)
+    embedded_pct = float(exposure.get("embedded_pct") or 0)
+    total_tech_pct = float(exposure.get("total_pct") or direct_pct + embedded_pct)
+    embedded_holdings = list(exposure.get("embedded_holdings") or [])
     bond_pct = sum(
         p for t, p in rows if t in {"BND", "AGG", "TLT", "BIL", "SCHZ", "IEF"}
     )
     equity_pct = max(0.0, 100.0 - bond_pct) if rows else 0.0
 
-    tech_impact = tech_pct * (tech_dd / 100.0)
+    tech_impact = total_tech_pct * (tech_dd / 100.0)
+    embedded_bits = ", ".join(
+        f"**{h['ticker']}** (~{h.get('contribution_pct', 0):.1f}% tech contribution)"
+        for h in embedded_holdings[:3]
+    )
+
     if beginner:
-        direct = (
-            f"If tech/growth funds fell **{tech_dd:.0f}%**, a rough impact is about **{tech_impact:.1f}%** "
-            "on your total portfolio (simple static estimate)."
-        )
+        if direct_pct <= 0 and embedded_pct > 0:
+            direct = (
+                f"You do not hold a dedicated technology ETF, but embedded tech exposure is about "
+                f"**{embedded_pct:.1f}%** of your portfolio. A **{tech_dd:.0f}%** tech drawdown could "
+                f"still reduce the portfolio by roughly **{tech_impact:.1f}%** (simple estimate)."
+            )
+        elif total_tech_pct > 0:
+            direct = (
+                f"A **{tech_dd:.0f}%** technology drawdown could reduce your portfolio by about "
+                f"**{tech_impact:.1f}%** based on **{total_tech_pct:.1f}%** total tech exposure."
+            )
+        else:
+            direct = (
+                f"With minimal technology exposure detected, a tech-only **{tech_dd:.0f}%** shock "
+                f"would likely have a **small direct impact** — other sectors would matter more."
+            )
         analyst = (
-            f"You have about **{tech_pct:.1f}%** in tech-heavy funds. "
-            "Scenario math assumes those funds move together — real markets are messier."
+            "Technology exposure comes from **direct tech funds** (like QQQ) and **embedded exposure** "
+            "inside broad/dividend ETFs (like VTI, SCHD, VYM). Even without a tech ETF, a sector selloff "
+            "can still hit your portfolio through those underlying holdings."
         )
+        if embedded_bits:
+            analyst += f" Largest embedded contributors: {embedded_bits}."
         what_if = (
-            f"**Tech drawdown {tech_dd:.0f}%** → ~**{tech_impact:.1f}%** portfolio hit.\n"
-            f"Bond sleeve **{bond_pct:.1f}%** may offset some equity stress — depends on rate environment."
+            f"**Tech drawdown {tech_dd:.0f}%** → ~**{tech_impact:.1f}%** portfolio impact "
+            f"(total tech exposure **{total_tech_pct:.1f}%**).\n"
+            f"Bond/defensive sleeve **{bond_pct:.1f}%** may offset some equity stress."
         )
     else:
-        direct = (
-            f"Scenario: tech/growth proxy **-{tech_dd:.0f}%** → illustrative portfolio impact **~{tech_impact:.1f}%** "
-            f"(tech proxy weight **{tech_pct:.1f}%**)."
+        if direct_pct <= 0 and embedded_pct > 0:
+            direct = (
+                f"No dedicated tech sleeve; **embedded tech exposure ≈ {embedded_pct:.1f}%**. "
+                f"Tech shock **-{tech_dd:.0f}%** → illustrative portfolio impact **~{tech_impact:.1f}%**."
+            )
+        else:
+            direct = (
+                f"Tech shock **-{tech_dd:.0f}%** → portfolio impact **~{tech_impact:.1f}%** "
+                f"(direct **{direct_pct:.1f}%** + embedded **{embedded_pct:.1f}%** = **{total_tech_pct:.1f}%**)."
+            )
+        analyst = (
+            "Scenario model: portfolio impact ≈ (direct tech weight + Σ fund_weight × tech_sector_weight_in_fund) × shock. "
+            "Embedded exposure captures technology holdings inside diversified and dividend ETFs."
         )
-        analyst = "Static shock model: portfolio impact ≈ sleeve weight × shock. Ignores correlation, beta, and cross-asset moves."
+        if embedded_bits:
+            analyst += f" Top embedded: {embedded_bits}."
         what_if = (
-            f"- Tech/growth **-{tech_dd:.0f}%**: **~{tech_impact:.1f}%** portfolio\n"
-            f"- Equity sleeve **~{equity_pct:.1f}%** (non-tech moves not modeled)\n"
-            f"- Bond/defensive **{bond_pct:.1f}%**"
+            f"- Direct tech sleeves: **{direct_pct:.1f}%**\n"
+            f"- Embedded tech exposure: **{embedded_pct:.1f}%**\n"
+            f"- Combined tech exposure: **{total_tech_pct:.1f}%**\n"
+            f"- Shock **-{tech_dd:.0f}%** → **~{tech_impact:.1f}%** portfolio\n"
+            f"- Equity sleeve **~{equity_pct:.1f}%** | Bond/defensive **{bond_pct:.1f}%**"
             + (f"\n- Rate environment: **{rate_shock}**" if rate_shock else "")
         )
+
+    key_lines = [
+        f"- Direct technology ETFs: **{direct_pct:.1f}%**",
+        f"- Embedded technology exposure: **{embedded_pct:.1f}%**",
+        f"- Total technology exposure (est.): **{total_tech_pct:.1f}%**",
+        f"- Bond/defensive: **{bond_pct:.1f}%**",
+    ]
+    for h in embedded_holdings[:4]:
+        key_lines.append(
+            f"- **{h['ticker']}**: {h.get('portfolio_weight_pct')}% of portfolio × "
+            f"{h.get('tech_weight_in_fund_pct')}% tech in fund ≈ **{h.get('contribution_pct')}%**"
+        )
+
+    actions = (
+        "If embedded tech exposure is higher than you realized, consider whether your dividend/broad sleeves "
+        "already give enough growth tilt — or add defensive assets if tech volatility feels too high."
+        if embedded_pct > direct_pct
+        else "If tech shock impact exceeds comfort, trim dedicated tech sleeves or rebalance toward targets."
+    )
 
     sections = build_analyst_sections(
         direct_answer=direct,
         portfolio_analyst_view=analyst,
-        key_variables=f"- Tech proxy weight: **{tech_pct:.1f}%**\n- Bond/defensive: **{bond_pct:.1f}%**",
-        tradeoffs="Scenario analysis highlights vulnerability; it is not a forecast.",
-        what_if_scenarios=what_if,
-        recommended_actions=(
-            "If tech shock impact exceeds comfort, trim tech-heavy sleeves or add diversifiers before the stress happens."
+        key_variables="\n".join(key_lines),
+        tradeoffs=(
+            "**Ignoring embedded exposure** understates tech shock risk in broad/dividend portfolios.\n"
+            "**Focusing only on ETF labels** misses underlying sector composition."
         ),
+        what_if_scenarios=what_if,
+        recommended_actions=actions,
         risk_notes=_default_risk_notes(beginner),
         beginner=beginner,
     )
@@ -537,8 +604,14 @@ def scenario_stress_answer(ctx: dict[str, Any], *, beginner: bool, question: str
         analyst_sections=sections,
         problem_type="scenario_stress",
         model_name="Portfolio scenario analyst",
-        confidence_pct=78,
-        computed={"tech_drawdown_pct": tech_dd, "illustrative_impact_pct": round(tech_impact, 2)},
+        confidence_pct=82 if total_tech_pct > 0 else 68,
+        computed={
+            "tech_drawdown_pct": tech_dd,
+            "direct_tech_pct": round(direct_pct, 2),
+            "embedded_tech_pct": round(embedded_pct, 2),
+            "total_tech_pct": round(total_tech_pct, 2),
+            "illustrative_impact_pct": round(tech_impact, 2),
+        },
     )
 
 
