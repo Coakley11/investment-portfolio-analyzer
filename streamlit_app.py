@@ -1317,8 +1317,15 @@ def apply_asset_preset(name: str):
     info = core.ASSET_PRESETS[name]
     df = st.session_state.holdings_df.copy()
     if info["ticker"] not in df["Ticker"].astype(str).str.upper().values:
+        try:
+            import etf_holdings as eh
+
+            fund = eh.infer_portfolio_fund_info(info["ticker"])
+            asset_type = fund["asset_type"]
+        except Exception:
+            asset_type = info["category"]
         df = pd.concat(
-            [df, pd.DataFrame([{"Ticker": info["ticker"], "Weight (%)": 0.0, "Asset Type": info["category"]}])],
+            [df, pd.DataFrame([{"Ticker": info["ticker"], "Weight (%)": 0.0, "Asset Type": asset_type}])],
             ignore_index=True,
         )
         st.session_state.holdings_df = df
@@ -1989,30 +1996,30 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
         else "Tickers and target weights. Normalized to 100% if needed.",
     )
     try:
-        from components.portfolio_editor_guidance import (
-            render_common_etf_quick_add,
-            render_portfolio_editor_guidance,
-        )
+        from components.portfolio_holdings_editor import render_portfolio_inputs_section
 
-        render_portfolio_editor_guidance(beginner_mode=beginner_mode)
-        if render_common_etf_quick_add(apply_asset_preset, st):
+        edited = render_portfolio_inputs_section(
+            st,
+            beginner_mode=beginner_mode,
+            apply_asset_preset=apply_asset_preset,
+        )
+        if edited is None:
             st.rerun()
     except ImportError:
-        pass
-    edited = st.data_editor(
-        st.session_state.holdings_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Ticker": st.column_config.TextColumn(help="Yahoo Finance symbol"),
-            "Weight (%)": st.column_config.NumberColumn(min_value=0, max_value=100, format="%.1f"),
-            "Asset Type": st.column_config.SelectboxColumn(
-                options=["Equity", "Bonds", "T-Bills", "REIT", "Dividend ETF", "Other"]
-            ),
-        },
-        key="holdings_editor",
-    )
-    st.session_state.holdings_df = edited
+        edited = st.data_editor(
+            st.session_state.holdings_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Ticker": st.column_config.TextColumn(help="Yahoo Finance symbol"),
+                "Weight (%)": st.column_config.NumberColumn(min_value=0, max_value=100, format="%.1f"),
+                "Asset Type": st.column_config.SelectboxColumn(
+                    options=["Equity", "Bonds", "T-Bills", "REIT", "Dividend ETF", "Other"]
+                ),
+            },
+            key="holdings_editor",
+        )
+        st.session_state.holdings_df = edited
     if not beginner_mode:
         try:
             import etf_holdings as eh

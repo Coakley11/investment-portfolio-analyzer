@@ -26,22 +26,27 @@ def render_workflow_journey_banner(*, beginner_mode: bool) -> None:
 
 
 def render_portfolio_editor_guidance(*, beginner_mode: bool) -> None:
-    """Explain how to edit holdings, weights, and ticker symbols."""
-    title = "How to build your portfolio" if beginner_mode else "Portfolio editor guide"
-    with st.expander(title, expanded=beginner_mode):
+    """Short, always-visible tips for editing holdings."""
+    st.info(
+        f"**Add:** type a ticker above and click **➕ Add holding**, tap a quick-add ETF button, "
+        f"or use **➕ Empty row** / the table's **+** at the bottom. "
+        f"**Remove:** pick a ticker and click **🗑 Remove holding**, or delete the row in the table. "
+        f"**Asset type** is detected automatically. When weights total ~100%, click "
+        f"**Use this portfolio**, then **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
+    )
+    title = "More help" if beginner_mode else "Portfolio editor reference"
+    with st.expander(title, expanded=False):
         st.markdown(
             """
 | Action | How |
 |--------|-----|
-| **Add** | Click **+** at the table bottom, or tap an ETF button below |
-| **Remove** | Select the row → Delete (or clear Ticker) |
-| **Change %** | Edit **Weight (%)** — aim for **100%** total |
+| **Add** | **➕ Add holding** above, quick-add ETF buttons, **➕ Empty row**, or **+** at the table bottom |
+| **Remove** | **🗑 Remove holding** above, or select a table row and press **Delete** |
+| **Replace** | Remove the old ticker, then add the new one (or edit the **Ticker** cell) |
+| **Test portfolio** | **Load Balanced / Growth / Tech / Dividend** — one click |
 
-**Ticker** = fund code on Yahoo Finance (e.g. **VTI**, **BND**). Search [Yahoo Finance](https://finance.yahoo.com/) or your broker to find one.
+**Ticker** = fund code on Yahoo Finance (e.g. **VTI**, **BND**, **QQQ**).
             """.strip()
-        )
-        st.caption(
-            f"Done editing? Click **Use this portfolio**, then **{RUN_PORTFOLIO_ANALYSIS_LABEL}** on the Analysis tab."
         )
 
 

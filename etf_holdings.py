@@ -195,6 +195,171 @@ def _latest_price(symbol: str) -> float | None:
     return None
 
 
+# Portfolio editor: fast asset-type classification (no network required).
+_TICKER_PORTFOLIO_ASSET_TYPE: dict[str, str] = {
+    "BND": "Bonds",
+    "AGG": "Bonds",
+    "TLT": "Bonds",
+    "IEF": "Bonds",
+    "LQD": "Bonds",
+    "BIL": "T-Bills",
+    "SHV": "T-Bills",
+    "SGOV": "T-Bills",
+    "VNQ": "REIT",
+    "SCHD": "Dividend ETF",
+    "VYM": "Dividend ETF",
+    "DGRO": "Dividend ETF",
+    "HDV": "Dividend ETF",
+}
+
+_TECH_GROWTH_TICKERS = frozenset(
+    {"QQQ", "VGT", "XLK", "FTEC", "IGV", "SMH", "SOXX", "ARKK", "TQQQ", "TECL", "MGK", "VUG"}
+)
+
+
+def _portfolio_asset_type_from_category(category: str, asset_class: str, ticker: str) -> str:
+    sym = _normalize_ticker(ticker)
+    if sym in _TICKER_PORTFOLIO_ASSET_TYPE:
+        return _TICKER_PORTFOLIO_ASSET_TYPE[sym]
+    cat = str(category or "").lower()
+    ac = str(asset_class or "").lower()
+    if "bond" in cat or ac == "bonds":
+        return "Bonds"
+    if "real estate" in cat or "reit" in cat:
+        return "REIT"
+    if sym in {"SCHD", "VYM", "DGRO", "HDV"} or "dividend" in cat:
+        return "Dividend ETF"
+    if sym in {"BIL", "SHV", "SGOV"} or "money market" in cat or "ultra short" in cat:
+        return "T-Bills"
+    return "Equity"
+
+
+def _portfolio_category_label(ticker: str, category: str, asset_type: str) -> str:
+    sym = _normalize_ticker(ticker)
+    if sym in _TECH_GROWTH_TICKERS:
+        return "Technology / Growth Equity"
+    if asset_type == "Bonds":
+        detail = category if category and category != "—" else "Investment Grade Bonds"
+        return f"Bond ETF · {detail}"
+    if asset_type == "REIT":
+        return "Real Estate / REIT"
+    if asset_type == "Dividend ETF":
+        return f"Dividend Equity · {category}" if category and category != "—" else "Dividend Equity"
+    if asset_type == "T-Bills":
+        return "Cash / Short-Term Treasury"
+    if category and category != "—":
+        return category
+    return "Broad Equity" if asset_type == "Equity" else asset_type
+
+
+def infer_portfolio_fund_info(ticker: str) -> dict[str, str]:
+    """
+    Resolve fund name, portfolio asset type, and display category for the holdings editor.
+
+    Uses curated maps first, then ASSET_PRESETS, then lookup_etf (live/sample).
+    """
+    sym = _normalize_ticker(ticker)
+    if not sym:
+        return {
+            "ticker": "",
+            "name": "",
+            "asset_type": "Equity",
+            "category_label": "",
+        }
+
+    try:
+        import portfolio_core as core
+
+        for preset in core.ASSET_PRESETS.values():
+            if str(preset.get("ticker") or "").upper() == sym:
+                asset_type = str(preset.get("category") or "Equity")
+                return {
+                    "ticker": sym,
+                    "name": next(
+                        (k for k, v in core.ASSET_PRESETS.items() if str(v.get("ticker")).upper() == sym),
+                        sym,
+                    ),
+                    "asset_type": asset_type,
+                    "category_label": _portfolio_category_label(sym, "", asset_type),
+                }
+    except Exception:
+        pass
+
+    static = _STATIC_META.get(sym, {})
+    if static:
+        asset_type = _portfolio_asset_type_from_category(
+            str(static.get("category") or ""),
+            str(static.get("asset_class") or ""),
+            sym,
+        )
+        return {
+            "ticker": sym,
+            "name": str(static.get("name") or sym),
+            "asset_type": asset_type,
+            "category_label": _portfolio_category_label(
+                sym, str(static.get("category") or ""), asset_type
+            ),
+        }
+
+    try:
+        result = lookup_etf(sym)
+        asset_type = _portfolio_asset_type_from_category(
+            result.category, result.asset_class, sym
+        )
+        return {
+            "ticker": sym,
+            "name": result.name,
+            "asset_type": asset_type,
+            "category_label": _portfolio_category_label(sym, result.category, asset_type),
+        }
+    except Exception:
+        asset_type = _TICKER_PORTFOLIO_ASSET_TYPE.get(sym, "Equity")
+        return {
+            "ticker": sym,
+            "name": sym,
+            "asset_type": asset_type,
+            "category_label": _portfolio_category_label(sym, "", asset_type),
+        }
+
+
+def enrich_holdings_asset_types(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill Asset Type from ticker symbols (auto-detected, not user-typed)."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "Asset Type" not in out.columns:
+        out["Asset Type"] = "Equity"
+    for idx, row in out.iterrows():
+        sym = _normalize_ticker(str(row.get("Ticker") or ""))
+        if not sym:
+            continue
+        out.at[idx, "Asset Type"] = infer_portfolio_fund_info(sym)["asset_type"]
+    return out
+
+
+def holdings_metadata_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Build read-only fund metadata rows for the portfolio editor preview."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Ticker", "Fund", "Category", "Asset Type"])
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, row in df.dropna(subset=["Ticker"]).iterrows():
+        sym = _normalize_ticker(str(row.get("Ticker") or ""))
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        info = infer_portfolio_fund_info(sym)
+        rows.append(
+            {
+                "Ticker": sym,
+                "Fund": info["name"],
+                "Category": info["category_label"],
+                "Asset Type": info["asset_type"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def lookup_etf(ticker: str) -> EtfLookupResult:
     """Fetch ETF profile and holdings (live → sample → empty)."""
     sym = _normalize_ticker(ticker)

@@ -93,6 +93,14 @@ PORTFOLIO_PRESETS: dict[str, list[dict]] = {
     ],
 }
 
+# One-click loaders on the Portfolio tab (label → PORTFOLIO_PRESETS key).
+PORTFOLIO_QUICK_LOADERS: dict[str, str] = {
+    "Balanced": "Balanced",
+    "Growth": "Aggressive",
+    "Tech": "Tech Growth",
+    "Dividend": "Dividend Income",
+}
+
 BENCHMARK_TICKER = "SPY"
 TECH_TICKERS = frozenset(
     {"QQQ", "VGT", "XLK", "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "ARKK"}
