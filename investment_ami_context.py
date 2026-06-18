@@ -12,6 +12,9 @@ INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
     "Explain my allocation.",
     "Am I too exposed to tech?",
     "What should I change if I want less risk?",
+    "Should I own both VOO and QQQ?",
+    "Am I diversified enough?",
+    "What happens if tech falls 20%?",
 )
 
 _INVESTMENT_SOLVER_INTENTS = frozenset(
@@ -22,6 +25,9 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "sector_exposure",
         "risk_reduction",
         "investment_coach",
+        "etf_overlap",
+        "diversification",
+        "scenario_stress",
     }
 )
 
@@ -75,6 +81,37 @@ _COACH_PHRASES = (
     "help me understand",
 )
 
+_OVERLAP_PHRASES = (
+    "overlap",
+    "duplicate exposure",
+    "duplicating exposure",
+    "own both",
+    "too similar",
+    "same holdings",
+)
+
+_DIVERSIFICATION_PHRASES = (
+    "diversified enough",
+    "diversification",
+    "diversified",
+    "asset class",
+    "asset classes",
+    "missing asset",
+    "how balanced",
+)
+
+_SCENARIO_PHRASES = (
+    "what happens if",
+    "what if",
+    "falls 20",
+    "fall 20",
+    "drawdown",
+    "rate shock",
+    "recession",
+    "stress test",
+    "stress testing",
+)
+
 
 def investment_ami_default_question(source_page: str) -> str:
     page = str(source_page or "").strip().lower()
@@ -97,6 +134,14 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         "tech" in q and any(w in q for w in ("exposed", "exposure", "overweight", "too much"))
     ):
         return "sector_exposure"
+    if any(p in q for p in _OVERLAP_PHRASES) or (
+        "both" in q and any(t in q for t in ("voo", "qqq", "vti", "spy", "ivv"))
+    ):
+        return "etf_overlap"
+    if any(p in q for p in _SCENARIO_PHRASES):
+        return "scenario_stress"
+    if any(p in q for p in _DIVERSIFICATION_PHRASES):
+        return "diversification"
     if any(p in q for p in _RISK_REDUCTION_PHRASES):
         return "risk_reduction"
     if any(p in q for p in _CONCENTRATION_PHRASES):

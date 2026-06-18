@@ -57,7 +57,8 @@ class TestInvestmentInstantSolver(unittest.TestCase):
         solved = solve_instant_investment_insight("What is my biggest portfolio risk?", ctx)
         self.assertIsNotNone(solved)
         _, result = solved
-        self.assertIn("tradeoffs", result.short_answer.lower())
+        self.assertTrue(result.analyst_sections.get("tradeoffs"))
+        self.assertIn("growth", str(result.analyst_sections.get("tradeoffs", "")).lower())
 
     def test_rebalance_allocation_question(self) -> None:
         solved = solve_instant_investment_insight(

@@ -939,6 +939,13 @@ def _stage_investment_instant_insight(
         "source_app": source_app,
         "source_page": render_page,
     }
+    sections = insight_data.get("analyst_sections")
+    if not isinstance(sections, dict):
+        kn = insight_data.get("key_numbers")
+        if isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
+            sections = kn.get("analyst_sections")
+    if isinstance(sections, dict) and sections:
+        canonical["analyst_sections"] = dict(sections)
     ss["_ami_investment_instant_canonical"] = canonical
     ss["_ami_investment_submit_diagnostics"] = {
         "question_id": str(pre_payload.get("question_id") or ""),

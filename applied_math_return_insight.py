@@ -890,6 +890,7 @@ class AppliedMathInsight:
     full_analysis_url: str = ""
     created_at: str = ""
     resume_key: str = ""
+    analyst_sections: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -956,6 +957,9 @@ def build_return_insight_payload(
             key_numbers.update({k: v for k, v in computed.items() if v is not None})
         if isinstance(live, dict):
             key_numbers.update({f"live_{k}": v for k, v in list(live.items())[:6]})
+        sections = getattr(result, "analyst_sections", None)
+        if isinstance(sections, dict) and sections:
+            key_numbers["analyst_sections"] = dict(sections)
 
     if route is not None:
         if not model_name:
@@ -964,6 +968,9 @@ def build_return_insight_payload(
             method = str(getattr(route, "model_rationale", "") or method).strip()
 
     iid = _insight_id(qid, conclusion or q)
+    analyst_sections: dict[str, Any] = {}
+    if isinstance(key_numbers.get("analyst_sections"), dict):
+        analyst_sections = dict(key_numbers.pop("analyst_sections"))
     return AppliedMathInsight(
         insight_id=iid,
         question_id=qid,
@@ -981,6 +988,7 @@ def build_return_insight_payload(
         full_analysis_url=full_analysis_url,
         created_at=datetime.now(timezone.utc).isoformat(),
         resume_key=str(resume_key or "").strip(),
+        analyst_sections=analyst_sections,
     )
 
 
@@ -1926,7 +1934,22 @@ def render_applied_math_insight_panel(
         q = str(data.get("question") or "").strip()
         if q:
             st.markdown(f"**Question:** *{q}*")
-        st.markdown(f"**Conclusion:** {data.get('conclusion')}")
+        sections = data.get("analyst_sections")
+        if not isinstance(sections, dict) or not sections:
+            kn = data.get("key_numbers")
+            if isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
+                sections = kn.get("analyst_sections")
+        if isinstance(sections, dict) and sections:
+            from investment_ami_answer_format import render_analyst_sections_markdown
+
+            exp = str(data.get("experience_mode") or "").lower()
+            body = render_analyst_sections_markdown(sections, beginner="beginner" in exp)
+            if body:
+                st.markdown(body)
+            else:
+                st.markdown(f"**Conclusion:** {data.get('conclusion')}")
+        else:
+            st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         method = str(data.get("method") or data.get("model_name") or "").strip()
         if method:
             st.markdown(f"**Math used:** {method}")

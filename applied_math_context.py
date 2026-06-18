@@ -191,7 +191,78 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
             ctx.setdefault("macro_outlook", macro)
     except Exception:
         pass
+
+    try:
+        import pandas as pd
+
+        df_ami = session_state.get("holdings_df")
+        if isinstance(df_ami, pd.DataFrame) and not df_ami.empty:
+            _enrich_investment_ami_analytics(ctx, df_ami, session_state)
+    except Exception:
+        pass
     return ctx
+
+
+def _enrich_investment_ami_analytics(
+    ctx: dict[str, Any],
+    holdings_df: Any,
+    session_state: dict[str, Any],
+) -> None:
+    """Add overlap, asset-class, and scenario params for Investment AMI Phase 2."""
+    import pandas as pd
+
+    if not isinstance(holdings_df, pd.DataFrame) or holdings_df.empty:
+        return
+
+    if "Asset Type" in holdings_df.columns and "Weight (%)" in holdings_df.columns:
+        breakdown: dict[str, float] = {}
+        for _, row in holdings_df.dropna(subset=["Ticker"]).iterrows():
+            at = str(row.get("Asset Type") or "Equity").strip() or "Equity"
+            try:
+                w = float(row.get("Weight (%)") or 0)
+            except (TypeError, ValueError):
+                w = 0.0
+            if w > 0:
+                breakdown[at] = breakdown.get(at, 0.0) + w
+        if breakdown:
+            ctx["asset_class_breakdown"] = {k: round(v, 1) for k, v in breakdown.items()}
+
+    try:
+        import etf_holdings as eh
+
+        etf_list = [t for t, _ in eh.portfolio_etf_tickers(holdings_df)]
+        if len(etf_list) >= 2:
+            holdings_map: dict[str, pd.DataFrame] = {}
+            for t in etf_list[:6]:
+                try:
+                    holdings_map[t] = eh.lookup_etf(t).holdings
+                except Exception:
+                    holdings_map[t] = pd.DataFrame()
+            pairs: list[dict[str, Any]] = []
+            for i, t1 in enumerate(etf_list[:6]):
+                for t2 in etf_list[i + 1 : 6]:
+                    ov = eh.pairwise_etf_overlap(
+                        holdings_map.get(t1, pd.DataFrame()),
+                        holdings_map.get(t2, pd.DataFrame()),
+                    )
+                    if ov > 0:
+                        pairs.append({"pair": f"{t1}/{t2}", "overlap_pct": round(ov * 100, 1)})
+            if pairs:
+                pairs.sort(key=lambda p: float(p.get("overlap_pct") or 0), reverse=True)
+                ctx["etf_overlap_pairs"] = pairs[:8]
+    except Exception:
+        pass
+
+    scenario: dict[str, Any] = dict(session_state.get("_ami_scenario_params") or {})
+    for key, ss_key in (
+        ("tech_drawdown_pct", "health_valuation"),
+        ("rate_shock", "health_rate_env"),
+        ("recession_scenario", "health_recession"),
+    ):
+        if key not in scenario and session_state.get(ss_key) not in (None, ""):
+            scenario.setdefault(key, session_state.get(ss_key))
+    if scenario:
+        ctx["scenario_params"] = scenario
 
 
 _INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (

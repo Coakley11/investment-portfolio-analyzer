@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-v1-phase1"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2a"
 
 _TECH_TICKERS = frozenset(
     {
@@ -32,6 +32,9 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "sector_exposure",
         "risk_reduction",
         "investment_coach",
+        "etf_overlap",
+        "diversification",
+        "scenario_stress",
     }
 )
 
@@ -53,6 +56,7 @@ class InvestmentSolverResult:
     assumptions: list[str] = field(default_factory=list)
     confidence_pct: int | None = 82
     computed: dict[str, Any] = field(default_factory=dict)
+    analyst_sections: dict[str, str] = field(default_factory=dict)
 
 
 def _ctx_value(ctx: dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -388,6 +392,9 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
         "sector_exposure": ("sector_exposure", "Investment sector exposure analyst"),
         "risk_reduction": ("risk_reduction", "Investment risk coach"),
         "investment_coach": ("investment_coach", "Investment coach"),
+        "etf_overlap": ("etf_overlap", "ETF overlap analyst"),
+        "diversification": ("diversification", "Diversification analyst"),
+        "scenario_stress": ("scenario_stress", "Portfolio scenario analyst"),
     }
     problem_type, model_name = labels.get(intent, ("investment_generic", "Investment analyst"))
     return InvestmentSolverRoute(
@@ -416,6 +423,20 @@ def solve_instant_investment_insight(
         return None
 
     beginner = _beginner(ctx)
+    phase2_intents = {
+        "portfolio_concentration",
+        "portfolio_risk",
+        "etf_overlap",
+        "diversification",
+        "scenario_stress",
+    }
+    if intent in phase2_intents:
+        from investment_ami_phase2_solvers import solve_phase2_or_structured
+
+        pair = solve_phase2_or_structured(intent, ctx, beginner=beginner)
+        if pair:
+            return pair
+
     if intent == "portfolio_concentration":
         result = _concentration_answer(ctx, beginner=beginner)
     elif intent == "rebalance_allocation":
