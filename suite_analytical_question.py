@@ -268,6 +268,7 @@ def question_dedupe_fingerprint(
     ]
     for key in (
         "workflow",
+        "experience_mode",
         "player",
         "player_a",
         "player_b",
@@ -977,12 +978,15 @@ def render_analyze_with_applied_math_sidebar(
         st.sidebar.caption(
             "Get help with practice, theory, navigation, backing tracks, karaoke, or this app."
         )
+        submit_label = "Send to Command Center"
     elif is_investment:
         st.sidebar.markdown("### Investment Insight")
         st.sidebar.caption("Ask about your portfolio, risk, allocation, and holdings.")
+        submit_label = "Get Investment Insight"
     else:
         st.sidebar.markdown("### Analyze with Applied Math")
         st.sidebar.caption("Ask a math question about what you are viewing.")
+        submit_label = "Send to Command Center"
 
     last = ss.get("_ami_last_send")
     if (
@@ -993,7 +997,11 @@ def render_analyze_with_applied_math_sidebar(
         sent_msg = (
             "Question sent to Command Center. Open Command Center to continue with the Music Coach."
             if is_music
-            else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+            else (
+                "Investment Insight is ready on this page. Open full analysis for the deep dive."
+                if is_investment
+                else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+            )
         )
         st.sidebar.success(sent_msg)
 
@@ -1015,7 +1023,7 @@ def render_analyze_with_applied_math_sidebar(
     )
 
     if st.sidebar.button(
-        "Send to Command Center",
+        submit_label,
         key=submit_key,
         use_container_width=True,
         type="primary",
@@ -1083,11 +1091,12 @@ def render_analyze_with_applied_math_sidebar(
                 try:
                     from applied_math_return_insight import render_suite_applied_math_insight_for_page
 
-                    render_suite_applied_math_insight_for_page(
+                    rendered = render_suite_applied_math_insight_for_page(
                         st,
                         source_app=source_app,
                         source_page=source_page,
                     )
+                    ss["_ami_insight_rendered_inline_after_submit"] = bool(rendered)
                 except Exception:
                     log.exception("inline Investment insight render failed")
             ss["_last_analytical_question"] = result
@@ -1095,12 +1104,20 @@ def render_analyze_with_applied_math_sidebar(
             dup_msg = (
                 "That question was already sent recently. Open Command Center to continue with the Music Coach."
                 if is_music
-                else "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
+                else (
+                    "That question was already sent recently. Your current Investment Insight is still on this page."
+                    if is_investment
+                    else "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
+                )
             )
             ok_msg = (
                 "Question sent to Command Center. Open Command Center to continue with the Music Coach."
                 if is_music
-                else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+                else (
+                    "Investment Insight is ready on this page. Open full analysis for the deep dive."
+                    if is_investment
+                    else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+                )
             )
             if result.get("duplicate"):
                 st.sidebar.info(dup_msg)
@@ -1111,7 +1128,8 @@ def render_analyze_with_applied_math_sidebar(
                     on_after_send()
                 except Exception:
                     log.exception("on_after_send hook failed for %s (%s)", source_app, source_page)
-            st.rerun()
+            if not is_investment:
+                st.rerun()
 
     if developer_mode:
         st.sidebar.caption(f"🛠 {AMI_SIDEBAR_DEPLOY_LABEL} · {AMI_SIDEBAR_DEPLOY_VERSION}")

@@ -35,6 +35,8 @@ _PORTFOLIO_PAGE_DIRTY_KEY = "_suite_inv_portfolio_page_dirty"
 _PORTFOLIO_VALUE_USER_SET_KEY = "_suite_inv_portfolio_value_user_set"
 _AMI_PERSIST_SESSION_KEYS = (
     "_ami_pending_insight",
+    "_ami_dismissed_insight_ids",
+    "_ami_dismissed_insight_at",
     "insight_source_tab",
     "source_investment_tab",
     "_ami_return_page",
@@ -1247,6 +1249,33 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             if blob_id and blob_id != url_insight_id:
                 st.session_state["_suite_inv_stale_ami_pending_skipped"] = blob_id
                 continue
+        if key == "_ami_pending_insight" and isinstance(val, dict):
+            iid = str(val.get("insight_id") or "").strip()
+            dismissed_raw = st.session_state.get("_ami_dismissed_insight_ids")
+            if dismissed_raw is None:
+                dismissed_raw = state.get("_ami_dismissed_insight_ids")
+            if not isinstance(dismissed_raw, (list, tuple, set)):
+                dismissed_raw = []
+            dismissed_ids = {str(x).strip() for x in dismissed_raw if str(x).strip()}
+            if iid and iid in dismissed_ids:
+                continue
+        if key == "_ami_dismissed_insight_ids":
+            existing = st.session_state.get("_ami_dismissed_insight_ids")
+            blob_ids = val if isinstance(val, (list, tuple, set)) else []
+            merged = {str(x).strip() for x in blob_ids if str(x).strip()}
+            if isinstance(existing, (list, tuple, set)):
+                merged.update(str(x).strip() for x in existing if str(x).strip())
+            st.session_state[key] = sorted(merged)
+            continue
+        if key == "_ami_dismissed_insight_at":
+            existing = dict(st.session_state.get("_ami_dismissed_insight_at") or {})
+            if not isinstance(existing, dict):
+                existing = {}
+            blob_at = val if isinstance(val, dict) else {}
+            merged_at = dict(blob_at)
+            merged_at.update(existing)
+            st.session_state[key] = merged_at
+            continue
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)

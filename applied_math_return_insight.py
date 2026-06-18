@@ -16,6 +16,10 @@ AMI_INSIGHT_STORE_VERSION = "insight-store-v10"
 SESSION_PENDING_KEY = "_ami_pending_insight"
 SESSION_RETURN_PAGE_KEY = "_ami_return_page"
 SESSION_RETURN_CONTEXT_KEY = "_ami_return_context"
+INSIGHT_DISMISSAL_ITEM_TYPE = "applied_math_insight_dismissal"
+SESSION_DISMISSED_KEY = "_ami_dismissed_insight_ids"
+SESSION_DISMISSED_AT_KEY = "_ami_dismissed_insight_at"
+SESSION_PERSIST_INSIGHT_DIRTY = "_suite_persist_insight_dirty"
 SESSION_INSIGHT_SOURCE_TAB_KEY = "insight_source_tab"
 SESSION_SOURCE_INVESTMENT_TAB_KEY = "source_investment_tab"
 INVESTMENT_INSIGHT_PANEL_TITLE = "Applied Investment Insight"
@@ -691,9 +695,100 @@ def load_latest_applied_math_insight_for_app(
     return _insight_from_persisted_full_session(app)
 
 
+def _get_dismissed_insight_ids(st: Any) -> set[str]:
+    raw = st.session_state.get(SESSION_DISMISSED_KEY)
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    return {str(x).strip() for x in raw if str(x).strip()}
+
+
+def _insight_is_dismissed(st: Any, insight_id: str) -> bool:
+    iid = str(insight_id or "").strip()
+    return bool(iid and iid in _get_dismissed_insight_ids(st))
+
+
+def load_dismissed_insight_ids_from_cloud(source_app: str) -> dict[str, str]:
+    """Cross-device dismissals: {insight_id: dismissed_at_iso}."""
+    app = str(source_app or "").strip().lower()
+    if not app:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        from suite_account import load_saved_items
+
+        for app_key in (app, "applied_intelligence"):
+            rows = load_saved_items(app=app_key, item_type=INSIGHT_DISMISSAL_ITEM_TYPE, limit=80)
+            for row in rows:
+                iid = str(row.get("item_key") or "").strip()
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                if not iid and isinstance(payload, dict):
+                    iid = str(payload.get("insight_id") or "").strip()
+                if not iid:
+                    continue
+                ts = str(payload.get("dismissed_at") or row.get("updated_at") or "").strip()
+                out[iid] = ts
+    except Exception as exc:
+        log.warning("load_dismissed_insight_ids_from_cloud failed: %s", exc)
+    return out
+
+
+def sync_dismissed_insights_from_cloud(st: Any, app_key: str) -> None:
+    """Merge cloud dismissals into session; drop pending insight if dismissed remotely."""
+    key = str(app_key or "").strip().lower()
+    cloud = load_dismissed_insight_ids_from_cloud(key)
+    if not cloud:
+        return
+    dismissed = _get_dismissed_insight_ids(st)
+    dismissed.update(cloud.keys())
+    st.session_state[SESSION_DISMISSED_KEY] = sorted(dismissed)
+    meta = dict(st.session_state.get(SESSION_DISMISSED_AT_KEY) or {})
+    if not isinstance(meta, dict):
+        meta = {}
+    meta.update(cloud)
+    st.session_state[SESSION_DISMISSED_AT_KEY] = meta
+    pending = st.session_state.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict):
+        iid = str(pending.get("insight_id") or "").strip()
+        if iid and iid in cloud:
+            clear_pending_insight(st)
+
+
+def persist_insight_dismissal_to_cloud(app_key: str, insight_id: str, *, dismissed_at: str | None = None) -> None:
+    """Write dismissal to cloud saved items for cross-device hide on refresh."""
+    iid = str(insight_id or "").strip()
+    app = str(app_key or "").strip().lower()
+    if not iid or not app:
+        return
+    ts = dismissed_at or datetime.now(timezone.utc).isoformat()
+    payload = {"insight_id": iid, "dismissed_at": ts, "source_app": app}
+    try:
+        from suite_account import remember_saved_item
+
+        remember_saved_item(
+            app,
+            INSIGHT_DISMISSAL_ITEM_TYPE,
+            iid,
+            title=f"Dismissed insight {iid[:8]}",
+            payload=payload,
+        )
+        remember_saved_item(
+            "applied_intelligence",
+            INSIGHT_DISMISSAL_ITEM_TYPE,
+            iid,
+            title=f"Dismissed insight {iid[:8]}",
+            payload=payload,
+        )
+    except Exception as exc:
+        log.warning("persist_insight_dismissal_to_cloud failed: %s", exc)
+
+
+
 def _pending_insight_valid(st: Any) -> dict[str, Any]:
     pending = st.session_state.get(SESSION_PENDING_KEY)
     if not isinstance(pending, dict):
+        return {}
+    iid = str(pending.get("insight_id") or "").strip()
+    if iid and _insight_is_dismissed(st, iid):
         return {}
     if pending.get("conclusion") or pending.get("question"):
         return pending
@@ -714,7 +809,22 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
     ss = st.session_state
     ss["_ami_insight_hydrate_attempted"] = True
 
+    if ss.get("_ami_force_insight_render") or ss.get("_ami_submit_render_insight_this_run"):
+        pending = _pending_insight_valid(st)
+        if pending:
+            ss["_ami_insight_return_preserve"] = True
+            ss.pop("_ami_force_insight_render", None)
+            ss["_ami_insight_hydrate_success"] = True
+            ss["_ami_insight_hydrate_source"] = "submit_staged"
+            if key == "investment":
+                _sync_investment_insight_tab_keys(st, key, insight=pending)
+            return True
+
+    sync_dismissed_insights_from_cloud(st, key)
+
     url_iid = insight_return_query_id(st)
+    if url_iid and _insight_is_dismissed(st, url_iid):
+        url_iid = ""
     if url_iid:
         _clear_stale_return_insight_cache(st, url_iid)
         prev = str(ss.get("_ami_hydrated_insight_id") or "").strip()
@@ -736,7 +846,8 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
         _sync_investment_insight_tab_keys(st, key, insight=pending)
         return True
 
-    latest = load_latest_applied_math_insight_for_app(key)
+    dismissed = _get_dismissed_insight_ids(st)
+    latest = load_latest_applied_math_insight_for_app(key, exclude_ids=dismissed)
     if latest:
         ss[SESSION_PENDING_KEY] = latest
         source_page = _resolve_insight_source_page(latest)
@@ -1754,6 +1865,44 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     return True
 
 
+def dismiss_applied_math_insight(st: Any, *, app_key: str = "") -> None:
+    """Dismiss insight locally and persist dismissal for cross-device sync."""
+    pending = st.session_state.get(SESSION_PENDING_KEY)
+    iid = ""
+    if isinstance(pending, dict):
+        iid = str(pending.get("insight_id") or "").strip()
+    source_app = str(
+        app_key
+        or (pending.get("source_app") if isinstance(pending, dict) else "")
+        or st.session_state.get("_suite_persist_app_id")
+        or "investment"
+    ).strip().lower()
+    dismissed_at = datetime.now(timezone.utc).isoformat()
+    if iid:
+        dismissed = _get_dismissed_insight_ids(st)
+        dismissed.add(iid)
+        st.session_state[SESSION_DISMISSED_KEY] = sorted(dismissed)
+        meta = dict(st.session_state.get(SESSION_DISMISSED_AT_KEY) or {})
+        if not isinstance(meta, dict):
+            meta = {}
+        meta[iid] = dismissed_at
+        st.session_state[SESSION_DISMISSED_AT_KEY] = meta
+    clear_pending_insight(st)
+    st.session_state.pop("_ami_hydrated_insight_id", None)
+    st.session_state.pop("_ami_insight_active_id", None)
+    st.session_state.pop("_ami_force_insight_render", None)
+    if iid:
+        persist_insight_dismissal_to_cloud(source_app, iid, dismissed_at=dismissed_at)
+    st.session_state[SESSION_PERSIST_INSIGHT_DIRTY] = True
+    try:
+        from investment_persistent_state import autosave_investment_state
+
+        autosave_investment_state(st, trigger="insight_dismiss")
+    except Exception:
+        pass
+
+
+
 def clear_pending_insight(st: Any) -> None:
     st.session_state.pop(SESSION_PENDING_KEY, None)
     st.session_state.pop(SESSION_RETURN_PAGE_KEY, None)
@@ -1796,8 +1945,9 @@ def render_applied_math_insight_panel(
             if url:
                 st.link_button("Open full analysis →", url, use_container_width=True)
         with c2:
-            if st.button("Dismiss insight", key="ami_insight_dismiss", use_container_width=True):
-                clear_pending_insight(st)
+            insight_id = str(data.get("insight_id") or "pending")[:12]
+            if st.button("Dismiss insight", key=f"ami_insight_dismiss_{insight_id}", use_container_width=True):
+                dismiss_applied_math_insight(st, app_key=app)
                 st.rerun()
     return True
 
@@ -1847,10 +1997,36 @@ def render_suite_applied_math_insight_for_page(
             pass
 
     if not pending_exists:
+        st.session_state["_ami_insight_render_success"] = False
+        st.session_state["_ami_insight_render_skipped_reason"] = "no_pending_insight"
         return False
     if not should_render:
-        return False
+        submit_page = _normalize_investment_tab(
+            str(st.session_state.get("_ami_last_submit_source_page") or "")
+        ) if app == "investment" else _normalize_insight_page(
+            str(st.session_state.get("_ami_last_submit_source_page") or "")
+        )
+        cur_page = _normalize_investment_tab(source_page) if app == "investment" else _normalize_insight_page(source_page)
+        force_render = bool(
+            st.session_state.get("_ami_force_insight_render")
+            or st.session_state.get("_ami_submit_render_insight_this_run")
+            or (
+                submit_page
+                and cur_page
+                and submit_page == cur_page
+                and isinstance(insight, dict)
+                and insight.get("conclusion")
+            )
+        )
+        if force_render and isinstance(insight, dict) and insight.get("conclusion"):
+            should_render = True
+            skip_reason = ""
+        else:
+            st.session_state["_ami_insight_render_skipped_reason"] = skip_reason or "page_scope_blocked"
+            st.session_state["_ami_insight_render_success"] = False
+            return False
     rendered = render_applied_math_insight_panel(st, source_app=app, insight=insight)
+    st.session_state["_ami_insight_render_success"] = bool(rendered)
     if rendered and app == "investment":
         st.session_state["_ami_insight_card_rendered"] = True
         try:
