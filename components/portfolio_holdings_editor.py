@@ -1,4 +1,4 @@
-"""Portfolio holdings editor — add/remove controls, quick loaders, auto asset types."""
+"""Portfolio holdings editor — add/remove controls, auto asset types."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-import portfolio_core as core
 import etf_holdings as eh
+
+_ASSET_TYPE_OPTIONS = ["Equity", "Bonds", "T-Bills", "REIT", "Dividend ETF", "Other"]
 
 
 def _session_get(st_obj: Any, key: str, default: Any = None) -> Any:
@@ -45,7 +46,7 @@ def _normalize_holdings_df(df: pd.DataFrame | None) -> pd.DataFrame:
     for col in ("Ticker", "Weight (%)", "Asset Type"):
         if col not in out.columns:
             out[col] = "" if col == "Ticker" else (0.0 if col == "Weight (%)" else "Equity")
-    return eh.enrich_holdings_asset_types(out)
+    return out
 
 
 def _tickers_in_df(df: pd.DataFrame) -> list[str]:
@@ -54,172 +55,88 @@ def _tickers_in_df(df: pd.DataFrame) -> list[str]:
     return [t for t in clean["Ticker"].tolist() if t]
 
 
-def load_portfolio_preset(st_obj: Any, preset_key: str, *, source: str = "quick_load") -> bool:
-    """Replace holdings with a full preset portfolio. Returns True if loaded."""
-    rows = core.PORTFOLIO_PRESETS.get(preset_key)
-    if not rows:
+def _ticker_signature(df: pd.DataFrame) -> tuple[str, ...]:
+    return tuple(_tickers_in_df(df))
+
+
+def _enrich_for_mode(df: pd.DataFrame, st_obj: Any, *, beginner_mode: bool) -> pd.DataFrame:
+    """Auto-fill asset types when tickers change; preserve manual edits in beginner mode."""
+    out = _normalize_holdings_df(df)
+    sig = _ticker_signature(out)
+    sig_key = "_holdings_ticker_sig"
+    if beginner_mode and _session_get(st_obj, sig_key) == sig:
+        return out
+    enriched = eh.enrich_holdings_asset_types(out)
+    _session_set(st_obj, sig_key, sig)
+    return enriched
+
+
+def remove_holdings_row(st_obj: Any, row_index: int) -> bool:
+    """Remove a single row by positional index. Returns True when removed."""
+    df = _normalize_holdings_df(_session_get(st_obj, "holdings_df"))
+    if df.empty or row_index < 0 or row_index >= len(df):
         return False
-    _session_set(st_obj, "holdings_df", pd.DataFrame(rows))
-    _session_set(st_obj, "preset_applied", preset_key)
+    out = df.drop(index=row_index).reset_index(drop=True)
+    _session_set(st_obj, "holdings_df", out)
     _session_set(st_obj, "portfolio_built", False)
-    _session_pop(st_obj, "health_summary", None)
-    try:
-        from investment_workflow import invalidate_workflow_from
-
-        invalidate_workflow_from("portfolio")
-    except ImportError:
-        pass
-    try:
-        from investment_persistent_state import notify_portfolio_change
-
-        notify_portfolio_change(st_obj, source=source)
-    except Exception:
-        pass
+    _session_pop(st_obj, "_holdings_ticker_sig", None)
     return True
 
 
-def add_holding_ticker(st_obj: Any, ticker: str, *, weight_pct: float = 0.0) -> bool:
-    """Append a ticker row if not already present. Returns True when added."""
-    sym = str(ticker or "").strip().upper()
-    if not sym:
-        return False
-    df = _normalize_holdings_df(_session_get(st_obj, "holdings_df"))
-    existing = set(_tickers_in_df(df))
-    if sym in existing:
-        return False
-    info = eh.infer_portfolio_fund_info(sym)
-    row = pd.DataFrame(
-        [{"Ticker": sym, "Weight (%)": float(weight_pct), "Asset Type": info["asset_type"]}]
-    )
-    if df.empty:
-        _session_set(st_obj, "holdings_df", row)
-    else:
-        _session_set(st_obj, "holdings_df", pd.concat([df, row], ignore_index=True))
-    try:
-        from investment_activity import log_ticker_analyzed
-
-        log_ticker_analyzed(st_obj, ticker=sym)
-    except Exception:
-        pass
-    return True
+def _row_delete_labels(df: pd.DataFrame) -> list[str]:
+    labels: list[str] = []
+    for i, row in df.iterrows():
+        ticker = str(row.get("Ticker") or "").strip().upper() or "(empty)"
+        try:
+            weight = float(row.get("Weight (%)") or 0)
+            weight_text = f"{weight:.1f}%"
+        except (TypeError, ValueError):
+            weight_text = "—"
+        labels.append(f"Row {int(i) + 1}: {ticker} — {weight_text}")
+    return labels
 
 
-def remove_holding_ticker(st_obj: Any, ticker: str) -> bool:
-    """Remove all rows matching ticker. Returns True when a row was removed."""
-    sym = str(ticker or "").strip().upper()
-    if not sym:
-        return False
-    df = _normalize_holdings_df(_session_get(st_obj, "holdings_df"))
-    if df.empty:
-        return False
-    mask = df["Ticker"].astype(str).str.strip().str.upper() != sym
-    if mask.all():
-        return False
-    _session_set(st_obj, "holdings_df", df.loc[mask].reset_index(drop=True))
-    _session_set(st_obj, "portfolio_built", False)
-    return True
-
-
-def append_empty_row(st_obj: Any) -> None:
-    """Add a blank row for manual ticker entry in the table."""
-    df = _normalize_holdings_df(_session_get(st_obj, "holdings_df"))
-    blank = pd.DataFrame([{"Ticker": "", "Weight (%)": 0.0, "Asset Type": "Equity"}])
-    _session_set(st_obj, "holdings_df", pd.concat([df, blank], ignore_index=True))
-
-
-def render_quick_portfolio_loaders(st_obj: Any | None = None) -> bool:
+def render_delete_row_control(st_obj: Any | None = None, *, beginner_mode: bool = False) -> bool:
     """
-    One-click Balanced / Growth / Tech / Dividend test portfolios.
+    Select a table row and delete it with a visible trash button.
 
-    Returns True when a preset was loaded (caller should rerun).
+    Returns True when a row was removed (caller should rerun).
     """
     _st = st_obj or st
-    _st.markdown("**Load test portfolio**")
-    _st.caption("Replaces your current holdings with a ready-made mix — ideal for AMI validation.")
-    cols = _st.columns(len(core.PORTFOLIO_QUICK_LOADERS))
-    clicked = False
-    for col, (label, preset_key) in zip(cols, core.PORTFOLIO_QUICK_LOADERS.items()):
-        with col:
-            if _st.button(
-                f"Load {label}",
-                key=f"portfolio_quick_{preset_key}",
-                use_container_width=True,
-                help=f"Load the {label} sample portfolio",
-            ):
-                if load_portfolio_preset(_st, preset_key, source=f"quick_{label.lower()}"):
-                    clicked = True
-    return clicked
+    df = _normalize_holdings_df(_session_get(_st, "holdings_df"))
+    if df.empty:
+        return False
 
-
-def render_add_remove_controls(st_obj: Any | None = None) -> bool:
-    """
-    Explicit add / remove / add-row controls above the holdings table.
-
-    Returns True when session holdings changed (caller should rerun).
-    """
-    _st = st_obj or st
-    changed = False
-
-    _st.markdown("**Add or remove holdings**")
-    add_col, remove_col, row_col = _st.columns([2, 2, 1])
-
-    with add_col:
-        new_ticker = _st.text_input(
-            "Ticker symbol",
-            placeholder="e.g. QQQ, BND, SCHD",
-            key="portfolio_add_ticker_input",
-            label_visibility="collapsed",
+    labels = _row_delete_labels(df)
+    pick_col, btn_col = _st.columns([4, 1])
+    with pick_col:
+        selected = _st.selectbox(
+            "Row to delete",
+            options=list(range(len(labels))),
+            format_func=lambda i: labels[i],
+            key="portfolio_delete_row_select",
+            label_visibility="collapsed" if beginner_mode else "visible",
         )
-        if _st.button("➕ Add holding", key="portfolio_add_ticker_btn", use_container_width=True):
-            sym = str(new_ticker or "").strip().upper()
-            if not sym:
-                _st.session_state["_portfolio_editor_flash"] = ("warning", "Enter a ticker symbol first.")
-                changed = True
-            elif sym in set(_tickers_in_df(_normalize_holdings_df(_st.session_state.get("holdings_df")))):
-                _st.session_state["_portfolio_editor_flash"] = (
-                    "info",
-                    f"**{sym}** is already in your portfolio — edit its weight in the table.",
-                )
-                changed = True
-            elif add_holding_ticker(_st, sym):
-                info = eh.infer_portfolio_fund_info(sym)
+    with btn_col:
+        _st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+        if _st.button(
+            "🗑 Delete selected row",
+            key="portfolio_delete_row_btn",
+            use_container_width=True,
+            help="Remove the selected holding from your portfolio",
+        ):
+            if remove_holdings_row(_st, int(selected)):
+                ticker = labels[int(selected)].split(":")[1].split("—")[0].strip()
                 _st.session_state["_portfolio_editor_flash"] = (
                     "success",
-                    f"Added **{sym}** — {info['category_label']} ({info['asset_type']}). Set **Weight (%)** below.",
+                    f"Removed **{ticker}** from your portfolio.",
                 )
-                changed = True
-
-    with remove_col:
-        tickers = _tickers_in_df(_normalize_holdings_df(_st.session_state.get("holdings_df")))
-        remove_choice = _st.selectbox(
-            "Remove holding",
-            ["— select —", *tickers],
-            key="portfolio_remove_select",
-            label_visibility="collapsed",
-        )
-        if _st.button("🗑 Remove holding", key="portfolio_remove_btn", use_container_width=True):
-            if remove_choice == "— select —" or not tickers:
-                _st.session_state["_portfolio_editor_flash"] = (
-                    "warning",
-                    "Choose a ticker to remove, or clear the **Ticker** cell in the table.",
-                )
-                changed = True
-            elif remove_holding_ticker(_st, remove_choice):
-                _st.session_state["_portfolio_editor_flash"] = (
-                    "success",
-                    f"Removed **{remove_choice}** from your portfolio.",
-                )
-                changed = True
-
-    with row_col:
-        _st.markdown("<div style='height:1.6rem'></div>", unsafe_allow_html=True)
-        if _st.button("➕ Empty row", key="portfolio_add_empty_row", use_container_width=True):
-            append_empty_row(_st)
+                return True
             _st.session_state["_portfolio_editor_flash"] = (
-                "info",
-                "Empty row added — type a ticker and weight in the table below.",
+                "warning",
+                "Could not remove that row — try again.",
             )
-            changed = True
+            return True
 
     flash = _st.session_state.pop("_portfolio_editor_flash", None)
     if isinstance(flash, tuple) and len(flash) == 2:
@@ -231,7 +148,27 @@ def render_add_remove_controls(st_obj: Any | None = None) -> bool:
         else:
             _st.info(msg)
 
-    return changed
+    return False
+
+
+def _render_fund_metadata(df: pd.DataFrame, st_obj: Any) -> None:
+    """Advanced-only fund details panel."""
+    meta = eh.holdings_metadata_table(df)
+    if meta.empty:
+        return
+    st_obj.markdown("**Fund details (auto-detected)**")
+    st_obj.caption("Classification updates when you change tickers in the table above.")
+    st_obj.dataframe(
+        meta,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Ticker": st_obj.column_config.TextColumn(width="small"),
+            "Fund": st_obj.column_config.TextColumn(width="medium"),
+            "Category": st_obj.column_config.TextColumn(width="large"),
+            "Asset Type": st_obj.column_config.TextColumn(width="small"),
+        },
+    )
 
 
 def render_holdings_editor_table(
@@ -241,15 +178,26 @@ def render_holdings_editor_table(
 ) -> pd.DataFrame:
     """Render the holdings data editor and return the edited dataframe."""
     _st = st_obj or st
-    df = _normalize_holdings_df(_st.session_state.get("holdings_df"))
+    df = _normalize_holdings_df(_session_get(_st, "holdings_df"))
 
-    _st.markdown("**Your holdings**")
-    _st.caption(
-        "Edit **Ticker** and **Weight (%)** in the table. "
-        "**Asset Type** is filled in automatically. "
-        "You can also use the small **+** at the bottom-right of the table to add a row, "
-        "or select a row and press **Delete** on your keyboard."
-    )
+    if not beginner_mode:
+        _st.markdown("**Your holdings**")
+        _st.caption(
+            "Use the **+** at the bottom of the table to add a row. "
+            "**Asset type** is auto-detected when you enter a ticker."
+        )
+
+    asset_type_column: Any
+    if beginner_mode:
+        asset_type_column = st.column_config.SelectboxColumn(
+            options=_ASSET_TYPE_OPTIONS,
+            help="Usually auto-filled when you enter a ticker — change only if needed",
+        )
+    else:
+        asset_type_column = st.column_config.TextColumn(
+            disabled=True,
+            help="Auto-detected from ticker",
+        )
 
     edited = _st.data_editor(
         df,
@@ -266,31 +214,20 @@ def render_holdings_editor_table(
                 format="%.1f",
                 help="Percent of portfolio (should total 100%)",
             ),
-            "Asset Type": st.column_config.TextColumn(
-                disabled=True,
-                help="Auto-detected from ticker — you do not need to set this manually",
-            ),
+            "Asset Type": asset_type_column,
         },
         key="holdings_editor",
         hide_index=True,
     )
-    enriched = eh.enrich_holdings_asset_types(edited)
-    _st.session_state.holdings_df = enriched
 
-    meta = eh.holdings_metadata_table(enriched)
-    if not meta.empty:
-        _st.markdown("**Fund details (auto-detected)**")
-        _st.dataframe(
-            meta,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Ticker": st.column_config.TextColumn(width="small"),
-                "Fund": st.column_config.TextColumn(width="medium"),
-                "Category": st.column_config.TextColumn(width="large"),
-                "Asset Type": st.column_config.TextColumn(width="small"),
-            },
-        )
+    if render_delete_row_control(_st, beginner_mode=beginner_mode):
+        return None  # caller reruns after row removal
+
+    enriched = _enrich_for_mode(edited, _st, beginner_mode=beginner_mode)
+    _session_set(_st, "holdings_df", enriched)
+
+    if not beginner_mode:
+        _render_fund_metadata(enriched, _st)
 
     return enriched
 
@@ -302,7 +239,10 @@ def render_portfolio_inputs_section(
     apply_asset_preset: Any | None = None,
 ) -> pd.DataFrame | None:
     """
-    Full Portfolio Inputs editor block: loaders, controls, table, quick-add ETFs.
+    Portfolio Inputs editor block.
+
+    Beginner: one instruction box, simple table, trash delete.
+    Advanced: reference expander, quick-add ETFs, fund metadata.
 
     Returns edited holdings_df, or None if a rerun was triggered mid-render.
     """
@@ -315,19 +255,8 @@ def render_portfolio_inputs_section(
         )
 
         render_portfolio_editor_guidance(beginner_mode=beginner_mode)
-    except ImportError:
-        pass
 
-    if render_quick_portfolio_loaders(_st):
-        return None
-
-    if render_add_remove_controls(_st):
-        return None
-
-    try:
-        from components.portfolio_editor_guidance import render_common_etf_quick_add
-
-        if apply_asset_preset and render_common_etf_quick_add(apply_asset_preset, _st):
+        if not beginner_mode and apply_asset_preset and render_common_etf_quick_add(apply_asset_preset, _st):
             return None
     except ImportError:
         pass

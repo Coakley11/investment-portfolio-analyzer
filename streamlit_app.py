@@ -2075,9 +2075,10 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
             except Exception:
                 pass
             st.rerun()
-        st.caption(
-            f"**Step 2:** Click **Use this portfolio** when weights look right, then run **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
-        )
+        if not beginner_mode:
+            st.caption(
+                f"Click **Confirm portfolio** when weights look right, then run **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
+            )
     except ImportError:
         pass
     if beginner_mode:

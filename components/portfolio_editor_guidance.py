@@ -25,27 +25,36 @@ def render_workflow_journey_banner(*, beginner_mode: bool) -> None:
         )
 
 
-def render_portfolio_editor_guidance(*, beginner_mode: bool) -> None:
-    """Short, always-visible tips for editing holdings."""
+def render_beginner_portfolio_instructions() -> None:
+    """Single instruction box for the beginner Portfolio Inputs page."""
     st.info(
-        f"**Add:** type a ticker above and click **➕ Add holding**, tap a quick-add ETF button, "
-        f"or use **➕ Empty row** / the table's **+** at the bottom. "
-        f"**Remove:** pick a ticker and click **🗑 Remove holding**, or delete the row in the table. "
-        f"**Asset type** is detected automatically. When weights total ~100%, click "
-        f"**Use this portfolio**, then **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."
+        f"""**Build your portfolio:**
+
+- Add a holding with the **+** row at the bottom of the table, or use **Quick Add ETFs** in the side panel.
+- Edit **ticker**, **weight**, and **asset type** directly in the table.
+- Select a row and click the **trash can** to delete it.
+- Make sure weights add to **100%**.
+- Click **{RUN_PORTFOLIO_ANALYSIS_LABEL}**."""
     )
-    title = "More help" if beginner_mode else "Portfolio editor reference"
-    with st.expander(title, expanded=False):
+
+
+def render_portfolio_editor_guidance(*, beginner_mode: bool) -> None:
+    """Portfolio editor tips — one simple box for beginner, reference expander for advanced."""
+    if beginner_mode:
+        render_beginner_portfolio_instructions()
+        return
+
+    with st.expander("Portfolio editor reference", expanded=False):
         st.markdown(
-            """
+            f"""
 | Action | How |
 |--------|-----|
-| **Add** | **➕ Add holding** above, quick-add ETF buttons, **➕ Empty row**, or **+** at the table bottom |
-| **Remove** | **🗑 Remove holding** above, or select a table row and press **Delete** |
-| **Replace** | Remove the old ticker, then add the new one (or edit the **Ticker** cell) |
-| **Test portfolio** | **Load Balanced / Growth / Tech / Dividend** — one click |
+| **Add** | **+** row at the table bottom, sidebar **Portfolio Presets**, or quick-add ETF buttons below |
+| **Remove** | Select a row, then **🗑 Delete selected row** |
+| **Replace** | Edit the **Ticker** cell, or delete the row and add a new one |
+| **Asset type** | Auto-detected from ticker (editable in table); see **Fund details** below |
 
-**Ticker** = fund code on Yahoo Finance (e.g. **VTI**, **BND**, **QQQ**).
+Use sidebar **Portfolio Presets** to load sample allocations. **Ticker** = Yahoo Finance symbol (e.g. **VTI**, **BND**, **QQQ**).
             """.strip()
         )
 

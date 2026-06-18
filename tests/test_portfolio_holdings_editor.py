@@ -9,9 +9,8 @@ import pandas as pd
 import etf_holdings as eh
 import portfolio_core as core
 from components.portfolio_holdings_editor import (
-    add_holding_ticker,
-    load_portfolio_preset,
-    remove_holding_ticker,
+    _enrich_for_mode,
+    remove_holdings_row,
 )
 
 
@@ -58,35 +57,48 @@ class TestPortfolioFundInference(unittest.TestCase):
         self.assertIn("Bond", meta.iloc[0]["Category"])
 
 
-class TestPortfolioQuickLoaders(unittest.TestCase):
+class TestPortfolioEditorHelpers(unittest.TestCase):
     def test_quick_loader_keys_map_to_presets(self) -> None:
         for label, preset_key in core.PORTFOLIO_QUICK_LOADERS.items():
             self.assertIn(preset_key, core.PORTFOLIO_PRESETS, msg=label)
 
-    def test_add_and_remove_holding(self) -> None:
+    def test_remove_holdings_row(self) -> None:
         class _FakeSt:
             def __init__(self) -> None:
                 self.session_state = {
-                    "holdings_df": pd.DataFrame(columns=["Ticker", "Weight (%)", "Asset Type"])
+                    "holdings_df": pd.DataFrame(
+                        {
+                            "Ticker": ["VTI", "BND"],
+                            "Weight (%)": [60.0, 40.0],
+                            "Asset Type": ["Equity", "Bonds"],
+                        }
+                    )
                 }
 
         st_obj = _FakeSt()
-        self.assertTrue(add_holding_ticker(st_obj, "VTI"))
-        self.assertIn("VTI", st_obj.session_state["holdings_df"]["Ticker"].astype(str).tolist())
-        self.assertFalse(add_holding_ticker(st_obj, "VTI"))
-        self.assertTrue(remove_holding_ticker(st_obj, "VTI"))
-        self.assertTrue(st_obj.session_state["holdings_df"].empty)
+        self.assertTrue(remove_holdings_row(st_obj, 0))
+        self.assertEqual(len(st_obj.session_state["holdings_df"]), 1)
+        self.assertEqual(st_obj.session_state["holdings_df"].iloc[0]["Ticker"], "BND")
 
-    def test_load_balanced_preset(self) -> None:
+    def test_beginner_enrich_preserves_asset_type_when_tickers_unchanged(self) -> None:
         class _FakeSt:
             def __init__(self) -> None:
-                self.session_state = {"holdings_df": pd.DataFrame()}
+                self.session_state: dict = {}
 
         st_obj = _FakeSt()
-        self.assertTrue(load_portfolio_preset(st_obj, "Balanced"))
-        tickers = set(st_obj.session_state["holdings_df"]["Ticker"].astype(str).str.upper())
-        self.assertIn("VTI", tickers)
-        self.assertIn("BND", tickers)
+        df = pd.DataFrame(
+            {
+                "Ticker": ["VTI"],
+                "Weight (%)": [100.0],
+                "Asset Type": ["Bonds"],
+            }
+        )
+        first = _enrich_for_mode(df, st_obj, beginner_mode=True)
+        self.assertEqual(first.iloc[0]["Asset Type"], "Equity")
+        df2 = df.copy()
+        df2.at[0, "Asset Type"] = "Bonds"
+        second = _enrich_for_mode(df2, st_obj, beginner_mode=True)
+        self.assertEqual(second.iloc[0]["Asset Type"], "Bonds")
 
 
 if __name__ == "__main__":
