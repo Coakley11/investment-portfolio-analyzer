@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2d-macro-recession1"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2e-allocation-rec1"
 
 _TECH_TICKERS = frozenset(
     {
@@ -38,6 +38,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "valuation",
         "macro_rates",
         "macro_recession",
+        "allocation_recommendation",
     }
 )
 
@@ -401,6 +402,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
         "valuation": ("valuation", "Valuation analyst"),
         "macro_rates": ("macro_rates", "Interest rate scenario analyst"),
         "macro_recession": ("macro_recession", "Recession scenario analyst"),
+        "allocation_recommendation": ("allocation_recommendation", "Allocation recommendation analyst"),
     }
     problem_type, model_name = labels.get(intent, ("investment_generic", "Investment analyst"))
     return InvestmentSolverRoute(
@@ -438,6 +440,7 @@ def solve_instant_investment_insight(
         "valuation",
         "macro_rates",
         "macro_recession",
+        "allocation_recommendation",
     }
     if intent in phase2_intents:
         from investment_ami_phase2_solvers import solve_phase2_or_structured

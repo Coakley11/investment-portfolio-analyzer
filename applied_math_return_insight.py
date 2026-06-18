@@ -966,6 +966,9 @@ def build_return_insight_payload(
             model_name = str(getattr(route, "model_name", "") or getattr(route, "problem_type", "") or "").strip()
         if not method:
             method = str(getattr(route, "model_rationale", "") or method).strip()
+        pt = str(getattr(route, "problem_type", "") or "").strip()
+        if pt:
+            key_numbers["problem_type"] = pt
 
     iid = _insight_id(qid, conclusion or q)
     analyst_sections: dict[str, Any] = {}
@@ -1934,6 +1937,14 @@ def render_applied_math_insight_panel(
         q = str(data.get("question") or "").strip()
         if q:
             st.markdown(f"**Question:** *{q}*")
+        if str(source_app or data.get("source_app") or "").strip().lower() == "investment":
+            try:
+                from investment_ami_sliders import render_ami_assumption_controls
+
+                if render_ami_assumption_controls(st, data):
+                    st.rerun()
+            except ImportError:
+                pass
         sections = data.get("analyst_sections")
         if not isinstance(sections, dict) or not sections:
             kn = data.get("key_numbers")

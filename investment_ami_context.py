@@ -33,6 +33,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "valuation",
         "macro_rates",
         "macro_recession",
+        "allocation_recommendation",
     }
 )
 
@@ -45,13 +46,30 @@ _CONCENTRATION_PHRASES = (
 )
 
 _REBALANCE_PHRASES = (
-    "rebalance",
-    "rebalancing",
     "explain my allocation",
     "explain allocation",
     "my allocation",
     "target weights",
     "drift",
+)
+
+_ALLOCATION_RECOMMENDATION_PHRASES = (
+    "what should i change",
+    "what should i do",
+    "what would you change",
+    "what should i rebalance",
+    "which etf should i add",
+    "which etf should i reduce",
+    "should i add more",
+    "add more of",
+    "should i reduce",
+    "reduce my",
+    "is my allocation reasonable",
+    "allocation reasonable",
+    "how would you improve",
+    "improve this portfolio",
+    "improve my portfolio",
+    "how should i improve",
 )
 
 _RISK_PHRASES = (
@@ -194,8 +212,14 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "diversification"
     if any(p in q for p in _RISK_REDUCTION_PHRASES):
         return "risk_reduction"
+    if _is_allocation_recommendation_question(q):
+        return "allocation_recommendation"
     if any(p in q for p in _CONCENTRATION_PHRASES):
         return "portfolio_concentration"
+    if any(p in q for p in ("rebalance", "rebalancing")) and any(
+        w in q for w in ("should", "need", "when", "have to")
+    ):
+        return "allocation_recommendation"
     if any(p in q for p in _REBALANCE_PHRASES):
         return "rebalance_allocation"
     if any(p in q for p in _RISK_PHRASES):
@@ -235,3 +259,11 @@ def _is_recession_question(q: str) -> bool:
     if _is_rate_rise_question(q):
         return False
     return True
+
+
+def _is_allocation_recommendation_question(q: str) -> bool:
+    if any(p in q for p in _ALLOCATION_RECOMMENDATION_PHRASES):
+        return True
+    if "rebalance" in q and "explain" not in q and any(w in q for w in ("should", "need", "what", "how")):
+        return True
+    return False

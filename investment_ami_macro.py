@@ -13,8 +13,17 @@ from investment_ami_answer_format import build_analyst_sections
 from investment_ami_instant_solver import InvestmentSolverResult, _weight_rows
 
 
-def parse_rate_rise_pct(question: str, *, default: float = 2.0) -> float:
-    """Parse explicit rate rise magnitude from question text (percentage points)."""
+def parse_rate_rise_pct(question: str, *, default: float = 2.0, scenario_params: dict[str, Any] | None = None) -> float:
+    """Parse explicit rate rise magnitude from scenario params or question text (percentage points)."""
+    params = dict(scenario_params or {})
+    raw_param = params.get("rate_rise_pct")
+    if raw_param not in (None, ""):
+        try:
+            val = float(raw_param)
+            if 0 <= val <= 10:
+                return val
+        except (TypeError, ValueError):
+            pass
     q = str(question or "").strip().lower()
     patterns = (
         r"interest rates?\s+(?:rise|rising|increase|go up|hike|jump)[^\d%]{0,30}(\d+(?:\.\d+)?)\s*%?",
@@ -120,7 +129,8 @@ def _default_risk_notes(beginner: bool) -> str:
 
 def macro_rates_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Analyze portfolio sensitivity to an interest-rate rise shock."""
-    rate_bump = parse_rate_rise_pct(question)
+    params = dict(ctx.get("scenario_params") or {})
+    rate_bump = parse_rate_rise_pct(question, scenario_params=params)
     profile = allocation_profile_from_ctx(ctx)
     impacts = rate_rise_portfolio_impacts(profile, rate_bump)
     comps = impacts["components_pp"]
@@ -276,7 +286,11 @@ def _recession_probability_from_ctx(ctx: dict[str, Any]) -> float | None:
     return None
 
 
-def recession_portfolio_impacts(profile: dict[str, float | int | str]) -> dict[str, Any]:
+def recession_portfolio_impacts(
+    profile: dict[str, float | int | str],
+    *,
+    severity_scale: float = 1.0,
+) -> dict[str, Any]:
     """
     Educational recession stress model using portfolio_core Recession regime coefficients.
 
@@ -289,13 +303,14 @@ def recession_portfolio_impacts(profile: dict[str, float | int | str]) -> dict[s
     dividend = float(profile.get("dividend") or 0)
     growth = float(profile.get("qqq_spy") or 0) + float(profile.get("tech") or 0) * 0.4
 
+    scale = max(0.3, min(1.6, float(severity_scale or 1.0)))
     # Mirrors portfolio_core economic_regime "Recession" mapping.
-    equity_earnings_drag = -0.180 * eq * 100
-    reit_drag = -0.030 * reit * 100
-    tbill_defensive = 0.020 * tbills * 100
-    bond_defensive = 0.015 * bonds * 100
-    growth_earnings_drag = -0.050 * growth * 100
-    dividend_cushion = 0.010 * dividend * 100
+    equity_earnings_drag = -0.180 * eq * 100 * scale
+    reit_drag = -0.030 * reit * 100 * scale
+    tbill_defensive = 0.020 * tbills * 100 * scale
+    bond_defensive = 0.015 * bonds * 100 * scale
+    growth_earnings_drag = -0.050 * growth * 100 * scale
+    dividend_cushion = 0.010 * dividend * 100 * scale
 
     components = {
         "equity_earnings_drag_pp": round(equity_earnings_drag, 2),
@@ -310,7 +325,8 @@ def recession_portfolio_impacts(profile: dict[str, float | int | str]) -> dict[s
     return {
         "components_pp": components,
         "net_return_shift_pp": round(net_pp, 2),
-        "volatility_multiplier": 1.65,
+        "volatility_multiplier": round(1.65 * scale, 2),
+        "severity_scale": round(scale, 2),
         "defensive_sleeve_pct": defensive_pct,
         "profile_pct": {
             "equity": round(eq * 100, 1),
@@ -338,7 +354,14 @@ def _recession_risk_notes(beginner: bool) -> str:
 def macro_recession_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Analyze portfolio vulnerability in a recession scenario."""
     profile = allocation_profile_from_ctx(ctx)
-    impacts = recession_portfolio_impacts(profile)
+    params = dict(ctx.get("scenario_params") or {})
+    try:
+        from investment_ami_sliders import parse_recession_severity
+
+        severity = parse_recession_severity(params)
+    except ImportError:
+        severity = float(params.get("recession_severity_scale") or 1.0)
+    impacts = recession_portfolio_impacts(profile, severity_scale=severity)
     comps = impacts["components_pp"]
     prof = impacts["profile_pct"]
     net = float(impacts["net_return_shift_pp"])

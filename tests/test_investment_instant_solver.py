@@ -14,7 +14,7 @@ class TestInvestmentIntentRouting(unittest.TestCase):
         self.assertEqual(detect_investment_send_intent(q, "Portfolio Health"), "portfolio_concentration")
 
     def test_rebalance_question(self) -> None:
-        self.assertEqual(detect_investment_send_intent("Should I rebalance?", "Portfolio Health"), "rebalance_allocation")
+        self.assertEqual(detect_investment_send_intent("Should I rebalance?", "Portfolio Health"), "allocation_recommendation")
 
     def test_risk_question(self) -> None:
         self.assertEqual(detect_investment_send_intent("What is my biggest portfolio risk?", ""), "portfolio_risk")

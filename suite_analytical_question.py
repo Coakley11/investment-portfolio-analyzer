@@ -919,13 +919,18 @@ def _stage_investment_instant_insight(
         )
 
     return_context = _investment_return_context(submit_ctx, submit_source_state)
-    stage_pending_insight(st, insight, return_context=return_context)
-    store_blob = insight.to_dict() if hasattr(insight, "to_dict") else dict(insight)
+    pending_payload = insight.to_dict() if hasattr(insight, "to_dict") else dict(insight)
     if solved_pair:
         route, _ = solved_pair
+        pending_payload["problem_type"] = str(getattr(route, "problem_type", "") or "")
+        exp = str(submit_ctx.get("experience_mode") or submit_ctx.get("experience") or "").strip()
+        if exp:
+            pending_payload["experience_mode"] = exp
+    stage_pending_insight(st, pending_payload, return_context=return_context)
+    store_blob = dict(pending_payload)
+    if solved_pair:
         store_blob["canonical_instant"] = True
         store_blob["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
-        store_blob["problem_type"] = str(getattr(route, "problem_type", "") or "")
     store_applied_math_insight(
         store_blob,
         return_context=return_context,
