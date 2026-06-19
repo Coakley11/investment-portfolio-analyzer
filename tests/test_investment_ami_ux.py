@@ -129,6 +129,31 @@ class TestInvestmentAmiUx(unittest.TestCase):
         mock_panel.assert_called_once()
         self.assertTrue(st.session_state.get("_ami_insight_render_success"))
 
+    def test_resolve_canonical_prefers_pending_over_cloud(self) -> None:
+        from applied_math_return_insight import resolve_canonical_instant_insight
+
+        st = _FakeSt()
+        st.query_params = {"suite_ami_insight": "abc123"}
+        st.session_state[SESSION_PENDING_KEY] = {
+            "insight_id": "abc123",
+            "conclusion": "Updated scenario",
+            "analyst_sections": {"proposed_portfolio": "- **VTI** 35.0%"},
+            "scenario_params": {"allocation_overrides": {"VTI": 35.0}},
+        }
+        stale = {
+            "insight_id": "abc123",
+            "conclusion": "Original saved insight",
+            "analyst_sections": {"current_portfolio": "- **VTI** 40.0%"},
+        }
+        with patch("applied_math_return_insight.load_applied_math_insight", return_value=stale):
+            resolved = resolve_canonical_instant_insight(st, {}, source_app="investment")
+        self.assertEqual(resolved.get("conclusion"), "Updated scenario")
+        self.assertIn("proposed_portfolio", resolved.get("analyst_sections") or {})
+        self.assertEqual(
+            st.session_state.get("_ami_scenario_params", {}).get("allocation_overrides", {}).get("VTI"),
+            35.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

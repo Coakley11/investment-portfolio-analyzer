@@ -1497,6 +1497,66 @@ def load_applied_math_insight(insight_id: str, *, source_app: str = "") -> dict[
     return best
 
 
+def hydrate_insight_scenario_params(st: Any, insight: dict[str, Any]) -> None:
+    """Restore slider scenario params from a staged or stored insight blob."""
+    if not isinstance(insight, dict):
+        return
+    params = insight.get("scenario_params")
+    if not isinstance(params, dict):
+        kn = insight.get("key_numbers")
+        if isinstance(kn, dict):
+            candidate = kn.get("scenario_params")
+            if isinstance(candidate, dict):
+                params = candidate
+    if isinstance(params, dict) and params:
+        st.session_state["_ami_scenario_params"] = dict(params)
+
+
+def resolve_canonical_instant_insight(
+    st: Any,
+    context: dict[str, Any],
+    *,
+    source_app: str,
+) -> dict[str, Any]:
+    """
+    Resolve the canonical instant insight for AMI deep dive.
+
+    Prefers in-session pending insight (slider-refreshed) over cloud snapshots with the
+    same insight_id so allocation scenarios stay in sync with Investment.
+    """
+    ctx = dict(context or {})
+    instant = ctx.get("instant_insight")
+    if isinstance(instant, dict) and str(instant.get("conclusion") or "").strip():
+        hydrate_insight_scenario_params(st, instant)
+        return instant
+
+    app_key = str(source_app or ctx.get("source_app") or "").strip().lower()
+    url_iid = _query_param(st, "suite_ami_insight") or str(st.session_state.get("_suite_ami_insight") or "").strip()
+
+    pending = st.session_state.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict) and str(pending.get("conclusion") or "").strip():
+        pending_iid = str(pending.get("insight_id") or "").strip()
+        if not url_iid or not pending_iid or pending_iid == url_iid:
+            hydrate_insight_scenario_params(st, pending)
+            return pending
+
+    if url_iid:
+        loaded = load_applied_math_insight(url_iid, source_app=app_key)
+        if str(loaded.get("conclusion") or "").strip():
+            hydrate_insight_scenario_params(st, loaded)
+            st.session_state[SESSION_PENDING_KEY] = dict(loaded)
+            return loaded
+
+    qid = str(st.session_state.get("_suite_ai_question_id") or ctx.get("question_id") or "").strip()
+    if qid:
+        loaded = load_applied_math_insight_for_question(qid, source_app=app_key)
+        if str(loaded.get("conclusion") or "").strip():
+            hydrate_insight_scenario_params(st, loaded)
+            st.session_state[SESSION_PENDING_KEY] = dict(loaded)
+            return loaded
+    return {}
+
+
 def load_applied_math_insight_for_question(question_id: str, *, source_app: str = "") -> dict[str, Any]:
     """Load the stored insight tied to a question_id (instant / canonical answer)."""
     qid = str(question_id or "").strip()

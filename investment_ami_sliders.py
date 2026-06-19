@@ -322,7 +322,11 @@ def _stage_refreshed_insight(
 ) -> bool:
     """Build payload from a solve result and restage without losing slider identity."""
     try:
-        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
+        from applied_math_return_insight import (
+            build_return_insight_payload,
+            stage_pending_insight,
+            store_applied_math_insight,
+        )
         from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
     except ImportError:
         return False
@@ -360,7 +364,9 @@ def _stage_refreshed_insight(
         for field in ("objective", "rebalance_drift", "problem_type"):
             if prior_kn.get(field) not in (None, "") and field not in kn:
                 kn[field] = prior_kn[field]
+    kn["scenario_params"] = dict(params)
     payload["key_numbers"] = kn
+    payload["scenario_params"] = dict(params)
 
     ss = st.session_state
     stage_pending_insight(st, payload)
@@ -368,11 +374,22 @@ def _stage_refreshed_insight(
     ss["_ami_force_insight_render"] = True
     ss["_ami_investment_instant_canonical"] = {
         **dict(ss.get("_ami_investment_instant_canonical") or {}),
+        **payload,
         "problem_type": payload["problem_type"],
         "solver_build_id": INVESTMENT_AMI_BUILD_ID,
         "analyst_sections": payload.get("analyst_sections"),
         "conclusion": payload.get("conclusion"),
     }
+    try:
+        store_applied_math_insight(payload, st=st)
+    except Exception:
+        pass
+    try:
+        from investment_persistent_state import notify_pending_insight_change
+
+        notify_pending_insight_change(st, source="slider_refresh", trigger_save=True)
+    except ImportError:
+        pass
     return bool(payload.get("conclusion"))
 
 

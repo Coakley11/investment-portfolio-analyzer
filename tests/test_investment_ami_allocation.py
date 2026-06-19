@@ -241,6 +241,47 @@ class TestAmiSliders(unittest.TestCase):
         self.assertIn("Proposed Portfolio", md)
         self.assertIn("Before vs After", md)
 
+    def test_slider_refresh_stores_updated_insight(self) -> None:
+        from unittest.mock import patch
+
+        class _SS(dict):
+            def get(self, key, default=None):
+                return dict.get(self, key, default)
+
+        insight = {
+            "question": "Should I rebalance?",
+            "question_id": "q-rebalance-store",
+            "insight_id": "stable-store-id",
+            "experience_mode": "Advanced Mode",
+            "problem_type": "allocation_recommendation",
+            "source_app": "investment",
+            "source_page": "portfolio",
+            "conclusion": "initial",
+            "key_numbers": {
+                "holdings_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+                "problem_type": "allocation_recommendation",
+            },
+        }
+        params = {
+            "risk_tolerance": "Moderate",
+            "allocation_overrides": {"VTI": 35.0},
+            "allocation_reallocations": [
+                {"from_ticker": "VTI", "amount_pct": 5.0, "to_ticker": "VXUS"},
+            ],
+        }
+        ss = _SS({"_ami_scenario_params": {}, "_ami_last_submit_source_page": "portfolio"})
+        st = type("ST", (), {"session_state": ss})()
+        with patch("applied_math_return_insight.store_applied_math_insight") as store_mock:
+            ok = refresh_investment_insight_from_params(st, insight, params)
+        self.assertTrue(ok)
+        store_mock.assert_called_once()
+        stored = store_mock.call_args[0][0]
+        self.assertEqual(stored.get("insight_id"), "stable-store-id")
+        self.assertIn("scenario_params", stored)
+        sections = stored.get("analyst_sections") or {}
+        self.assertIn("proposed_portfolio", sections)
+        self.assertIn("portfolio_comparison", sections)
+
 
 if __name__ == "__main__":
     unittest.main()
