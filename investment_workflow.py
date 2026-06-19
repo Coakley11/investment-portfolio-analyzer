@@ -547,6 +547,13 @@ def _dev_query_param_enabled(st_obj: Any | None = None) -> bool:
 
 def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
     """True when dev diagnostics should render (default off for normal users)."""
+    try:
+        from suite_workspace import is_developer_workspace
+
+        if not is_developer_workspace(st=st_obj):
+            return False
+    except ImportError:
+        pass
     ss = _sess(st_obj)
     if ss.get(DEV_DIAG_SESSION_KEY):
         return True
@@ -565,6 +572,13 @@ def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
 
 def developer_access_available(st_obj: Any | None = None) -> bool:
     """True when the Developer sidebar section should be visible (admin entry points)."""
+    try:
+        from suite_workspace import is_developer_workspace
+
+        if not is_developer_workspace(st=st_obj):
+            return False
+    except ImportError:
+        pass
     if developer_diagnostics_enabled(st_obj):
         return True
     ss = _sess(st_obj)

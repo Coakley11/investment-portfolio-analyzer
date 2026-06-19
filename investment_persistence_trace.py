@@ -307,8 +307,15 @@ def init_developer_mode_from_query(st: Any) -> None:
         raw = _raw_dev_query_param(st)
         st.session_state["_pr1_dev_query_raw"] = raw
         if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
-            st.session_state["investment_show_dev_diagnostics"] = True
-            st.session_state["_pr1_dev_query_matched"] = True
+            try:
+                from suite_workspace import is_developer_workspace
+
+                if is_developer_workspace(st=st):
+                    st.session_state["investment_show_dev_diagnostics"] = True
+                    st.session_state["_pr1_dev_query_matched"] = True
+            except ImportError:
+                st.session_state["investment_show_dev_diagnostics"] = True
+                st.session_state["_pr1_dev_query_matched"] = True
         else:
             st.session_state["_pr1_dev_query_matched"] = False
     except Exception as exc:
@@ -342,6 +349,13 @@ def pr1_baseline_trace_active(*, persistence_ok: bool | None = None) -> bool:
 
 def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> bool:
     """True when PR1 baseline, sidebar checkbox, or developer diagnostics are active."""
+    try:
+        from suite_workspace import is_developer_workspace
+
+        if not is_developer_workspace(st=st):
+            return False
+    except ImportError:
+        pass
     if pr1_baseline_trace_active(persistence_ok=persistence_ok):
         return True
     if st.session_state.get(PR1_DIAG_CHECKBOX_KEY):
@@ -365,6 +379,13 @@ def bump_pr1_render_pass(st: Any) -> int:
 
 def render_investment_diagnostics_controls(st: Any, *, persistence_ok: bool | None = None) -> None:
     """Always-visible PR1 checkbox (Streamlit Cloud may not pass ``?dev=1`` to query_params)."""
+    try:
+        from suite_workspace import is_developer_workspace
+
+        if not is_developer_workspace(st=st):
+            return
+    except ImportError:
+        pass
     if not persistence_ok:
         return
     st.sidebar.checkbox(
