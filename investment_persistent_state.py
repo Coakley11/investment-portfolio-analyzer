@@ -821,6 +821,7 @@ def align_session_holdings_with_cloud(
     cloud_state: dict[str, Any] | None,
     *,
     source: str,
+    allow_without_cloud_pick: bool = False,
 ) -> bool:
     """
     Re-apply cloud holdings when restore picked incomplete disk state or left rows missing.
@@ -832,8 +833,8 @@ def align_session_holdings_with_cloud(
         return False
     ss = st.session_state
     pick = str(ss.get("_suite_persist_last_restore_source") or ss.get("_suite_persist_debug_pick_source") or "").strip()
-    if pick and pick != "cloud":
-        ss["_suite_inv_cloud_align_skipped"] = f"restore_source={pick}"
+    if not allow_without_cloud_pick and pick != "cloud":
+        ss["_suite_inv_cloud_align_skipped"] = f"restore_source={pick or 'unset'}"
         return False
     if _session_holdings_aligned_with_cloud(st, cloud_state):
         return False
@@ -900,7 +901,12 @@ def finalize_init_holdings_defaults(st: Any) -> None:
         return
     cloud_state, _ = _cloud_has_saved_portfolio()
     if cloud_state:
-        if align_session_holdings_with_cloud(st, cloud_state, source="init_defaults_cloud_guard"):
+        if align_session_holdings_with_cloud(
+            st,
+            cloud_state,
+            source="init_defaults_cloud_guard",
+            allow_without_cloud_pick=True,
+        ):
             return
         df = ss.get("holdings_df")
         if isinstance(df, pd.DataFrame) and not df.empty:
@@ -2053,6 +2059,22 @@ def render_persistence_debug(st: Any, *, final: bool = False) -> None:
     """Legacy entry point; sidebar-only partial view before init completes."""
     del final
     render_persistence_debug_sidebar(st)
+
+
+def ensure_investment_safe_startup_after_restore_error(st: Any) -> None:
+    """Apply safe portfolio defaults when bootstrap restore raises (never leave main area empty)."""
+    import portfolio_core as core
+
+    ss = st.session_state
+    df = ss.get("holdings_df")
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        if not ss.get("portfolio_built") and not ss.get("_suite_inv_holdings_from_saved_blob"):
+            ss["holdings_df"] = pd.DataFrame(core.DEFAULT_HOLDINGS)
+            ss["default_holdings_applied"] = True
+            ss["default_holdings_apply_reason"] = "safe_startup_after_restore_error"
+            ss.pop("_suite_inv_holdings_restore_issue", None)
+    ensure_experience_mode(st)
+    ensure_analysis_date_defaults(st)
 
 
 def apply_investment_session_defaults(st: Any) -> None:

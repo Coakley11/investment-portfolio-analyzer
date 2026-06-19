@@ -1495,6 +1495,62 @@ def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = No
             st.warning(f"Persistence import error: {persist_import}")
 
 
+def render_main_startup_diagnostics(st: Any, *, persistence_ok: bool | None = None) -> None:
+    """Surface restore/bootstrap failures on the main page (never silent blank screen)."""
+    ss = st.session_state
+    import_err = str(ss.get("_suite_persist_import_error") or "").strip()
+    restore_err = str(ss.get("_suite_persist_restore_error") or "").strip()
+    safe_err = str(ss.get("_suite_inv_safe_startup_error") or "").strip()
+    dev = False
+    try:
+        from investment_workflow import developer_access_available
+
+        dev = developer_access_available(st)
+    except ImportError:
+        dev = bool(ss.get("_pr1_diagnostics_enabled") or ss.get("investment_pr1_diagnostics_enabled"))
+
+    if import_err:
+        st.error(f"Persistence failed to load. Some saved settings may be unavailable. `{import_err}`")
+    if restore_err:
+        st.error(
+            "Session restore failed. Showing safe defaults when possible. "
+            f"`{restore_err}`"
+        )
+    if safe_err:
+        st.warning(f"Safe startup fallback hit an error: `{safe_err}`")
+
+    if not dev and not (import_err or restore_err):
+        return
+
+    expanded = bool(import_err or restore_err or dev)
+    with st.expander("Startup / workspace restore trace", expanded=expanded):
+        meta = ss.get("_suite_workspace_persist_meta") if isinstance(ss.get("_suite_workspace_persist_meta"), dict) else {}
+        holdings = ss.get("holdings_df")
+        row_count = len(holdings) if hasattr(holdings, "__len__") else 0
+        lines = [
+            f"persistence_ok: {persistence_ok}",
+            f"active_workspace_id: {meta.get('active_workspace_id') or ss.get('_suite_active_workspace_id')}",
+            f"local_state_path: {meta.get('local_state_path')}",
+            f"cloud_app_key: {meta.get('cloud_app_key')}",
+            f"restore_decision: {ss.get('_suite_restore_decision') or ss.get('_suite_persist_debug_pick_source')}",
+            f"restore_skip_reason: {ss.get('_suite_persist_restore_skip_reason')}",
+            f"pick_reason: {ss.get('_suite_persist_debug_pick_reason')}",
+            f"cloud_align_skipped: {ss.get('_suite_inv_cloud_align_skipped')}",
+            f"default_holdings_applied: {ss.get('default_holdings_applied')}",
+            f"default_holdings_apply_reason: {ss.get('default_holdings_apply_reason')}",
+            f"holdings_row_count: {row_count}",
+            f"investment_active_tab: {ss.get('investment_active_tab')}",
+        ]
+        st.code("\n".join(str(x) for x in lines), language=None)
+        if dev:
+            try:
+                from investment_persistent_state import render_persistence_debug_content
+
+                render_persistence_debug_content(st)
+            except Exception as exc:
+                st.caption(f"Full persistence trace unavailable: {exc}")
+
+
 def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
     """Render PR1 trace UI once per script run; snapshot may refresh on later calls."""
     ss = st.session_state

@@ -293,6 +293,13 @@ if _PERSISTENCE_OK:
                     pass
     except Exception as _persist_restore_exc:
         st.session_state["_suite_persist_restore_error"] = str(_persist_restore_exc)
+        st.session_state["_suite_inv_persistence_bootstrapped"] = True
+        try:
+            from investment_persistent_state import ensure_investment_safe_startup_after_restore_error
+
+            ensure_investment_safe_startup_after_restore_error(st)
+        except Exception as _safe_startup_exc:
+            st.session_state["_suite_inv_safe_startup_error"] = str(_safe_startup_exc)
     apply_pending_sidebar_portfolio_value()
     show_persistence_messages(st)
     render_reset_controls(
@@ -1902,6 +1909,12 @@ if beginner_mode:
     ensure_beginner_macro_defaults()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
+try:
+    from investment_persistence_trace import render_main_startup_diagnostics
+
+    render_main_startup_diagnostics(st, persistence_ok=_PERSISTENCE_OK)
+except Exception:
+    pass
 health_badge_slot = st.empty()
 init_holdings()
 if _PERSISTENCE_OK:
