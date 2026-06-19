@@ -280,7 +280,7 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
-        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2i-allocation-funding-audit1")
+        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2j-allocation-diag1")
         self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)
@@ -425,6 +425,27 @@ class TestAmiSliders(unittest.TestCase):
         self.assertAlmostEqual(weights["BND"], 40.0, places=1)
         self.assertAlmostEqual(weights["VNQ"], 0.0, places=1)
         self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
+
+    def test_build_allocation_engine_diag_bnd_from_vnq(self) -> None:
+        from investment_ami_allocation import build_allocation_engine_diag
+
+        ctx = {
+            "current_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+            "scenario_params": {
+                "allocation_overrides": {"BND": 40.0},
+                "allocation_increase_funding": [{"to_ticker": "BND", "from_ticker": "VNQ", "amount_pct": 10.0}],
+                "allocation_reallocations": [
+                    {"from_ticker": "VTI", "amount_pct": 40.0, "to_ticker": "VNQ"},
+                ],
+            },
+        }
+        diag = build_allocation_engine_diag(ctx)
+        proposed = diag["computed_proposed_portfolio"]
+        self.assertAlmostEqual(proposed["VTI"], 40.0)
+        self.assertAlmostEqual(proposed["BND"], 40.0)
+        self.assertAlmostEqual(proposed["VXUS"], 20.0)
+        self.assertAlmostEqual(proposed["VNQ"], 0.0)
+        self.assertEqual(diag["allocation_reallocations_filtered"], [])
 
 
 if __name__ == "__main__":

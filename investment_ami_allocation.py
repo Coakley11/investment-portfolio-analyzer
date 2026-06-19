@@ -243,6 +243,55 @@ def _apply_explicit_reallocation(
     return weights
 
 
+def build_allocation_engine_diag(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Structured allocation-engine diagnostics for AMI deep dive and deploy verification."""
+    from investment_ami_instant_solver import ALLOCATION_SOLVER_VERSION, INVESTMENT_AMI_BUILD_ID
+
+    base_rows = _weight_rows(ctx)
+    baseline = {t: p for t, p in base_rows}
+    params = dict(ctx.get("scenario_params") or {})
+    overrides_raw = params.get("allocation_overrides")
+    overrides: dict[str, float] = {}
+    if isinstance(overrides_raw, dict):
+        for ticker, raw in overrides_raw.items():
+            sym = str(ticker or "").strip().upper()
+            pct = _parse_weight_pct(raw)
+            if sym and pct is not None and pct >= 0:
+                overrides[sym] = pct
+    realloc_raw = params.get("allocation_reallocations")
+    reallocations = [r for r in realloc_raw if isinstance(r, dict)] if isinstance(realloc_raw, list) else []
+    funding_raw = params.get("allocation_increase_funding")
+    increase_funding = [r for r in funding_raw if isinstance(r, dict)] if isinstance(funding_raw, list) else []
+    filtered_realloc = _filter_reallocations_for_overrides(baseline, overrides, reallocations)
+    filtered_funding = _filter_increase_funding_for_overrides(baseline, overrides, increase_funding)
+    breakdown: list[dict[str, Any]] = []
+    proposed_weights = _apply_explicit_reallocation(
+        baseline,
+        overrides,
+        reallocations,
+        increase_funding,
+        funding_breakdown=breakdown,
+    )
+    net_changes = {
+        t: round(float(proposed_weights.get(t, 0.0)) - float(baseline.get(t, 0.0)), 2)
+        for t in sorted(set(baseline) | set(proposed_weights))
+    }
+    return {
+        "module_build_id": INVESTMENT_AMI_BUILD_ID,
+        "allocation_solver_version": ALLOCATION_SOLVER_VERSION,
+        "input_portfolio": dict(baseline),
+        "parsed_scenario_params": dict(params),
+        "allocation_overrides": dict(overrides),
+        "allocation_reallocations_raw": list(reallocations),
+        "allocation_reallocations_filtered": list(filtered_realloc),
+        "allocation_increase_funding_raw": list(increase_funding),
+        "allocation_increase_funding_filtered": list(filtered_funding),
+        "computed_proposed_portfolio": dict(proposed_weights),
+        "net_allocation_changes": net_changes,
+        "funding_breakdown": list(breakdown),
+    }
+
+
 def _proposed_weight_rows(
     baseline: dict[str, float],
     weights: dict[str, float],

@@ -473,6 +473,14 @@ def _stage_refreshed_insight(
     payload["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
     payload["canonical_instant"] = True
     payload["scenario_refreshed_at"] = datetime.now(timezone.utc).isoformat()
+    if payload.get("problem_type") in ("allocation_recommendation", "rebalance_allocation"):
+        try:
+            from investment_ami_allocation import build_allocation_engine_diag
+
+            diag_ctx = context or _insight_context_from_data(insight_data, params)
+            payload["allocation_engine_diag"] = build_allocation_engine_diag(diag_ctx)
+        except Exception:
+            pass
 
     ss = st.session_state
     stage_pending_insight(st, payload)

@@ -272,6 +272,22 @@ def _flatten_insight_store_diag_on_blob(blob: dict[str, Any], trace: dict[str, A
             blob[key] = value
 
 
+def _allocation_build_score(build: str) -> int:
+    """Higher = newer allocation engine build."""
+    build_l = str(build or "").lower()
+    for token, pts in (
+        ("phase2j", 40),
+        ("phase2i", 36),
+        ("phase2h", 32),
+        ("phase2g", 28),
+        ("phase2f", 8),
+        ("phase2e", 2),
+    ):
+        if token in build_l:
+            return pts
+    return 0
+
+
 def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
     """Rank stored insight payloads — prefer refreshed scenario blobs over stale snapshots."""
     if not isinstance(payload, dict) or not payload:
@@ -291,20 +307,20 @@ def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
         score += 3
     if payload.get("store_blob_written_success") is True:
         score += 1
+    refreshed = bool(str(payload.get("scenario_refreshed_at") or "").strip())
     sections = payload.get("analyst_sections") if isinstance(payload.get("analyst_sections"), dict) else {}
     if sections.get("proposed_portfolio"):
-        score += 25
+        score += 8 if refreshed else 25
     if sections.get("portfolio_comparison"):
-        score += 20
+        score += 6 if refreshed else 20
     if payload.get("scenario_params") or (payload.get("key_numbers") or {}).get("scenario_params"):
         score += 15
-    if payload.get("scenario_refreshed_at"):
-        score += 10
+    if refreshed:
+        score += 40
+    if payload.get("allocation_engine_diag"):
+        score += 12
     build = str(payload.get("solver_build_id") or "")
-    if "phase2f" in build:
-        score += 8
-    elif "phase2e" in build:
-        score += 2
+    score += _allocation_build_score(build)
     if payload.get("canonical_instant"):
         score += 5
     return score
@@ -330,7 +346,11 @@ def _pick_freshest_canonical_insight(
             if cand_iid and cand_iid != iid:
                 continue
         score = _canonical_insight_freshness_score(raw)
-        if score > best_score:
+        build_rank = _allocation_build_score(str(raw.get("solver_build_id") or ""))
+        refreshed_at = str(raw.get("scenario_refreshed_at") or "")
+        rank = (score, build_rank, refreshed_at)
+        best_rank = (best_score, _allocation_build_score(str(best.get("solver_build_id") or "")), str(best.get("scenario_refreshed_at") or ""))
+        if rank > best_rank:
             best = dict(raw)
             best_score = score
     return best
