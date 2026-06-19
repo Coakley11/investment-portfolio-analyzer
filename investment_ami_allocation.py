@@ -64,6 +64,56 @@ def _tech_threshold(risk_tolerance: str) -> float:
     return 35.0
 
 
+def _subtract_increase_funding(
+    weights: dict[str, float],
+    to_ticker: str,
+    amount: float,
+    from_ticker: str,
+) -> None:
+    """Reduce source sleeve(s) to fund an increase without going below 0%."""
+    to_sym = str(to_ticker or "").strip().upper()
+    try:
+        need = float(amount)
+    except (TypeError, ValueError):
+        return
+    if not to_sym or need <= 0:
+        return
+
+    others = [t for t in weights if t != to_sym]
+    if from_ticker == "__proportional__":
+        avail = {t: float(weights.get(t, 0.0)) for t in others}
+        total = sum(avail.values())
+        if total <= 0:
+            return
+        take_total = min(need, total)
+        for sym, w in avail.items():
+            reduction = take_total * (w / total)
+            weights[sym] = max(0.0, weights.get(sym, 0.0) - reduction)
+        return
+
+    if from_ticker == "__equal__":
+        remaining = min(need, sum(float(weights.get(t, 0.0)) for t in others))
+        active = list(others)
+        while remaining > 0.01 and active:
+            share = remaining / len(active)
+            next_active: list[str] = []
+            for sym in active:
+                current = float(weights.get(sym, 0.0))
+                take = min(share, current)
+                weights[sym] = max(0.0, current - take)
+                remaining -= take
+                if weights[sym] > 0.01:
+                    next_active.append(sym)
+            active = next_active
+        return
+
+    from_sym = str(from_ticker or "").strip().upper()
+    if from_sym:
+        current = float(weights.get(from_sym, 0.0))
+        take = min(need, current)
+        weights[from_sym] = max(0.0, current - take)
+
+
 def _apply_explicit_reallocation(
     baseline: dict[str, float],
     overrides: dict[str, float],
@@ -105,15 +155,10 @@ def _apply_explicit_reallocation(
             amount = 0.0
         if not to_t or amount <= 0:
             continue
-        if from_t == "__equal__":
-            others = [t for t in weights if t != to_t]
-            share = amount / len(others) if others else 0.0
-            for sym in others:
-                weights[sym] = max(0.0, weights.get(sym, 0.0) - share)
-        elif from_t:
-            weights[from_t.upper()] = max(0.0, weights.get(from_t.upper(), 0.0) - amount)
+        _subtract_increase_funding(weights, to_t, amount, from_t)
+    weights = {t: max(0.0, float(w)) for t, w in weights.items()}
     total = sum(weights.values())
-    if total > 0 and abs(total - 100.0) > 0.25:
+    if not increase_funding and total > 0 and abs(total - 100.0) > 0.25:
         weights = {t: w / total * 100.0 for t, w in weights.items()}
     return weights
 

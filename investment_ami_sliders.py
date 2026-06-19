@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 _EQUAL_REALLOC = "__equal__"
+_PROPORTIONAL_REALLOC = "__proportional__"
 _CASH_TICKERS = frozenset({"BIL", "SHV", "SGOV", "BILS", "TBIL"})
 
 _SLIDER_PROBLEM_TYPES = frozenset(
@@ -214,7 +215,43 @@ def _detect_weight_increases(
     return boosts
 
 
+def _funding_capacity(baseline: dict[str, float], exclude_ticker: str) -> float:
+    """Total weight available from sleeves other than exclude_ticker."""
+    exclude = str(exclude_ticker or "").upper()
+    return sum(float(w) for t, w in baseline.items() if str(t).upper() != exclude)
+
+
+def _valid_funding_source_options(
+    baseline: dict[str, float],
+    all_tickers: list[str],
+    exclude_ticker: str,
+    extra_needed: float,
+) -> tuple[list[str], float]:
+    """
+    Funding sources that keep all sleeves >= 0%.
+    Single-source options only when source weight >= extra_needed.
+    """
+    exclude = str(exclude_ticker or "").upper()
+    total_avail = _funding_capacity(baseline, exclude)
+    options: list[str] = []
+    for ticker in all_tickers:
+        sym = str(ticker).upper()
+        if sym == exclude:
+            continue
+        if float(baseline.get(sym, 0.0)) >= extra_needed - 0.01:
+            options.append(sym)
+    for cash in sorted(_CASH_TICKERS):
+        if cash in all_tickers and cash not in options and cash != exclude:
+            if float(baseline.get(cash, 0.0)) >= extra_needed - 0.01:
+                options.append(cash)
+    if total_avail >= extra_needed - 0.01:
+        options.append("Proportional distribution across other sleeves")
+        options.append("Equal distribution across other sleeves")
+    return options, total_avail
+
+
 def _funding_source_options(all_tickers: list[str], exclude_ticker: str) -> list[str]:
+    """Legacy helper — prefer _valid_funding_source_options with baseline + amount."""
     options = [t for t in all_tickers if t != exclude_ticker]
     for cash in sorted(_CASH_TICKERS):
         if cash in all_tickers and cash not in options:
@@ -597,15 +634,33 @@ def _render_increase_funding_controls(
     st.caption("Portfolios must total 100%. Choose an explicit source for each increase.")
 
     for to_ticker, extra in boosts:
-        options = _funding_source_options(all_tickers, to_ticker)
+        options, total_avail = _valid_funding_source_options(baseline, all_tickers, to_ticker, extra)
         dest_key = f"ami_fund_src_{insight_id}_{to_ticker}"
         widget_key = f"ami_fund_sel_{insight_id}_{to_ticker}"
+
+        if total_avail + 0.01 < extra:
+            st.error(
+                f"This increase is too large unless multiple sleeves are reduced. "
+                f"Need **{extra:.1f}%** but only **{total_avail:.1f}%** is available from other sleeves."
+            )
+            continue
+
+        if not options:
+            st.warning(
+                f"No valid funding source for **{extra:.1f}%** to **{to_ticker}**. "
+                "Lower the target weight or reduce another sleeve first."
+            )
+            continue
 
         if widget_key not in st.session_state:
             seed = st.session_state.get(dest_key)
             default_idx = 0
-            if seed == _EQUAL_REALLOC:
-                default_idx = len(options) - 1
+            if seed == _PROPORTIONAL_REALLOC:
+                prop_label = "Proportional distribution across other sleeves"
+                default_idx = options.index(prop_label) if prop_label in options else 0
+            elif seed == _EQUAL_REALLOC:
+                eq_label = "Equal distribution across other sleeves"
+                default_idx = options.index(eq_label) if eq_label in options else 0
             elif seed in options:
                 default_idx = options.index(seed)
             elif seed:
@@ -613,13 +668,28 @@ def _render_increase_funding_controls(
                 if upper in options:
                     default_idx = options.index(upper)
             st.session_state[widget_key] = options[default_idx]
+        elif st.session_state[widget_key] not in options:
+            st.session_state[widget_key] = options[0]
+
+        if extra > total_avail * 0.85 and len([o for o in options if o not in (
+            "Proportional distribution across other sleeves",
+            "Equal distribution across other sleeves",
+        )]) == 0:
+            st.info(
+                f"No single sleeve can fund **{extra:.1f}%** — use proportional or equal distribution."
+            )
 
         choice = st.selectbox(
             f"Take additional **{extra:.1f}%** for **{to_ticker}** from",
             options,
             key=widget_key,
         )
-        from_ticker = _EQUAL_REALLOC if choice == "Equal distribution across other sleeves" else str(choice).upper()
+        if choice == "Proportional distribution across other sleeves":
+            from_ticker = _PROPORTIONAL_REALLOC
+        elif choice == "Equal distribution across other sleeves":
+            from_ticker = _EQUAL_REALLOC
+        else:
+            from_ticker = str(choice).upper()
         st.session_state[dest_key] = from_ticker
         funding.append(
             {
@@ -675,6 +745,8 @@ def _preview_portfolios(
         if net:
             st.markdown("**Net allocation changes**")
             st.markdown(net)
+        if any(w < -0.01 for w in proposed.values()):
+            st.error("Proposed portfolio contains negative weights — adjust funding sources.")
         total = sum(proposed.values())
         if abs(total - 100) > 0.5:
             st.warning(

@@ -278,7 +278,7 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
-        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2g-allocation-inflation1")
+        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2h-allocation-funding-guard1")
         self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)
@@ -327,6 +327,41 @@ class TestAmiSliders(unittest.TestCase):
         base_rows = [("VTI", 40.0), ("BND", 30.0), ("VXUS", 20.0), ("VNQ", 10.0)]
         prop_rows = [("VTI", 30.0), ("BND", 30.0), ("VXUS", 30.0), ("VNQ", 10.0)]
         self.assertIn("-10.0%", format_net_allocation_changes(base_rows, prop_rows))
+
+    def test_single_source_cannot_fund_more_than_sleeve_weight(self) -> None:
+        from investment_ami_allocation import _apply_explicit_reallocation
+
+        baseline = {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0}
+        weights = _apply_explicit_reallocation(
+            baseline,
+            {"VTI": 90.0},
+            [],
+            [{"to_ticker": "VTI", "from_ticker": "BND", "amount_pct": 50.0}],
+        )
+        self.assertGreaterEqual(weights["BND"], 0.0)
+        self.assertAlmostEqual(weights["BND"], 0.0, places=1)
+        self.assertAlmostEqual(weights["VTI"], 90.0, places=1)
+        self.assertGreater(sum(weights.values()), 100.0)
+
+    def test_proportional_funding_never_negative(self) -> None:
+        from investment_ami_allocation import _apply_explicit_reallocation
+        from investment_ami_sliders import _valid_funding_source_options
+
+        baseline = {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0}
+        options, avail = _valid_funding_source_options(baseline, list(baseline), "VTI", 50.0)
+        self.assertNotIn("BND", options)
+        self.assertIn("Proportional distribution across other sleeves", options)
+        self.assertAlmostEqual(avail, 60.0, places=1)
+
+        weights = _apply_explicit_reallocation(
+            baseline,
+            {"VTI": 90.0},
+            [],
+            [{"to_ticker": "VTI", "from_ticker": "__proportional__", "amount_pct": 50.0}],
+        )
+        self.assertTrue(all(w >= -0.01 for w in weights.values()))
+        self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
+        self.assertAlmostEqual(weights["VTI"], 90.0, places=1)
 
 
 if __name__ == "__main__":
