@@ -62,6 +62,19 @@ class TestWorkspacePaths(unittest.TestCase):
                 payload = json.loads(target.read_text(encoding="utf-8"))
                 self.assertEqual(payload["state"]["active_page"], "X")
 
+    def test_scoped_cloud_app_id(self) -> None:
+        from suite_workspace import scoped_cloud_app_id
+
+        self.assertEqual(scoped_cloud_app_id("investment", "daniel"), "investment")
+        self.assertEqual(scoped_cloud_app_id("investment", "ariel"), "investment__ariel")
+        self.assertEqual(scoped_cloud_app_id("baseball", "guest"), "baseball__guest")
+
+    def test_disk_first_when_workspace_file_exists(self) -> None:
+        from suite_workspace import workspace_restore_cloud_first
+
+        self.assertFalse(workspace_restore_cloud_first(has_disk_state=True))
+        self.assertTrue(workspace_restore_cloud_first(has_disk_state=False))
+
     def test_ariel_and_daniel_separate_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp)

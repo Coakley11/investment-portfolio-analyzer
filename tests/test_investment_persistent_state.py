@@ -590,7 +590,7 @@ def test_align_session_holdings_with_cloud_after_incomplete_disk_restore(monkeyp
         "guide_goal_choice": "Generate income",
         "beginner_goal_card": "income",
     }
-    st.session_state["_suite_persist_last_restore_source"] = "disk"
+    st.session_state["_suite_persist_last_restore_source"] = "cloud"
     ips.apply_investment_disk_state(
         st,
         {
@@ -608,6 +608,31 @@ def test_align_session_holdings_with_cloud_after_incomplete_disk_restore(monkeyp
     assert set(st.session_state.holdings_df["Ticker"].tolist()) == {"BND", "VYM"}
     assert st.session_state.get("holdings_restore_source") == "post_restore_cloud_align"
     assert st.session_state.get("default_holdings_applied") is False
+
+
+def test_align_session_holdings_skipped_when_disk_restore_won(monkeypatch):
+    st = _FakeSt()
+    cloud_state = {
+        "holdings_fingerprint": "ARIEL:100.0:Equity",
+        "portfolio_built": True,
+        "holdings_df": [{"Ticker": "ARIEL", "Weight (%)": 100.0, "Asset Type": "Equity"}],
+    }
+    st.session_state["_suite_persist_last_restore_source"] = "disk"
+    ips.apply_investment_disk_state(
+        st,
+        {
+            "holdings_fingerprint": "DANIEL:100.0:Equity",
+            "portfolio_built": True,
+            "holdings_df": [{"Ticker": "DANIEL", "Weight (%)": 100.0, "Asset Type": "Equity"}],
+        },
+    )
+    aligned = ips.align_session_holdings_with_cloud(
+        st,
+        cloud_state,
+        source="post_restore_cloud_align",
+    )
+    assert aligned is False
+    assert st.session_state.holdings_df.iloc[0]["Ticker"] == "DANIEL"
 
 
 def test_finalize_startup_holdings_restore_overrides_init_defaults(monkeypatch):

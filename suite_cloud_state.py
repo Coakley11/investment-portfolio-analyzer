@@ -39,12 +39,7 @@ _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
         "suite_ai_question_id",
     ),
     "baseball": ("suite_resume", "suite_page", "suite_trend_player", "suite_player_a", "suite_player_b"),
-    "investment": (
-        "suite_page",
-        "suite_ami_insight",
-        "suite_holdings_fp",
-        "suite_ai_question_id",
-    ),
+    "investment": ("suite_page",),
     "nba": ("suite_resume", "suite_page", "suite_team"),
     "future_lens": (
         "suite_resume",
@@ -65,6 +60,31 @@ _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
         "suite_ai_context",
     ),
 }
+
+
+def _normalize_resume_app_key(app_key: str) -> str:
+    key = str(app_key or "").strip()
+    if key == "math":
+        return "applied_intelligence"
+    return key
+
+
+# URL params that must preserve return/source page navigation — block cloud workspace restore.
+_WORKSPACE_RESTORE_BLOCKING_QUERY_KEYS: dict[str, tuple[str, ...]] = {
+    "music": (
+        "suite_resume",
+        "suite_page",
+        "suite_ami_insight",
+        "suite_ai_question_id",
+    ),
+}
+
+
+def _workspace_restore_blocking_keys(app_key: str) -> tuple[str, ...]:
+    key = _normalize_resume_app_key(app_key)
+    if key in _WORKSPACE_RESTORE_BLOCKING_QUERY_KEYS:
+        return _WORKSPACE_RESTORE_BLOCKING_QUERY_KEYS[key]
+    return _RESUME_QUERY_KEYS.get(key, ("suite_resume", "suite_page"))
 
 
 def _qp_get(st: Any, name: str) -> str:
@@ -91,36 +111,28 @@ def ami_return_resume_consumed(st: Any, app_key: str) -> bool:
     return bool(st.session_state.get(_ami_resume_consumed_flag(app_key)))
 
 
-def _normalize_resume_app_key(app_key: str) -> str:
-    key = str(app_key or "").strip()
-    if key == "math":
-        return "applied_intelligence"
-    return key
-
-
 def list_active_resume_query_params(st: Any, app_key: str) -> list[str]:
-    """Resume / AMI query param names currently present in the URL."""
+    """Resume / deep-link query param names currently present in the URL."""
     key = _normalize_resume_app_key(app_key)
     params = _RESUME_QUERY_KEYS.get(key, ("suite_resume", "suite_page"))
     return [name for name in params if _qp_get(st, name)]
 
 
-def list_workspace_restore_blocking_params(st: Any, app_key: str) -> list[str]:
-    """URL params that should defer full_session restore (not mere page hints)."""
+def list_workspace_restore_blocking_query_params(st: Any, app_key: str) -> list[str]:
+    """URL params that block cloud workspace restore (return/AMI navigation, not song hydrate)."""
     key = _normalize_resume_app_key(app_key)
-    if key == "investment":
-        return [name for name in _INVESTMENT_WORKSPACE_RESTORE_BLOCKERS if _qp_get(st, name)]
-    return list_active_resume_query_params(st, app_key)
+    params = _workspace_restore_blocking_keys(key)
+    return [name for name in params if _qp_get(st, name)]
 
 
 def _ami_return_url_active(st: Any, app_key: str) -> bool:
-    """True when a live AMI return URL is present (not suite_page navigation hints alone)."""
-    if list_workspace_restore_blocking_params(st, app_key):
+    """True when return/AMI URL params steer page navigation (not song hydrate-only params)."""
+    if list_workspace_restore_blocking_query_params(st, app_key):
         return True
     try:
-        from applied_math_return_insight import insight_return_query_id
+        from applied_math_return_insight import _active_ami_return_query_param_keys, insight_return_query_id
 
-        if insight_return_query_id(st):
+        if insight_return_query_id(st) or _active_ami_return_query_param_keys(st):
             return True
     except ImportError:
         pass
@@ -143,19 +155,6 @@ _STALE_RESUME_SESSION_FLAGS: tuple[str, ...] = (
     "ami_return_force_active_page",
     "ami_return_forced_page",
     "_ami_insight_return_preserve",
-    "_ami_return_context",
-    "_ami_return_page",
-    "_ami_pending_insight",
-    "_ami_hydrated_insight_id",
-    "_suite_holdings_fp",
-    "_suite_holdings_fp_mismatch",
-    "_suite_holdings_fp_confirmed",
-)
-
-# Investment: suite_page / suite_holdings_fp alone are navigation hints — not restore blockers.
-_INVESTMENT_WORKSPACE_RESTORE_BLOCKERS: tuple[str, ...] = (
-    "suite_ami_insight",
-    "suite_ai_question_id",
 )
 
 
@@ -188,65 +187,6 @@ def reconcile_stale_resume_session_flags(st: Any, app_key: str) -> list[str]:
     return cleared
 
 
-def collect_investment_url_query_params(st: Any) -> dict[str, str]:
-    """Snapshot Investment resume/AMI query params currently on the URL."""
-    params = _RESUME_QUERY_KEYS.get("investment", ())
-    out: dict[str, str] = {}
-    for name in params:
-        val = _qp_get(st, name)
-        if val:
-            out[name] = val
-    return out
-
-
-def detect_stale_ami_session_flags(st: Any, app_key: str = "investment") -> list[str]:
-    """Session flags that imply a prior AMI return when the URL is not live."""
-    ss = st.session_state
-    detected: list[str] = []
-    for flag in _STALE_RESUME_SESSION_FLAGS:
-        if flag in ss:
-            detected.append(flag)
-    key = _normalize_resume_app_key(app_key)
-    committed = f"_ami_page_restore_committed_{key}"
-    if committed in ss:
-        detected.append(committed)
-    return detected
-
-
-def purge_stale_investment_ami_restore_blockers(
-    st: Any,
-    app_key: str = "investment",
-) -> dict[str, Any]:
-    """
-    Emergency purge: when URL has no AMI restore blockers, clear deferred-tab flags
-    so ``restore_once`` can run on normal reboot.
-    """
-    blockers = list_workspace_restore_blocking_params(st, app_key)
-    stale_detected = detect_stale_ami_session_flags(st, app_key)
-    cleared: list[str] = []
-    if not blockers:
-        cleared.extend(reconcile_stale_resume_session_flags(st, app_key))
-        ss = st.session_state
-        for extra in (
-            "_suite_resume_insight_hydration_only",
-            f"_ami_page_restore_committed_{_normalize_resume_app_key(app_key)}",
-        ):
-            if extra in ss:
-                ss.pop(extra, None)
-                cleared.append(extra)
-    diag: dict[str, Any] = {
-        "current_url_query_params": collect_investment_url_query_params(st) or None,
-        "has_suite_ami_insight": bool(_qp_get(st, "suite_ami_insight")),
-        "has_suite_ai_question_id": bool(_qp_get(st, "suite_ai_question_id")),
-        "stale_ami_flags_detected": stale_detected or None,
-        "stale_ami_flags_cleared": cleared or None,
-        "restore_blocker_flags": blockers or None,
-    }
-    for key, val in diag.items():
-        st.session_state[key] = val
-    return diag
-
-
 def should_skip_workspace_restore_for_resume(
     st: Any,
     app_key: str,
@@ -254,9 +194,10 @@ def should_skip_workspace_restore_for_resume(
     reconcile_first: bool = True,
 ) -> bool:
     """
-    Skip cloud workspace restore only for live URL AMI blockers (Investment) or resume params.
+    Skip cloud workspace restore only for live URL resume params or URL-driven AMI return.
 
-    Session-only deferred-tab flags must never block durable cloud restore.
+    Session-only ``_suite_resume_launch_*`` / ``_ami_insight_return_preserve`` flags
+    must not block cross-device page sync.
     """
     if ami_return_resume_consumed(st, app_key):
         if reconcile_first:
@@ -264,19 +205,7 @@ def should_skip_workspace_restore_for_resume(
         return False
     if reconcile_first:
         reconcile_stale_resume_session_flags(st, app_key)
-    key = _normalize_resume_app_key(app_key)
-    if key == "investment":
-        if st.session_state.get("_ami_return_allow_cloud_restore"):
-            return False
-        try:
-            from applied_math_return_insight import investment_ami_return_allows_restore_skip
-
-            if not investment_ami_return_allows_restore_skip(st):
-                return False
-        except ImportError:
-            pass
-        return bool(list_workspace_restore_blocking_params(st, app_key))
-    if list_workspace_restore_blocking_params(st, app_key):
+    if list_workspace_restore_blocking_query_params(st, app_key):
         return True
     try:
         from applied_math_return_insight import ami_return_navigation_active
@@ -393,6 +322,15 @@ def probe_cloud_restore_diagnostics(st: Any, app_id: str) -> dict[str, Any]:
     return diag
 
 
+def _cloud_storage_app_id(app_id: str) -> str:
+    try:
+        from suite_workspace import scoped_cloud_app_id
+
+        return scoped_cloud_app_id(app_id)
+    except ImportError:
+        return str(app_id or "").strip()
+
+
 def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
     """Return ``(session_dict, updated_at_iso)`` from cloud, or empty dict."""
     try:
@@ -404,7 +342,7 @@ def load_cloud_full_session(app_id: str) -> tuple[dict[str, Any], str | None]:
     try:
         storage, _ = _import_storage()
 
-        app_key = storage.normalize_app_key(app_id)
+        app_key = storage.normalize_app_key(_cloud_storage_app_id(app_id))
         row = storage.load_current_states().get(app_key) or {}
         if not isinstance(row, dict):
             return {}, None
@@ -437,7 +375,7 @@ def save_cloud_full_session(
         return False
     try:
         storage, _ = _import_storage()
-        app_key = storage.normalize_app_key(app_id)
+        app_key = storage.normalize_app_key(_cloud_storage_app_id(app_id))
         storage.save_current_state(
             app_key,
             page=page or "",
@@ -459,7 +397,7 @@ def clear_cloud_full_session(app_id: str) -> None:
         return
     try:
         storage, _ = _import_storage()
-        app_key = storage.normalize_app_key(app_id)
+        app_key = storage.normalize_app_key(_cloud_storage_app_id(app_id))
         storage.save_current_state(
             app_key,
             page="",

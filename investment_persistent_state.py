@@ -830,10 +830,13 @@ def align_session_holdings_with_cloud(
     """
     if not isinstance(cloud_state, dict) or not cloud_state:
         return False
+    ss = st.session_state
+    pick = str(ss.get("_suite_persist_last_restore_source") or ss.get("_suite_persist_debug_pick_source") or "").strip()
+    if pick and pick != "cloud":
+        ss["_suite_inv_cloud_align_skipped"] = f"restore_source={pick}"
+        return False
     if _session_holdings_aligned_with_cloud(st, cloud_state):
         return False
-    ss = st.session_state
-    pick = str(ss.get("_suite_persist_last_restore_source") or "unknown").strip()
     ss["startup_holdings_fixup_source"] = source
     ss["startup_holdings_fixup_pick"] = pick
     apply_investment_disk_state(st, cloud_state)
@@ -1411,7 +1414,9 @@ def _overlay_cloud_experience_if_authoritative(
     except ImportError:
         cloud_epoch = 0.0
         disk_epoch = 0.0
-    if pick == "disk" and cloud_epoch >= disk_epoch:
+    if pick == "disk":
+        return
+    if cloud_epoch >= disk_epoch:
         st.session_state[EXPERIENCE_KEY] = cloud_exp
         st.session_state[PERSISTED_EXPERIENCE_KEY] = cloud_exp
         st.session_state["_suite_inv_debug_experience_overlay"] = cloud_exp
@@ -1433,6 +1438,12 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     st.session_state["_suite_inv_debug_cloud_experience"] = None
     st.session_state["_suite_inv_debug_disk_experience"] = None
     st.session_state["_suite_inv_debug_disk_file_exists"] = state_file_path(APP_ID).is_file()
+    try:
+        from suite_workspace import workspace_persistence_meta
+
+        st.session_state["_suite_workspace_persist_meta"] = workspace_persistence_meta(APP_ID, st=st)
+    except Exception:
+        st.session_state["_suite_workspace_persist_meta"] = {}
 
     cloud_state: dict[str, Any] | None = None
     cloud_ts: str | None = None
@@ -1469,12 +1480,17 @@ def restore_investment_disk_state_once(st: Any) -> bool:
         apply_state=lambda st_obj, s: apply_investment_disk_state(st_obj, s),
         cloud_resync_needed=investment_cloud_resync_needed,
     )
-    if isinstance(cloud_state, dict) and cloud_state:
+    pick_source = st.session_state.get("_suite_persist_debug_pick_source") or st.session_state.get(
+        "_suite_persist_last_restore_source"
+    )
+    if isinstance(cloud_state, dict) and cloud_state and pick_source == "cloud":
         align_session_holdings_with_cloud(
             st,
             cloud_state,
             source="post_restore_cloud_align",
         )
+    elif isinstance(cloud_state, dict) and cloud_state:
+        st.session_state["_suite_inv_cloud_align_skipped"] = f"post_restore_pick={pick_source}"
     st.session_state["_suite_inv_debug_restore_ran"] = restored
     pick_source = st.session_state.get("_suite_persist_debug_pick_source") or st.session_state.get(
         "_suite_persist_last_restore_source"
@@ -1619,6 +1635,12 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         event["blob_holdings_fingerprint"] = state.get("holdings_fingerprint")
         event["payload_holdings_row_count"] = len(holdings_records)
         event["cloud_blob_has_holdings_df"] = bool(holdings_records)
+        try:
+            from suite_workspace import workspace_persistence_meta
+
+            event.update(workspace_persistence_meta(APP_ID, st=st))
+        except Exception:
+            pass
 
         blob = json.dumps(state, sort_keys=True, default=str)
         fp = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]

@@ -32,6 +32,11 @@ TAB_TRACE_LABELS: tuple[str, ...] = (
 )
 
 WORKSPACE_RESTORE_TRACE_LABELS: tuple[str, ...] = (
+    "active_workspace_id",
+    "local_state_path",
+    "cloud_app_key",
+    "cloud_restore_overwrote_disk",
+    "saved_portfolio_value",
     "restore_attempted",
     "restore_decision",
     "cloud_fetch_tab",
@@ -999,6 +1004,21 @@ def record_restore_trace(st: Any) -> None:
     update_trace(
         st,
         restore_attempted=True,
+        active_workspace_id=(st.session_state.get("_suite_workspace_persist_meta") or {}).get("active_workspace_id")
+        or st.session_state.get("_suite_active_workspace_id"),
+        local_state_path=(st.session_state.get("_suite_workspace_persist_meta") or {}).get("local_state_path"),
+        cloud_app_key=(st.session_state.get("_suite_workspace_persist_meta") or {}).get("cloud_app_key")
+        or (st.session_state.get("_suite_inv_debug_cloud_probe") or {}).get("cloud_app_key"),
+        cloud_restore_overwrote_disk=bool(
+            pick_source == "cloud"
+            and st.session_state.get("_suite_inv_cloud_align_skipped") is None
+            and isinstance(cloud_state, dict)
+            and cloud_state
+        ),
+        saved_portfolio_value=(
+            (cloud_state.get("sidebar_portfolio_value") if pick_source == "cloud" and isinstance(cloud_state, dict) else None)
+            or ss.get("sidebar_portfolio_value")
+        ),
         restore_decision=ss.get("_suite_restore_decision") or pick_source,
         restore_pick_source=pick_source or ss.get("_suite_persist_last_restore_source"),
         cloud_fetch_tab=cloud_tab or ss.get("_suite_cloud_fetch_active_page"),

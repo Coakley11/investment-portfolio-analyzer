@@ -1951,21 +1951,26 @@ def render_applied_math_insight_panel(
             if isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
                 sections = kn.get("analyst_sections")
         if isinstance(sections, dict) and sections:
-            from investment_ami_answer_format import render_analyst_sections_markdown
+            from investment_ami_answer_format import render_investment_page_insight_markdown
 
             exp = str(data.get("experience_mode") or "").lower()
-            body = render_analyst_sections_markdown(sections, beginner="beginner" in exp)
+            body = render_investment_page_insight_markdown(
+                sections,
+                beginner="beginner" in exp,
+                include_summary=True,
+            )
             if body:
                 st.markdown(body)
             else:
                 st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         else:
             st.markdown(f"**Conclusion:** {data.get('conclusion')}")
+        show_details = str(source_app or data.get("source_app") or "").strip().lower() != "investment"
         method = str(data.get("method") or data.get("model_name") or "").strip()
-        if method:
+        if show_details and method:
             st.markdown(f"**Math used:** {method}")
         assumptions = data.get("assumptions") or []
-        if assumptions:
+        if show_details and assumptions:
             st.markdown("**Assumptions:**")
             for a in assumptions[:4]:
                 st.markdown(f"- {a}")
@@ -1973,6 +1978,8 @@ def render_applied_math_insight_panel(
         if conf:
             extra = f" ({data.get('confidence_pct')}%)" if data.get("confidence_pct") else ""
             st.caption(f"Confidence: **{conf}**{extra}")
+        elif not show_details and isinstance(sections, dict) and sections:
+            st.caption("Open full analysis in Applied Intelligence for detailed reasoning and scenarios.")
         url = str(data.get("full_analysis_url") or "").strip()
         c1, c2 = st.columns(2)
         with c1:
