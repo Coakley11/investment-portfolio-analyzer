@@ -4,6 +4,7 @@ Build Continue / resume deep links for suite Streamlit apps.
 Query params (read by suite_resume_launch in each app):
   suite_resume  — resume item key (e.g. song:pick-123, compare:Judge:Soto)
   suite_page    — target page/tab label
+  suite_workspace — active workspace profile (daniel, ariel, guest, test_user)
   suite_pick_key, suite_song, suite_display_key, suite_instrument, suite_section_focus — music shortcuts
   suite_holdings_fp — investment portfolio fingerprint
   suite_player_a, suite_player_b — baseball comparison players
@@ -15,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 from urllib.parse import quote, urlencode
+
+from suite_workspace import append_suite_workspace_param, normalize_workspace_id, resolve_workspace_id
 
 # Mirror app_urls.py — updated when dev URLs change.
 APP_BASE_URLS: dict[str, str] = {
@@ -61,11 +64,26 @@ _INVESTMENT_PAGE_BY_RESUME: tuple[tuple[str, str], ...] = (
 )
 
 _MUSIC_STUDIO_ALIASES: dict[str, str] = {
-    "practice log": "practice",
+    "practice log": "log",
     "practice studio": "practice",
+    "song selection": "picker",
+    "song picker": "picker",
+    "songs": "picker",
     "backing track studio": "backing",
-    "recording analysis": "recording",
+    "backing track": "backing",
+    "recording analysis": "analysis",
+    "recording": "analysis",
+    "upload analysis": "analysis",
+    "upload": "analysis",
+    "multitrack": "multitrack",
+    "creative progression": "custom",
+    "custom progression": "custom",
+    "creative lab": "creative",
+    "karaoke": "backing",
+    "karaoke mode": "backing",
     "chord coach": "practice",
+    "openai": "openai",
+    "openai hub": "openai",
 }
 
 
@@ -82,10 +100,32 @@ def _normalize_music_page(page: str, resume_key: str) -> str:
     raw = str(page or "").strip()
     if not raw:
         return "practice"
-    alias = _MUSIC_STUDIO_ALIASES.get(raw.lower())
+    coach_aliases = {
+        "practice": "practice",
+        "backing track studio": "backing",
+        "backing track": "backing",
+        "creative progression": "custom",
+        "custom progression": "custom",
+        "karaoke": "backing",
+        "karaoke mode": "backing",
+    }
+    low = raw.lower()
+    if low in coach_aliases:
+        return coach_aliases[low]
+    alias = _MUSIC_STUDIO_ALIASES.get(low)
     if alias:
         return alias
-    if raw in {"practice", "backing", "recording", "picker", "custom"}:
+    if raw in {
+        "practice",
+        "backing",
+        "picker",
+        "custom",
+        "creative",
+        "multitrack",
+        "analysis",
+        "log",
+        "openai",
+    }:
         return raw
     return "practice"
 
@@ -276,11 +316,15 @@ def build_resume_action_url(
             params["suite_ai_context"] = ctx[:400]
 
     if not params:
-        return f"{base}/"
+        return append_suite_workspace_param(f"{base}/", workspace_id=resolve_workspace_id())
     ami_insight = str(m.get("ami_insight") or "").strip()
     if ami_insight:
         params["suite_ami_insight"] = ami_insight[:40]
-    return f"{base}/?{urlencode(params, quote_via=quote)}"
+    ws = str(m.get("workspace_id") or "").strip()
+    if not ws:
+        ws = resolve_workspace_id()
+    params["suite_workspace"] = normalize_workspace_id(ws)
+    return append_suite_workspace_param(f"{base}/?{urlencode(params, quote_via=quote)}", workspace_id=ws)
 
 
 def resume_metrics_from_item_key(app: str, item_key: str, *, subtitle: str = "") -> tuple[str, dict[str, Any]]:
@@ -370,6 +414,15 @@ def resume_metrics_from_item_key(app: str, item_key: str, *, subtitle: str = "")
                         if isinstance(parsed, dict):
                             metrics["context"] = parsed
                             metrics["context_json"] = ctx_part
+                            try:
+                                from suite_analytical_question import normalize_source_app_id
+
+                                metrics["source_app"] = normalize_source_app_id(
+                                    str(metrics.get("source_app") or ""),
+                                    parsed,
+                                )
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                 elif subtitle.startswith("Question:"):

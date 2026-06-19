@@ -129,6 +129,13 @@ except Exception:
     pass
 
 try:
+    from suite_workspace import init_suite_workspace
+
+    init_suite_workspace(st)
+except Exception:
+    pass
+
+try:
     from applied_math_return_insight import hydrate_investment_ami_return_state, insight_return_query_id
 
     if insight_return_query_id(st) or str(st.query_params.get("suite_ai_question_id") or "").strip():

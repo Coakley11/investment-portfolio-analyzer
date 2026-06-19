@@ -47,14 +47,22 @@ def finalize_suite_resume_launch(
         _finalize_music_resume(st, song_picker_catalog, song_library)
 
     st.session_state[done_flag] = True
+    st.session_state.pop(launch_flag, None)
     return True
 
 
 def apply_suite_resume_launch(st: Any, app_key: str) -> bool:
     """
-    Map ?suite_resume= & ?suite_page= into session state (once per session).
-    Returns True when query params were applied.
+    Initialize workspace profile and map ?suite_resume= & ?suite_page= into session state.
+    Returns True when resume query params were applied.
     """
+    try:
+        from suite_workspace import init_suite_workspace
+
+        init_suite_workspace(st)
+    except ImportError:
+        pass
+
     flag = f"_suite_resume_launch_{app_key}"
     if st.session_state.get(flag):
         return False
@@ -71,6 +79,7 @@ def apply_suite_resume_launch(st: Any, app_key: str) -> bool:
 
     if key == "music":
         _apply_music(st, resume, page)
+        _apply_ami_insight(st, "music")
     elif key == "baseball":
         _apply_baseball(st, resume, page)
         _apply_ami_insight(st, "baseball")
@@ -169,7 +178,7 @@ def _apply_music(st: Any, resume: str, page: str) -> None:
     elif target.lower() == "backing track studio":
         target = "backing"
     try:
-        from studio_page_state import navigate_studio_page
+        from studio_nav_history import navigate_studio_page
 
         navigate_studio_page(st.session_state, target)
     except Exception:
@@ -209,7 +218,15 @@ def _apply_baseball(st: Any, resume: str, page: str) -> None:
             st.session_state["trend_force_multi_labels"] = labels[:3]
             st.session_state["trend_players_multi"] = labels[:3]
     if target_page:
-        st.session_state["_navigate_to_page"] = target_page
+        try:
+            from applied_math_return_insight import _should_apply_ami_return_navigation
+
+            if _should_apply_ami_return_navigation(st, "baseball", target_page):
+                st.session_state["_navigate_to_page"] = target_page
+                st.session_state["ami_return_forced_page"] = target_page
+                st.session_state["active_page_source"] = "suite_resume_launch"
+        except Exception:
+            st.session_state["_navigate_to_page"] = target_page
 
 
 def _apply_nba(st: Any, resume: str, page: str) -> None:
