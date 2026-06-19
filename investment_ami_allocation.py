@@ -381,8 +381,69 @@ def _format_rebalance_candidates(recs: list[SleeveRecommendation]) -> str:
     return "\n\n".join(blocks)
 
 
+def _portfolio_rows_differ(
+    base_rows: list[tuple[str, float]],
+    adj_rows: list[tuple[str, float]],
+    *,
+    tolerance: float = 0.05,
+) -> bool:
+    base = {t: p for t, p in base_rows}
+    adj = {t: p for t, p in adj_rows}
+    tickers = set(base) | set(adj)
+    return any(abs(base.get(t, 0.0) - adj.get(t, 0.0)) > tolerance for t in tickers)
+
+
+def _diversification_summary(profile: dict[str, float | int | str], n_rows: int) -> str:
+    sleeves = int(profile.get("n_holdings") or n_rows or 0)
+    equity = float(profile.get("equity") or 0) * 100
+    bonds = float(profile.get("bonds") or 0) * 100
+    return f"**{sleeves}** sleeves; equity **{equity:.0f}%** / bonds **{bonds:.0f}%**"
+
+
+def _format_before_after_comparison_table(
+    base_rows: list[tuple[str, float]],
+    adj_rows: list[tuple[str, float]],
+    ctx: dict[str, Any],
+) -> str:
+    if not _portfolio_rows_differ(base_rows, adj_rows):
+        return ""
+    base_ctx = _ctx_with_adjusted_weights(ctx, base_rows)
+    adj_ctx = _ctx_with_adjusted_weights(ctx, adj_rows)
+    base_exp = resolve_tech_exposure(base_ctx)
+    adj_exp = resolve_tech_exposure(adj_ctx)
+    base_prof = allocation_profile_from_ctx(base_ctx)
+    adj_prof = allocation_profile_from_ctx(adj_ctx)
+    base_rec = recession_portfolio_impacts(base_prof)
+    adj_rec = recession_portfolio_impacts(adj_prof)
+    base_top_ticker, base_top = base_rows[0] if base_rows else ("—", 0.0)
+    adj_top_ticker, adj_top = adj_rows[0] if adj_rows else ("—", 0.0)
+    base_top3 = sum(p for _, p in base_rows[:3])
+    adj_top3 = sum(p for _, p in adj_rows[:3])
+    top_label = base_top_ticker if base_top_ticker == adj_top_ticker else f"{base_top_ticker} / {adj_top_ticker}"
+    return "\n".join(
+        [
+            "| Metric | Current | Proposed |",
+            "| --- | --- | --- |",
+            (
+                f"| Tech exposure | **{float(base_exp.get('total_pct') or 0):.1f}%** "
+                f"| **{float(adj_exp.get('total_pct') or 0):.1f}%** |"
+            ),
+            f"| Top sleeve ({top_label}) | **{base_top:.1f}%** | **{adj_top:.1f}%** |",
+            f"| Top-3 concentration | **{base_top3:.1f}%** | **{adj_top3:.1f}%** |",
+            (
+                f"| Recession sensitivity (illustrative) | **{base_rec['net_return_shift_pp']:+.1f} pp** "
+                f"| **{adj_rec['net_return_shift_pp']:+.1f} pp** |"
+            ),
+            (
+                f"| Diversification (sleeves / equity-bond) | {_diversification_summary(base_prof, len(base_rows))} "
+                f"| {_diversification_summary(adj_prof, len(adj_rows))} |"
+            ),
+        ]
+    )
+
+
 def _simulated_impact_summary(base_rows: list[tuple[str, float]], adj_rows: list[tuple[str, float]], ctx: dict) -> str:
-    if base_rows == adj_rows:
+    if not _portfolio_rows_differ(base_rows, adj_rows):
         return ""
     base_ctx = _ctx_with_adjusted_weights(ctx, base_rows)
     adj_ctx = _ctx_with_adjusted_weights(ctx, adj_rows)
@@ -537,10 +598,12 @@ def allocation_recommendation_answer(
 
     sim = _simulated_impact_summary(base_rows, rows, ctx)
     what_if = sim if sim and not beginner else ""
+    portfolio_changed = _portfolio_rows_differ(base_rows, rows)
+    comparison_table = _format_before_after_comparison_table(base_rows, rows, ctx) if portfolio_changed and not beginner else ""
 
     base_exposure = resolve_tech_exposure(_ctx_with_adjusted_weights(ctx, base_rows))
     calc_chain = format_tech_exposure_calculation_chain(base_exposure)
-    if rows != base_rows and not beginner:
+    if portfolio_changed and not beginner:
         adj_exposure = resolve_tech_exposure(ctx_adj)
         adj_chain = format_tech_exposure_calculation_chain(adj_exposure)
         if adj_chain:
@@ -564,7 +627,8 @@ def allocation_recommendation_answer(
         direct_answer=direct,
         portfolio_analyst_view=analyst,
         current_portfolio=format_portfolio_weights_table(base_rows),
-        proposed_portfolio=format_portfolio_weights_table(rows) if rows != base_rows else "",
+        proposed_portfolio=format_portfolio_weights_table(rows) if portfolio_changed else "",
+        portfolio_comparison=comparison_table,
         current_strengths="\n".join(f"- {s}" for s in strengths),
         current_weaknesses="\n".join(f"- {w}" for w in weaknesses) if weaknesses else "- No major structural flags at current weights.",
         potential_increases=increases,

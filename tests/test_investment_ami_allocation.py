@@ -211,6 +211,36 @@ class TestAmiSliders(unittest.TestCase):
         self.assertTrue(body)
         self.assertNotIn("Add holdings with weights first", body)
 
+    def test_allocation_scenario_includes_before_after_table(self) -> None:
+        from investment_ami_allocation import allocation_recommendation_answer
+        from investment_ami_answer_format import render_ami_deep_dive_markdown
+
+        ctx = {
+            "experience_mode": "Advanced Mode",
+            "current_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+            "scenario_params": {
+                "risk_tolerance": "Moderate",
+                "allocation_overrides": {"VTI": 35.0},
+                "allocation_reallocations": [
+                    {"from_ticker": "VTI", "amount_pct": 5.0, "to_ticker": "VXUS"},
+                ],
+            },
+        }
+        result = allocation_recommendation_answer(ctx, beginner=False, question="Should I rebalance?")
+        sections = result.analyst_sections
+        proposed = sections.get("proposed_portfolio", "")
+        self.assertIn("VTI", proposed)
+        self.assertIn("35.0%", proposed)
+        self.assertIn("25.0%", proposed)
+        comparison = sections.get("portfolio_comparison", "")
+        self.assertIn("Tech exposure", comparison)
+        self.assertIn("Top-3 concentration", comparison)
+        self.assertIn("Recession sensitivity", comparison)
+        self.assertIn("Diversification", comparison)
+        md = render_ami_deep_dive_markdown(sections, beginner=False)
+        self.assertIn("Proposed Portfolio", md)
+        self.assertIn("Before vs After", md)
+
 
 if __name__ == "__main__":
     unittest.main()
