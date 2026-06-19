@@ -8,7 +8,11 @@ from typing import Any, Literal
 
 import etf_holdings as eh
 from investment_ami_answer_format import build_allocation_sections
-from investment_ami_exposure import resolve_tech_exposure
+from investment_ami_exposure import (
+    format_portfolio_weights_table,
+    format_tech_exposure_calculation_chain,
+    resolve_tech_exposure,
+)
 from investment_ami_instant_solver import InvestmentSolverResult, _parse_weight_pct, _portfolio_label, _weight_rows
 from investment_ami_macro import allocation_profile_from_ctx, recession_portfolio_impacts
 
@@ -60,8 +64,43 @@ def _tech_threshold(risk_tolerance: str) -> float:
     return 35.0
 
 
+def _apply_explicit_reallocation(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    reallocations: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Option B: user-chosen destination for freed weight (no silent renormalize)."""
+    weights = {str(k).upper(): float(v) for k, v in baseline.items()}
+    for ticker, new_w in overrides.items():
+        sym = str(ticker or "").strip().upper()
+        if sym and new_w >= 0:
+            weights[sym] = float(new_w)
+    for item in reallocations:
+        if not isinstance(item, dict):
+            continue
+        from_t = str(item.get("from_ticker") or "").strip().upper()
+        try:
+            amount = float(item.get("amount_pct") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        to_t = str(item.get("to_ticker") or "").strip()
+        if not from_t or amount <= 0:
+            continue
+        if to_t == "__equal__":
+            others = [t for t in weights if t != from_t]
+            share = amount / len(others) if others else 0.0
+            for sym in others:
+                weights[sym] = weights.get(sym, 0.0) + share
+        elif to_t:
+            weights[to_t.upper()] = weights.get(to_t.upper(), 0.0) + amount
+    total = sum(weights.values())
+    if total > 0 and abs(total - 100.0) > 0.25:
+        weights = {t: w / total * 100.0 for t, w in weights.items()}
+    return weights
+
+
 def _rows_with_allocation_overrides(ctx: dict[str, Any]) -> list[tuple[str, float]]:
-    """Apply scenario allocation overrides and renormalize to 100%."""
+    """Apply scenario allocation overrides with explicit reallocation (Option B)."""
     rows = _weight_rows(ctx)
     if not rows:
         return rows
@@ -69,16 +108,21 @@ def _rows_with_allocation_overrides(ctx: dict[str, Any]) -> list[tuple[str, floa
     overrides = params.get("allocation_overrides")
     if not isinstance(overrides, dict) or not overrides:
         return rows
-    weights = {t: p for t, p in rows}
+    baseline = {t: p for t, p in rows}
+    parsed_overrides: dict[str, float] = {}
     for ticker, raw in overrides.items():
         sym = str(ticker or "").strip().upper()
         pct = _parse_weight_pct(raw)
         if sym and pct is not None and pct >= 0:
-            weights[sym] = pct
-    total = sum(weights.values())
-    if total <= 0:
-        return rows
-    norm = [(t, w / total * 100.0) for t, w in weights.items()]
+            parsed_overrides[sym] = pct
+    realloc_raw = params.get("allocation_reallocations")
+    reallocations: list[dict[str, Any]] = []
+    if isinstance(realloc_raw, list):
+        reallocations = [r for r in realloc_raw if isinstance(r, dict)]
+    elif isinstance(params.get("allocation_reallocate"), dict):
+        reallocations = [params["allocation_reallocate"]]
+    weights = _apply_explicit_reallocation(baseline, parsed_overrides, reallocations)
+    norm = [(t, w) for t, w in weights.items() if w > 0]
     return sorted(norm, key=lambda x: x[1], reverse=True)
 
 
@@ -288,6 +332,55 @@ def _format_action_lines(recs: list[SleeveRecommendation], verbs: set[str]) -> s
     return "\n".join(lines) if lines else ""
 
 
+def _rebalance_verdict(
+    *,
+    focus: str,
+    recs: list[SleeveRecommendation],
+    drift: Any,
+    top3: float,
+    risk_tolerance: str,
+) -> str:
+    if focus != "rebalance":
+        return ""
+    rebalance_recs = [r for r in recs if r.action in ("rebalance", "reduce")]
+    max_drift = 0.0
+    if isinstance(drift, dict) and drift:
+        for raw in drift.values():
+            text = str(raw).replace("pp", "").replace("+", "").replace("%", "").strip()
+            try:
+                max_drift = max(max_drift, abs(float(text)))
+            except (TypeError, ValueError):
+                continue
+    if max_drift >= 5.0 or len(rebalance_recs) >= 2:
+        lead = "**Yes, rebalance recommended**"
+        why = (
+            f"Largest sleeve drift is about **{max_drift:.1f} pp** vs targets"
+            if max_drift >= 3
+            else "Multiple sleeves are outside your tolerance band"
+        )
+    elif max_drift >= 2.5 or rebalance_recs:
+        lead = "**Moderate rebalance may be appropriate**"
+        why = "Drift is noticeable but not extreme — review before trading."
+    else:
+        lead = "**No significant rebalance needed**"
+        why = f"Current weights are within typical bands for **{risk_tolerance}** tolerance (top-3 **{top3:.1f}%**)."
+    return f"{lead} — {why}"
+
+
+def _format_rebalance_candidates(recs: list[SleeveRecommendation]) -> str:
+    blocks: list[str] = []
+    for label, verbs in (
+        ("Reduce", {"reduce", "rebalance"}),
+        ("Increase", {"increase"}),
+        ("Hold", {"hold"}),
+        ("Monitor", {"monitor"}),
+    ):
+        lines = _format_action_lines(recs, verbs)
+        if lines:
+            blocks.append(f"**{label}**\n{lines}")
+    return "\n\n".join(blocks)
+
+
 def _simulated_impact_summary(base_rows: list[tuple[str, float]], adj_rows: list[tuple[str, float]], ctx: dict) -> str:
     if base_rows == adj_rows:
         return ""
@@ -322,6 +415,7 @@ def allocation_recommendation_answer(
     risk_tolerance = _risk_tolerance_from_ctx(ctx)
     focus = _parse_recommendation_focus(question)
     mentioned = _tickers_mentioned_in_question(question)
+    drift = ctx.get("rebalance_drift")
 
     if not rows:
         direct = "Add holdings with weights first — I need your portfolio mix before I can recommend changes."
@@ -363,7 +457,16 @@ def allocation_recommendation_answer(
     hold_recs = [r for r in recs if r.action == "hold"]
     monitor_recs = [r for r in recs if r.action == "monitor"]
 
-    if focus == "reasonable":
+    rebalance_lead = _rebalance_verdict(
+        focus=focus,
+        recs=recs,
+        drift=drift,
+        top3=top3,
+        risk_tolerance=risk_tolerance,
+    )
+    if rebalance_lead:
+        direct = rebalance_lead
+    elif focus == "reasonable":
         if weaknesses:
             verdict = "reasonable with caveats" if len(weaknesses) <= 2 else "aggressive for your stated tolerance"
         else:
@@ -435,17 +538,45 @@ def allocation_recommendation_answer(
     sim = _simulated_impact_summary(base_rows, rows, ctx)
     what_if = sim if sim and not beginner else ""
 
+    base_exposure = resolve_tech_exposure(_ctx_with_adjusted_weights(ctx, base_rows))
+    calc_chain = format_tech_exposure_calculation_chain(base_exposure)
+    if rows != base_rows and not beginner:
+        adj_exposure = resolve_tech_exposure(ctx_adj)
+        adj_chain = format_tech_exposure_calculation_chain(adj_exposure)
+        if adj_chain:
+            calc_chain = (calc_chain + "\n\n**Proposed mix**\n" + adj_chain).strip()
+
+    methodology = (
+        "Signals: concentration bands (top sleeve / top-3), technology exposure (direct + embedded), "
+        "defensive sleeve presence, health rebalance drift, and macro recession sensitivity. "
+        "Allocation slider scenarios use **explicit reallocation** — freed weight goes only where you designate."
+    )
+    assumptions_text = (
+        f"Risk tolerance: **{risk_tolerance}**. "
+        "ETF technology weights use fund sector data or static fallbacks. "
+        "Illustrative impacts only — not trade instructions."
+    )
+    rebalance_block = _format_rebalance_candidates(recs) if focus == "rebalance" or any(
+        r.action == "rebalance" for r in recs
+    ) else ""
+
     sections = build_allocation_sections(
         direct_answer=direct,
         portfolio_analyst_view=analyst,
+        current_portfolio=format_portfolio_weights_table(base_rows),
+        proposed_portfolio=format_portfolio_weights_table(rows) if rows != base_rows else "",
         current_strengths="\n".join(f"- {s}" for s in strengths),
         current_weaknesses="\n".join(f"- {w}" for w in weaknesses) if weaknesses else "- No major structural flags at current weights.",
         potential_increases=increases,
         potential_reductions=reductions,
+        rebalance_candidates=rebalance_block,
         tradeoffs=tradeoffs,
         what_if_scenarios=what_if,
         recommended_actions=" ".join(actions[:3]),
         risk_notes=_allocation_risk_notes(beginner),
+        calculation_chains=calc_chain,
+        methodology=methodology if not beginner else "",
+        assumptions=assumptions_text,
         beginner=beginner,
     )
 

@@ -48,6 +48,34 @@ _BEGINNER_ALLOCATION_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("risk_notes", "Important Notes"),
 )
 
+AMI_DEEP_DIVE_EXTRA_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("current_portfolio", "Current Portfolio"),
+    ("proposed_portfolio", "Proposed Portfolio"),
+    ("rebalance_candidates", "Rebalance Candidates"),
+    ("calculation_chains", "Calculation Chains"),
+    ("methodology", "Methodology"),
+    ("assumptions", "Assumptions"),
+)
+
+AMI_ALLOCATION_DEEP_DIVE_ORDER: tuple[tuple[str, str], ...] = (
+    ("direct_answer", "Direct Answer"),
+    ("portfolio_analyst_view", "Portfolio Analyst View"),
+    ("current_portfolio", "Current Portfolio"),
+    ("proposed_portfolio", "Proposed Portfolio"),
+    ("current_strengths", "Current Strengths"),
+    ("current_weaknesses", "Current Weaknesses"),
+    ("potential_increases", "Potential Increases"),
+    ("potential_reductions", "Potential Reductions"),
+    ("rebalance_candidates", "Rebalance Candidates"),
+    ("tradeoffs", "Tradeoffs"),
+    ("what_if_scenarios", "What-If Scenarios"),
+    ("recommended_actions", "Recommended Actions"),
+    ("calculation_chains", "Calculation Chains"),
+    ("methodology", "Methodology"),
+    ("assumptions", "Assumptions"),
+    ("risk_notes", "Risk Notes"),
+)
+
 
 def build_analyst_sections(
     *,
@@ -87,6 +115,12 @@ def build_allocation_sections(
     what_if_scenarios: str = "",
     recommended_actions: str = "",
     risk_notes: str = "",
+    current_portfolio: str = "",
+    proposed_portfolio: str = "",
+    rebalance_candidates: str = "",
+    calculation_chains: str = "",
+    methodology: str = "",
+    assumptions: str = "",
     beginner: bool = False,
 ) -> dict[str, str]:
     raw = {
@@ -100,14 +134,30 @@ def build_allocation_sections(
         "what_if_scenarios": str(what_if_scenarios or "").strip(),
         "recommended_actions": str(recommended_actions or "").strip(),
         "risk_notes": str(risk_notes or "").strip(),
+        "current_portfolio": str(current_portfolio or "").strip(),
+        "proposed_portfolio": str(proposed_portfolio or "").strip(),
+        "rebalance_candidates": str(rebalance_candidates or "").strip(),
+        "calculation_chains": str(calculation_chains or "").strip(),
+        "methodology": str(methodology or "").strip(),
+        "assumptions": str(assumptions or "").strip(),
     }
     if beginner:
         raw.pop("what_if_scenarios", None)
+        raw.pop("calculation_chains", None)
+        raw.pop("methodology", None)
     return {k: v for k, v in raw.items() if v}
 
 
-def _section_order_for(sections: dict[str, Any], *, beginner: bool) -> tuple[tuple[str, str], ...]:
-    if "current_strengths" in sections or "potential_increases" in sections:
+def _section_order_for(
+    sections: dict[str, Any],
+    *,
+    beginner: bool,
+    mode: str = "deep_dive",
+) -> tuple[tuple[str, str], ...]:
+    is_allocation = "current_strengths" in sections or "potential_increases" in sections
+    if mode == "deep_dive" and is_allocation and not beginner:
+        return AMI_ALLOCATION_DEEP_DIVE_ORDER
+    if is_allocation:
         return _BEGINNER_ALLOCATION_SECTION_ORDER if beginner else ALLOCATION_SECTION_ORDER
     return _BEGINNER_SECTION_ORDER if beginner else SECTION_ORDER
 
@@ -176,7 +226,7 @@ def _render_sections_markdown(
         return ""
     if mode == "investment_page":
         return render_investment_page_insight_markdown(sections, beginner=beginner)
-    order = _section_order_for(sections, beginner=beginner)
+    order = _section_order_for(sections, beginner=beginner, mode=mode)
     parts: list[str] = []
     for key, label in order:
         body = str(sections.get(key) or "").strip()

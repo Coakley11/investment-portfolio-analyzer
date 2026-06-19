@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+_EQUAL_REALLOC = "__equal__"
+
 _SLIDER_PROBLEM_TYPES = frozenset(
     {
         "scenario_stress",
@@ -69,6 +71,12 @@ def _holdings_from_insight(insight_data: dict[str, Any]) -> list[tuple[str, floa
     return []
 
 
+def _portfolio_label(rows: list[tuple[str, float]]) -> str:
+    if not rows:
+        return "(empty)"
+    return ", ".join(f"**{t}** {p:.1f}%" for t, p in rows)
+
+
 def slider_specs_for(problem_type: str, insight_data: dict[str, Any]) -> list[SliderSpec]:
     pt = str(problem_type or "").strip()
     if pt == "scenario_stress":
@@ -121,7 +129,7 @@ def slider_specs_for(problem_type: str, insight_data: dict[str, Any]) -> list[Sl
         ]
         tickers = _holdings_from_insight(insight_data)
         seen: set[str] = set()
-        for ticker, wt in tickers[:3]:
+        for ticker, wt in tickers[:4]:
             if ticker in seen:
                 continue
             seen.add(ticker)
@@ -134,7 +142,7 @@ def slider_specs_for(problem_type: str, insight_data: dict[str, Any]) -> list[Sl
                     minimum=0,
                     maximum=60,
                     step=5,
-                    help_text=f"Test a new target weight for {ticker}; other sleeves renormalize to 100%.",
+                    help_text=f"Set a new target for {ticker}. If you reduce this sleeve, choose where the freed weight goes.",
                 )
             )
         return specs
@@ -162,12 +170,27 @@ def parse_recession_severity(params: dict[str, Any]) -> float:
     return _severity_scale(raw)
 
 
+def _detect_weight_reductions(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+) -> list[tuple[str, float]]:
+    """Return (ticker, freed_pct) for each sleeve reduced vs baseline."""
+    cuts: list[tuple[str, float]] = []
+    for ticker, new_w in overrides.items():
+        sym = str(ticker).upper()
+        base = baseline.get(sym, 0.0)
+        if new_w < base - 0.01:
+            cuts.append((sym, base - new_w))
+    return cuts
+
+
 def build_scenario_params_from_sliders(
     specs: list[SliderSpec],
     values: dict[str, Any],
     *,
     problem_type: str,
     weight_baseline: dict[str, float] | None = None,
+    reallocations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {}
     overrides: dict[str, float] = {}
@@ -189,6 +212,8 @@ def build_scenario_params_from_sliders(
         params[spec.key] = val
     if overrides:
         params["allocation_overrides"] = overrides
+    if reallocations:
+        params["allocation_reallocations"] = list(reallocations)
     if problem_type == "macro_recession":
         params["recession_severity_scale"] = parse_recession_severity(params)
     return params
@@ -229,53 +254,212 @@ def _read_slider_value(st: Any, spec: SliderSpec, current: Any) -> Any:
     )
 
 
+def _insight_context_from_data(insight_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+    kn = insight_data.get("key_numbers") if isinstance(insight_data.get("key_numbers"), dict) else {}
+    ctx: dict[str, Any] = {
+        "experience_mode": insight_data.get("experience_mode") or "Advanced Mode",
+        "scenario_params": dict(params),
+        "objective": kn.get("objective") or insight_data.get("objective") or "",
+        "rebalance_drift": kn.get("rebalance_drift") or insight_data.get("rebalance_drift"),
+    }
+    weights = kn.get("holdings_weights")
+    if isinstance(weights, dict) and weights:
+        ctx["current_weights"] = {str(t).upper(): f"{float(w):.1f}%" for t, w in weights.items()}
+    return ctx
+
+
+def _refresh_via_lightweight_solver(
+    insight_data: dict[str, Any],
+    params: dict[str, Any],
+) -> Any | None:
+    """Re-solve on AMI or Investment without full applied_math_context when possible."""
+    question = str(insight_data.get("question") or "").strip()
+    problem_type = resolve_problem_type(insight_data)
+    ctx = _insight_context_from_data(insight_data, params)
+    beginner = "beginner" in str(ctx.get("experience_mode") or "").lower()
+
+    if problem_type in ("allocation_recommendation", "rebalance_allocation"):
+        from investment_ami_allocation import allocation_recommendation_answer
+
+        return allocation_recommendation_answer(ctx, beginner=beginner, question=question)
+
+    phase2 = {
+        "scenario_stress",
+        "macro_rates",
+        "macro_recession",
+        "portfolio_concentration",
+        "portfolio_risk",
+        "etf_overlap",
+        "diversification",
+        "valuation",
+    }
+    if problem_type in phase2:
+        from investment_ami_phase2_solvers import solve_phase2_or_structured
+
+        pair = solve_phase2_or_structured(problem_type, ctx, beginner=beginner, question=question)
+        if pair:
+            return pair[1]
+    return None
+
+
 def refresh_investment_insight_from_params(st: Any, insight_data: dict[str, Any], params: dict[str, Any]) -> bool:
     """Re-run local solver with updated scenario params and restage insight."""
     question = str(insight_data.get("question") or "").strip()
     if not question:
         return False
-    try:
-        from applied_math_context import build_investment_applied_math_context
-        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
-        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID, solve_instant_investment_insight
-    except ImportError:
-        return False
 
     ss = st.session_state
     ss["_ami_scenario_params"] = dict(params)
     page = str(insight_data.get("source_page") or ss.get("_ami_last_submit_source_page") or "").strip()
-    ctx = build_investment_applied_math_context(page, ss)
-    merged = dict(ctx.get("scenario_params") or {})
-    merged.update(params)
-    ctx["scenario_params"] = merged
+    result = None
+    route = None
 
-    solved = solve_instant_investment_insight(question, ctx)
-    if not solved:
+    try:
+        from applied_math_context import build_investment_applied_math_context
+        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID, solve_instant_investment_insight
+
+        ctx = build_investment_applied_math_context(page, ss)
+        merged = dict(ctx.get("scenario_params") or {})
+        merged.update(params)
+        ctx["scenario_params"] = merged
+        solved = solve_instant_investment_insight(question, ctx)
+        if solved:
+            route, result = solved
+            new_insight = build_return_insight_payload(
+                question=question,
+                source_app="investment",
+                source_page=page,
+                question_id=str(insight_data.get("question_id") or ""),
+                route=route,
+                result=result,
+                full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
+                context=ctx,
+                resume_key=str(insight_data.get("resume_key") or ""),
+            )
+            payload = new_insight.to_dict()
+            payload["problem_type"] = str(getattr(route, "problem_type", "") or "")
+            payload["experience_mode"] = str(ctx.get("experience_mode") or insight_data.get("experience_mode") or "")
+            stage_pending_insight(st, payload)
+            ss["_ami_investment_instant_canonical"] = {
+                **dict(ss.get("_ami_investment_instant_canonical") or {}),
+                "problem_type": payload["problem_type"],
+                "solver_build_id": INVESTMENT_AMI_BUILD_ID,
+                "analyst_sections": payload.get("analyst_sections"),
+                "conclusion": payload.get("conclusion"),
+            }
+            return True
+    except ImportError:
+        pass
+
+    result = _refresh_via_lightweight_solver(insight_data, params)
+    if result is None:
         return False
-    route, result = solved
-    new_insight = build_return_insight_payload(
-        question=question,
-        source_app="investment",
-        source_page=page,
-        question_id=str(insight_data.get("question_id") or ""),
-        route=route,
-        result=result,
-        full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
-        context=ctx,
-        resume_key=str(insight_data.get("resume_key") or ""),
-    )
-    payload = new_insight.to_dict()
-    payload["problem_type"] = str(getattr(route, "problem_type", "") or "")
-    payload["experience_mode"] = str(ctx.get("experience_mode") or insight_data.get("experience_mode") or "")
-    stage_pending_insight(st, payload)
-    ss["_ami_investment_instant_canonical"] = {
-        **dict(ss.get("_ami_investment_instant_canonical") or {}),
-        "problem_type": payload["problem_type"],
-        "solver_build_id": INVESTMENT_AMI_BUILD_ID,
-        "analyst_sections": payload.get("analyst_sections"),
-        "conclusion": payload.get("conclusion"),
-    }
-    return True
+
+    try:
+        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
+
+        new_insight = build_return_insight_payload(
+            question=question,
+            source_app="investment",
+            source_page=page,
+            question_id=str(insight_data.get("question_id") or ""),
+            route=None,
+            result=result,
+            full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
+            context=_insight_context_from_data(insight_data, params),
+            resume_key=str(insight_data.get("resume_key") or ""),
+        )
+        payload = new_insight.to_dict()
+        payload["problem_type"] = str(getattr(result, "problem_type", "") or resolve_problem_type(insight_data))
+        payload["experience_mode"] = str(insight_data.get("experience_mode") or "")
+        stage_pending_insight(st, payload)
+        ss["_ami_investment_instant_canonical"] = {
+            **dict(ss.get("_ami_investment_instant_canonical") or {}),
+            "problem_type": payload["problem_type"],
+            "solver_build_id": INVESTMENT_AMI_BUILD_ID,
+            "analyst_sections": payload.get("analyst_sections"),
+            "conclusion": payload.get("conclusion"),
+        }
+        return True
+    except ImportError:
+        return False
+
+
+def _render_reallocation_controls(
+    st: Any,
+    *,
+    insight_id: str,
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    all_tickers: list[str],
+) -> list[dict[str, Any]]:
+    """Option B: ask where freed allocation goes when a sleeve is reduced."""
+    cuts = _detect_weight_reductions(baseline, overrides)
+    if not cuts:
+        return []
+
+    reallocations: list[dict[str, Any]] = []
+    st.markdown("**Where should freed allocation go?**")
+    st.caption("Portfolios must total 100%. Choose an explicit destination for each reduction.")
+
+    for from_ticker, freed in cuts:
+        options = [t for t in all_tickers if t != from_ticker]
+        options.append("Equal distribution across remaining sleeves")
+        key = f"ami_realloc_{insight_id}_{from_ticker}"
+        default_idx = 0
+        prior = st.session_state.get(key)
+        if prior == _EQUAL_REALLOC:
+            default_idx = len(options) - 1
+        elif prior in options:
+            default_idx = options.index(prior)
+
+        choice = st.selectbox(
+            f"Allocate freed **{freed:.1f}%** from **{from_ticker}** to",
+            options,
+            index=default_idx,
+            key=key,
+        )
+        to_ticker = _EQUAL_REALLOC if choice == "Equal distribution across remaining sleeves" else str(choice).upper()
+        st.session_state[key] = to_ticker
+        reallocations.append(
+            {
+                "from_ticker": from_ticker,
+                "amount_pct": round(freed, 2),
+                "to_ticker": to_ticker,
+            }
+        )
+    return reallocations
+
+
+def _preview_portfolios(
+    st: Any,
+    baseline: dict[str, float],
+    params: dict[str, Any],
+) -> None:
+    try:
+        from investment_ami_allocation import _apply_explicit_reallocation
+
+        overrides = params.get("allocation_overrides") if isinstance(params.get("allocation_overrides"), dict) else {}
+        realloc = params.get("allocation_reallocations") if isinstance(params.get("allocation_reallocations"), list) else []
+        proposed = _apply_explicit_reallocation(baseline, overrides, realloc)
+        base_rows = sorted(baseline.items(), key=lambda x: x[1], reverse=True)
+        prop_rows = sorted(proposed.items(), key=lambda x: x[1], reverse=True)
+        if prop_rows == base_rows:
+            return
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Current portfolio**")
+            st.markdown(_portfolio_label(base_rows))
+        with c2:
+            st.markdown("**Proposed portfolio**")
+            st.markdown(_portfolio_label(prop_rows))
+        total = sum(proposed.values())
+        if abs(total - 100) > 0.5:
+            st.warning(f"Proposed weights sum to **{total:.1f}%** — pick destinations for all reductions.")
+    except ImportError:
+        pass
 
 
 def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> bool:
@@ -297,7 +481,7 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     st.markdown("**Explore assumptions**")
     exp = str(insight_data.get("experience_mode") or "").lower()
     if "beginner" not in exp:
-        st.caption("Adjust an assumption to see how the analysis and recommendations change.")
+        st.caption("Adjust assumptions to explore how recommendations and portfolio metrics change.")
 
     new_values: dict[str, Any] = {}
     cols = st.columns(min(len(specs), 2))
@@ -306,12 +490,38 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
             new_values[spec.key] = _read_slider_value(st, spec, params.get(spec.key, spec.default))
 
     weight_baseline = {t: w for t, w in _holdings_from_insight(insight_data)}
+    alloc_specs = [s for s in specs if s.key.startswith("alloc_")]
+    overrides: dict[str, float] = {}
+    for spec in alloc_specs:
+        val = new_values.get(spec.key, spec.default)
+        ticker = spec.key.replace("alloc_", "", 1).upper()
+        try:
+            wt = float(val)
+        except (TypeError, ValueError):
+            continue
+        base = weight_baseline.get(ticker)
+        if base is not None and abs(wt - base) >= 0.01:
+            overrides[ticker] = wt
+
+    reallocations: list[dict[str, Any]] = []
+    if overrides and problem_type in ("allocation_recommendation", "rebalance_allocation"):
+        reallocations = _render_reallocation_controls(
+            st,
+            insight_id=insight_id,
+            baseline=weight_baseline,
+            overrides=overrides,
+            all_tickers=list(weight_baseline.keys()),
+        )
+
     merged = build_scenario_params_from_sliders(
         specs,
         new_values,
         problem_type=problem_type,
         weight_baseline=weight_baseline,
+        reallocations=reallocations,
     )
+    _preview_portfolios(st, weight_baseline, merged)
+
     prev = st.session_state.get(applied_key)
     if prev is None:
         st.session_state[applied_key] = dict(merged)

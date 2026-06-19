@@ -145,6 +145,39 @@ def build_tech_exposure_from_weights(weights: dict[str, Any] | list[tuple[str, f
     }
 
 
+def format_tech_exposure_calculation_chain(exposure: dict[str, Any]) -> str:
+    """Render portfolio tech exposure as explicit weight × fund-tech% derivations."""
+    if not isinstance(exposure, dict):
+        return ""
+    lines: list[str] = []
+    for h in exposure.get("direct_holdings") or []:
+        if not isinstance(h, dict):
+            continue
+        sym = str(h.get("ticker") or "").upper()
+        pw = float(h.get("portfolio_weight_pct") or 0)
+        if sym and pw > 0:
+            lines.append(f"**{sym}** {pw:.1f}% × 100% (direct tech sleeve) = **{pw:.1f}%**")
+    for h in exposure.get("embedded_holdings") or []:
+        if not isinstance(h, dict):
+            continue
+        sym = str(h.get("ticker") or "").upper()
+        pw = float(h.get("portfolio_weight_pct") or 0)
+        tw = float(h.get("tech_weight_in_fund_pct") or 0)
+        contrib = float(h.get("contribution_pct") or 0)
+        if sym and pw > 0 and tw > 0:
+            lines.append(f"**{sym}** {pw:.1f}% × {tw:.1f}% = **{contrib:.1f}%**")
+    total = float(exposure.get("total_pct") or 0)
+    if lines:
+        lines.append(f"**Total technology exposure ≈ {total:.1f}%**")
+    return "\n".join(lines)
+
+
+def format_portfolio_weights_table(rows: list[tuple[str, float]]) -> str:
+    if not rows:
+        return "- (no holdings)"
+    return "\n".join(f"- **{t}** {p:.1f}%" for t, p in rows)
+
+
 def resolve_tech_exposure(ctx: dict[str, Any]) -> dict[str, Any]:
     """Use precomputed context or derive from current_weights / holdings."""
     pre = ctx.get("tech_exposure")

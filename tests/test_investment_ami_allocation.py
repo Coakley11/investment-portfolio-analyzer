@@ -82,6 +82,55 @@ class TestAllocationRecommendation(unittest.TestCase):
         )
         self.assertNotEqual(conservative.short_answer, moderate.short_answer)
 
+    def test_allocation_override_with_explicit_reallocation(self) -> None:
+        from investment_ami_allocation import _rows_with_allocation_overrides
+
+        ctx = {
+            "current_weights": {"VTI": "40.0%", "BND": "30.0%", "VXUS": "20.0%", "VNQ": "10.0%"},
+            "scenario_params": {
+                "allocation_overrides": {"BND": 10.0},
+                "allocation_reallocations": [
+                    {"from_ticker": "BND", "amount_pct": 20.0, "to_ticker": "VTI"},
+                ],
+            },
+        }
+        rows = _rows_with_allocation_overrides(ctx)
+        weights = {t: p for t, p in rows}
+        self.assertAlmostEqual(weights.get("BND", 0), 10.0, places=1)
+        self.assertAlmostEqual(weights.get("VTI", 0), 60.0, places=1)
+
+    def test_rebalance_question_leads_with_verdict(self) -> None:
+        result = allocation_recommendation_answer(
+            self._CTX,
+            beginner=False,
+            question="Should I rebalance?",
+        )
+        direct = result.analyst_sections.get("direct_answer", "")
+        self.assertTrue(
+            any(
+                phrase in direct
+                for phrase in (
+                    "rebalance recommended",
+                    "rebalance may be appropriate",
+                    "No significant rebalance needed",
+                )
+            )
+        )
+        self.assertIn("rebalance_candidates", result.analyst_sections)
+
+    def test_ami_deep_dive_includes_calculation_chains(self) -> None:
+        from investment_ami_answer_format import render_ami_deep_dive_markdown
+
+        result = allocation_recommendation_answer(
+            self._CTX,
+            beginner=False,
+            question="What should I change in my portfolio?",
+        )
+        md = render_ami_deep_dive_markdown(result.analyst_sections, beginner=False)
+        self.assertIn("Calculation Chains", md)
+        self.assertIn("Methodology", md)
+        self.assertIn("Current Portfolio", md)
+
 
 class TestAmiSliders(unittest.TestCase):
     def test_scenario_stress_slider_spec(self) -> None:
