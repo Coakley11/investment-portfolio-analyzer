@@ -8,7 +8,13 @@ from investment_ami_allocation import allocation_recommendation_answer
 from investment_ami_answer_format import render_analyst_sections_markdown
 from investment_ami_context import detect_investment_send_intent
 from investment_ami_instant_solver import solve_instant_investment_insight
-from investment_ami_sliders import build_scenario_params_from_sliders, slider_specs_for
+from investment_ami_sliders import (
+    build_scenario_params_from_sliders,
+    refresh_investment_insight_from_params,
+    slider_specs_for,
+)
+from applied_math_return_insight import SESSION_PENDING_KEY
+from investment_ami_answer_format import render_investment_page_insight_markdown
 
 
 class TestAllocationRecommendation(unittest.TestCase):
@@ -161,6 +167,49 @@ class TestAmiSliders(unittest.TestCase):
             weight_baseline={"QQQ": 20.0, "VTI": 50.0},
         )
         self.assertEqual(params2.get("allocation_overrides", {}).get("QQQ"), 10.0)
+
+    def test_slider_refresh_preserves_insight_and_recomputes(self) -> None:
+        class _SS(dict):
+            def get(self, key, default=None):
+                return dict.get(self, key, default)
+
+        insight = {
+            "question": "Should I rebalance?",
+            "question_id": "q-rebalance-slider",
+            "insight_id": "stable-insight-id-99",
+            "experience_mode": "Advanced Mode",
+            "problem_type": "allocation_recommendation",
+            "source_app": "investment",
+            "source_page": "portfolio",
+            "conclusion": "**Moderate rebalance may be appropriate**",
+            "analyst_sections": {"direct_answer": "initial"},
+            "key_numbers": {
+                "holdings_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+                "problem_type": "allocation_recommendation",
+            },
+        }
+        params = {
+            "risk_tolerance": "Moderate",
+            "allocation_overrides": {"VTI": 35.0},
+            "allocation_reallocations": [
+                {"from_ticker": "VTI", "amount_pct": 5.0, "to_ticker": "VXUS"},
+            ],
+        }
+        ss = _SS({"_ami_scenario_params": {}, "_ami_last_submit_source_page": "portfolio"})
+        st = type("ST", (), {"session_state": ss})()
+        ok = refresh_investment_insight_from_params(st, insight, params)
+        pending = ss.get(SESSION_PENDING_KEY) or {}
+        self.assertTrue(ok)
+        self.assertEqual(pending.get("insight_id"), "stable-insight-id-99")
+        self.assertTrue(pending.get("conclusion"))
+        sections = pending.get("analyst_sections") or {}
+        self.assertTrue(sections.get("direct_answer"))
+        self.assertIn("proposed_portfolio", sections)
+        self.assertIn("VXUS", sections.get("proposed_portfolio", ""))
+        self.assertIn("35.0%", sections.get("proposed_portfolio", ""))
+        body = render_investment_page_insight_markdown(sections, beginner=False)
+        self.assertTrue(body)
+        self.assertNotIn("Add holdings with weights first", body)
 
 
 if __name__ == "__main__":

@@ -254,6 +254,14 @@ def _read_slider_value(st: Any, spec: SliderSpec, current: Any) -> Any:
     )
 
 
+def _stable_slider_scope_id(insight_data: dict[str, Any]) -> str:
+    """Stable id for slider widget keys — must not change when conclusion text updates."""
+    qid = str(insight_data.get("question_id") or "").strip()
+    if qid:
+        return qid
+    return str(insight_data.get("insight_id") or "pending").strip() or "pending"
+
+
 def _insight_context_from_data(insight_data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     kn = insight_data.get("key_numbers") if isinstance(insight_data.get("key_numbers"), dict) else {}
     ctx: dict[str, Any] = {
@@ -264,7 +272,7 @@ def _insight_context_from_data(insight_data: dict[str, Any], params: dict[str, A
     }
     weights = kn.get("holdings_weights")
     if isinstance(weights, dict) and weights:
-        ctx["current_weights"] = {str(t).upper(): f"{float(w):.1f}%" for t, w in weights.items()}
+        ctx["current_weights"] = {str(t).upper(): float(w) for t, w in weights.items()}
     return ctx
 
 
@@ -302,6 +310,72 @@ def _refresh_via_lightweight_solver(
     return None
 
 
+def _stage_refreshed_insight(
+    st: Any,
+    *,
+    insight_data: dict[str, Any],
+    params: dict[str, Any],
+    result: Any,
+    page: str,
+    route: Any | None = None,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Build payload from a solve result and restage without losing slider identity."""
+    try:
+        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
+    except ImportError:
+        return False
+
+    question = str(insight_data.get("question") or "").strip()
+    preserved_iid = str(insight_data.get("insight_id") or "").strip()
+    preserved_qid = str(insight_data.get("question_id") or "").strip()
+    new_insight = build_return_insight_payload(
+        question=question,
+        source_app="investment",
+        source_page=page,
+        question_id=preserved_qid,
+        route=route,
+        result=result,
+        full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
+        context=context or _insight_context_from_data(insight_data, params),
+        resume_key=str(insight_data.get("resume_key") or ""),
+    )
+    payload = new_insight.to_dict()
+    if preserved_iid:
+        payload["insight_id"] = preserved_iid
+    if preserved_qid:
+        payload["question_id"] = preserved_qid
+    payload["problem_type"] = str(
+        getattr(route, "problem_type", "") or getattr(result, "problem_type", "") or resolve_problem_type(insight_data)
+    )
+    payload["experience_mode"] = str(
+        (context or {}).get("experience_mode") or insight_data.get("experience_mode") or ""
+    )
+    prior_kn = insight_data.get("key_numbers") if isinstance(insight_data.get("key_numbers"), dict) else {}
+    kn = dict(payload.get("key_numbers") or {})
+    if isinstance(prior_kn, dict):
+        if isinstance(prior_kn.get("holdings_weights"), dict):
+            kn["holdings_weights"] = dict(prior_kn["holdings_weights"])
+        for field in ("objective", "rebalance_drift", "problem_type"):
+            if prior_kn.get(field) not in (None, "") and field not in kn:
+                kn[field] = prior_kn[field]
+    payload["key_numbers"] = kn
+
+    ss = st.session_state
+    stage_pending_insight(st, payload)
+    ss["_ami_scenario_params"] = dict(params)
+    ss["_ami_force_insight_render"] = True
+    ss["_ami_investment_instant_canonical"] = {
+        **dict(ss.get("_ami_investment_instant_canonical") or {}),
+        "problem_type": payload["problem_type"],
+        "solver_build_id": INVESTMENT_AMI_BUILD_ID,
+        "analyst_sections": payload.get("analyst_sections"),
+        "conclusion": payload.get("conclusion"),
+    }
+    return bool(payload.get("conclusion"))
+
+
 def refresh_investment_insight_from_params(st: Any, insight_data: dict[str, Any], params: dict[str, Any]) -> bool:
     """Re-run local solver with updated scenario params and restage insight."""
     question = str(insight_data.get("question") or "").strip()
@@ -309,82 +383,56 @@ def refresh_investment_insight_from_params(st: Any, insight_data: dict[str, Any]
         return False
 
     ss = st.session_state
-    ss["_ami_scenario_params"] = dict(params)
     page = str(insight_data.get("source_page") or ss.get("_ami_last_submit_source_page") or "").strip()
-    result = None
-    route = None
+    problem_type = resolve_problem_type(insight_data)
+
+    if problem_type in ("allocation_recommendation", "rebalance_allocation"):
+        result = _refresh_via_lightweight_solver(insight_data, params)
+        if result is not None:
+            return _stage_refreshed_insight(
+                st,
+                insight_data=insight_data,
+                params=params,
+                result=result,
+                page=page,
+            )
 
     try:
         from applied_math_context import build_investment_applied_math_context
-        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
-        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID, solve_instant_investment_insight
+        from investment_ami_instant_solver import solve_instant_investment_insight
 
         ctx = build_investment_applied_math_context(page, ss)
         merged = dict(ctx.get("scenario_params") or {})
         merged.update(params)
         ctx["scenario_params"] = merged
+        insight_ctx = _insight_context_from_data(insight_data, params)
+        if insight_ctx.get("current_weights"):
+            ctx["current_weights"] = dict(insight_ctx["current_weights"])
         solved = solve_instant_investment_insight(question, ctx)
         if solved:
             route, result = solved
-            new_insight = build_return_insight_payload(
-                question=question,
-                source_app="investment",
-                source_page=page,
-                question_id=str(insight_data.get("question_id") or ""),
-                route=route,
+            return _stage_refreshed_insight(
+                st,
+                insight_data=insight_data,
+                params=params,
                 result=result,
-                full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
+                page=page,
+                route=route,
                 context=ctx,
-                resume_key=str(insight_data.get("resume_key") or ""),
             )
-            payload = new_insight.to_dict()
-            payload["problem_type"] = str(getattr(route, "problem_type", "") or "")
-            payload["experience_mode"] = str(ctx.get("experience_mode") or insight_data.get("experience_mode") or "")
-            stage_pending_insight(st, payload)
-            ss["_ami_investment_instant_canonical"] = {
-                **dict(ss.get("_ami_investment_instant_canonical") or {}),
-                "problem_type": payload["problem_type"],
-                "solver_build_id": INVESTMENT_AMI_BUILD_ID,
-                "analyst_sections": payload.get("analyst_sections"),
-                "conclusion": payload.get("conclusion"),
-            }
-            return True
     except ImportError:
         pass
 
     result = _refresh_via_lightweight_solver(insight_data, params)
     if result is None:
         return False
-
-    try:
-        from applied_math_return_insight import build_return_insight_payload, stage_pending_insight
-        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
-
-        new_insight = build_return_insight_payload(
-            question=question,
-            source_app="investment",
-            source_page=page,
-            question_id=str(insight_data.get("question_id") or ""),
-            route=None,
-            result=result,
-            full_analysis_url=str(insight_data.get("full_analysis_url") or ""),
-            context=_insight_context_from_data(insight_data, params),
-            resume_key=str(insight_data.get("resume_key") or ""),
-        )
-        payload = new_insight.to_dict()
-        payload["problem_type"] = str(getattr(result, "problem_type", "") or resolve_problem_type(insight_data))
-        payload["experience_mode"] = str(insight_data.get("experience_mode") or "")
-        stage_pending_insight(st, payload)
-        ss["_ami_investment_instant_canonical"] = {
-            **dict(ss.get("_ami_investment_instant_canonical") or {}),
-            "problem_type": payload["problem_type"],
-            "solver_build_id": INVESTMENT_AMI_BUILD_ID,
-            "analyst_sections": payload.get("analyst_sections"),
-            "conclusion": payload.get("conclusion"),
-        }
-        return True
-    except ImportError:
-        return False
+    return _stage_refreshed_insight(
+        st,
+        insight_data=insight_data,
+        params=params,
+        result=result,
+        page=page,
+    )
 
 
 def _render_reallocation_controls(
@@ -474,9 +522,9 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     if not specs:
         return False
 
-    insight_id = str(insight_data.get("insight_id") or "pending")
+    slider_scope_id = _stable_slider_scope_id(insight_data)
     params: dict[str, Any] = dict(st.session_state.get("_ami_scenario_params") or {})
-    applied_key = f"_ami_slider_applied_{insight_id}"
+    applied_key = f"_ami_slider_applied_{slider_scope_id}"
 
     st.markdown("**Explore assumptions**")
     exp = str(insight_data.get("experience_mode") or "").lower()
@@ -507,7 +555,7 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     if overrides and problem_type in ("allocation_recommendation", "rebalance_allocation"):
         reallocations = _render_reallocation_controls(
             st,
-            insight_id=insight_id,
+            insight_id=slider_scope_id,
             baseline=weight_baseline,
             overrides=overrides,
             all_tickers=list(weight_baseline.keys()),
@@ -528,7 +576,8 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
         st.session_state["_ami_scenario_params"] = {**dict(st.session_state.get("_ami_scenario_params") or {}), **merged}
         return False
     if merged != prev:
-        st.session_state[applied_key] = dict(merged)
         if refresh_investment_insight_from_params(st, insight_data, merged):
+            st.session_state[applied_key] = dict(merged)
             return True
+        st.warning("Could not refresh the analysis with those allocation assumptions. Showing the last result.")
     return False
