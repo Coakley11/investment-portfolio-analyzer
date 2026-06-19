@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from investment_workflow import (
     developer_access_available,
@@ -101,7 +102,18 @@ class TestInvalidateWorkflow(unittest.TestCase):
     def test_developer_access_query_param(self) -> None:
         st = _FakeSt()
         st.query_params = {"dev": "1"}
-        self.assertTrue(developer_access_available(st))
+        with patch("suite_workspace.is_developer_workspace", return_value=True):
+            self.assertTrue(developer_access_available(st))
+        with patch("suite_workspace.is_developer_workspace", return_value=False):
+            self.assertFalse(developer_access_available(st))
+
+    def test_developer_diagnostics_requires_can_show(self) -> None:
+        st = _FakeSt()
+        st.query_params = {"dev": "1"}
+        with patch("suite_workspace.can_show_developer_tools", return_value=True):
+            self.assertTrue(developer_diagnostics_enabled(st))
+        with patch("suite_workspace.can_show_developer_tools", return_value=False):
+            self.assertFalse(developer_diagnostics_enabled(st))
 
 
 if __name__ == "__main__":

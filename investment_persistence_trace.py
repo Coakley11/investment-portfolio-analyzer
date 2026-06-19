@@ -348,24 +348,11 @@ def pr1_baseline_trace_active(*, persistence_ok: bool | None = None) -> bool:
 
 
 def investment_trace_enabled(st: Any, *, persistence_ok: bool | None = None) -> bool:
-    """True when PR1 baseline, sidebar checkbox, or developer diagnostics are active."""
+    """True when developer-mode persistence traces should render."""
     try:
-        from suite_workspace import is_developer_workspace
+        from suite_workspace import can_show_developer_tools
 
-        if not is_developer_workspace(st=st):
-            return False
-    except ImportError:
-        pass
-    if pr1_baseline_trace_active(persistence_ok=persistence_ok):
-        return True
-    if st.session_state.get(PR1_DIAG_CHECKBOX_KEY):
-        return True
-    if st.session_state.get("investment_show_dev_diagnostics"):
-        return True
-    try:
-        from investment_workflow import developer_diagnostics_enabled
-
-        return bool(developer_diagnostics_enabled(st))
+        return can_show_developer_tools(st=st)
     except ImportError:
         return False
 
@@ -1454,7 +1441,14 @@ def _render_trace_section(st: Any, title: str, labels: tuple[str, ...], rows: di
 
 
 def render_pr1_verification_sidebar(st: Any, *, persistence_ok: bool | None = None) -> None:
-    """Temporary PR1 deploy/gate diagnostics — always visible until baseline traces captured."""
+    """Temporary PR1 deploy/gate diagnostics (Daniel + developer mode only)."""
+    try:
+        from suite_workspace import can_show_developer_tools
+
+        if not can_show_developer_tools(st=st):
+            return
+    except ImportError:
+        return
     ss = st.session_state
     dev_raw = _raw_dev_query_param(st)
     dev_access = None
@@ -1524,11 +1518,11 @@ def render_main_startup_diagnostics(st: Any, *, persistence_ok: bool | None = No
     safe_err = str(ss.get("_suite_inv_safe_startup_error") or "").strip()
     dev = False
     try:
-        from investment_workflow import developer_access_available
+        from suite_workspace import can_show_developer_tools
 
-        dev = developer_access_available(st)
+        dev = can_show_developer_tools(st)
     except ImportError:
-        dev = bool(ss.get("_pr1_diagnostics_enabled") or ss.get("investment_pr1_diagnostics_enabled"))
+        dev = False
 
     if import_err:
         st.error(f"Persistence failed to load. Some saved settings may be unavailable. `{import_err}`")

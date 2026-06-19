@@ -1031,8 +1031,6 @@ def render_sidebar() -> dict:
         bump_pr1_render_pass(st)
     except Exception:
         pass
-    # Temporary: proves this streamlit_app.py revision reached Streamlit (no import deps).
-    st.sidebar.caption("**Deploy marker:** `investment-durable-restore-v13` · branch `dev`")
     if _PERSISTENCE_OK:
         try:
             from investment_persistence_trace import render_persistence_trace_sidebar
@@ -1054,9 +1052,9 @@ def render_sidebar() -> dict:
         pass
     _inv_dev = False
     try:
-        from investment_workflow import developer_access_available
+        from suite_workspace import can_show_developer_tools
 
-        _inv_dev = developer_access_available(st)
+        _inv_dev = can_show_developer_tools(st=st)
     except Exception:
         pass
     try:

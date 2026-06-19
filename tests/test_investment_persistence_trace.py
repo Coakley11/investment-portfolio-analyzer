@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -20,10 +20,20 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
 
         st = self._st()
         st.query_params = {"dev": "1"}
-        init_developer_mode_from_query(st)
+        with patch("suite_workspace.is_developer_workspace", return_value=True):
+            init_developer_mode_from_query(st)
         self.assertTrue(st.session_state.get("investment_show_dev_diagnostics"))
 
-    def test_pr1_baseline_trace_active_without_dev_query(self) -> None:
+    def test_init_developer_mode_blocked_for_ariel(self) -> None:
+        from investment_persistence_trace import init_developer_mode_from_query
+
+        st = self._st()
+        st.query_params = {"dev": "1"}
+        with patch("suite_workspace.is_developer_workspace", return_value=False):
+            init_developer_mode_from_query(st)
+        self.assertFalse(st.session_state.get("investment_show_dev_diagnostics"))
+
+    def test_trace_requires_developer_mode_not_baseline_only(self) -> None:
         from investment_persistence_trace import (
             INVESTMENT_PERSIST_DEPLOY_VERSION,
             investment_trace_enabled,
@@ -31,10 +41,9 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         )
 
         self.assertTrue(pr1_baseline_trace_active(persistence_ok=True))
-        self.assertFalse(pr1_baseline_trace_active(persistence_ok=False))
         st = self._st()
-        self.assertTrue(investment_trace_enabled(st, persistence_ok=True))
-        self.assertFalse(investment_trace_enabled(st, persistence_ok=False))
+        with patch("suite_workspace.is_developer_workspace", return_value=True):
+            self.assertFalse(investment_trace_enabled(st, persistence_ok=True))
         self.assertEqual(INVESTMENT_PERSIST_DEPLOY_VERSION, "investment-durable-restore-v13")
 
     def test_render_pass_dedupes_trace_ui(self) -> None:
@@ -47,11 +56,13 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         st.sidebar = MagicMock()
         st.sidebar.expander = MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=st), __exit__=MagicMock()))
         bump_pr1_render_pass(st)
-        render_persistence_trace_sidebar(st, persistence_ok=True)
+        with patch("suite_workspace.can_show_developer_tools", return_value=True):
+            render_persistence_trace_sidebar(st, persistence_ok=True)
         self.assertEqual(st.session_state.get("_pr1_trace_ui_render_pass"), 1)
         self.assertTrue(st.session_state.get("_pr1_trace_sidebar_called"))
         self.assertTrue(st.session_state.get("_pr1_snapshot_full_trace_ran"))
-        render_persistence_trace_sidebar(st, persistence_ok=True)
+        with patch("suite_workspace.can_show_developer_tools", return_value=True):
+            render_persistence_trace_sidebar(st, persistence_ok=True)
         self.assertEqual(st.session_state.get("_pr1_trace_ui_render_pass"), 1)
 
     def test_pr1_checkbox_enables_trace_when_baseline_inactive(self) -> None:
@@ -62,9 +73,9 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         )
 
         st = self._st({PR1_DIAG_CHECKBOX_KEY: True})
-        # Simulate a future deploy marker by disabling baseline via persistence_ok=False.
         self.assertFalse(pr1_baseline_trace_active(persistence_ok=False))
-        self.assertTrue(investment_trace_enabled(st, persistence_ok=False))
+        with patch("suite_workspace.can_show_developer_tools", return_value=True):
+            self.assertTrue(investment_trace_enabled(st, persistence_ok=False))
 
     def test_snapshot_tab_trace_uses_label_strings(self) -> None:
         from investment_persistence_trace import snapshot_tab_trace

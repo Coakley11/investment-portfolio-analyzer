@@ -546,55 +546,23 @@ def _dev_query_param_enabled(st_obj: Any | None = None) -> bool:
 
 
 def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
-    """True when dev diagnostics should render (default off for normal users)."""
+    """True when dev diagnostics should render (Daniel workspace + dev mode on)."""
     try:
-        from suite_workspace import is_developer_workspace
+        from suite_workspace import can_show_developer_tools
 
-        if not is_developer_workspace(st=st_obj):
-            return False
+        return can_show_developer_tools(st=st_obj)
     except ImportError:
-        pass
-    ss = _sess(st_obj)
-    if ss.get(DEV_DIAG_SESSION_KEY):
-        return True
-    try:
-        if str(st.secrets.get("investment_dev_mode", "")).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            return True
-    except Exception:
-        pass
-    return _dev_query_param_enabled(st_obj)
+        return False
 
 
 def developer_access_available(st_obj: Any | None = None) -> bool:
-    """True when the Developer sidebar section should be visible (admin entry points)."""
+    """True when the Developer sidebar section should be visible (Daniel workspace only)."""
     try:
         from suite_workspace import is_developer_workspace
 
-        if not is_developer_workspace(st=st_obj):
-            return False
+        return is_developer_workspace(st=st_obj)
     except ImportError:
-        pass
-    if developer_diagnostics_enabled(st_obj):
-        return True
-    ss = _sess(st_obj)
-    if ss.get(DEV_DIAG_SESSION_KEY):
-        return True
-    try:
-        if str(st.secrets.get("investment_dev_mode", "")).strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            return True
-    except Exception:
-        pass
-    return _dev_query_param_enabled(st_obj)
+        return False
 
 
 def render_developer_sidebar_controls(st_obj: Any | None = None) -> None:
