@@ -455,22 +455,30 @@ def _render_reallocation_controls(
     for from_ticker, freed in cuts:
         options = [t for t in all_tickers if t != from_ticker]
         options.append("Equal distribution across remaining sleeves")
-        key = f"ami_realloc_{insight_id}_{from_ticker}"
-        default_idx = 0
-        prior = st.session_state.get(key)
-        if prior == _EQUAL_REALLOC:
-            default_idx = len(options) - 1
-        elif prior in options:
-            default_idx = options.index(prior)
+        dest_key = f"ami_realloc_dest_{insight_id}_{from_ticker}"
+        widget_key = f"ami_realloc_sel_{insight_id}_{from_ticker}"
+        legacy_key = f"ami_realloc_{insight_id}_{from_ticker}"
+
+        if widget_key not in st.session_state:
+            seed = st.session_state.get(dest_key) or st.session_state.get(legacy_key)
+            default_idx = 0
+            if seed == _EQUAL_REALLOC:
+                default_idx = len(options) - 1
+            elif seed in options:
+                default_idx = options.index(seed)
+            elif seed:
+                upper = str(seed).upper()
+                if upper in options:
+                    default_idx = options.index(upper)
+            st.session_state[widget_key] = options[default_idx]
 
         choice = st.selectbox(
             f"Allocate freed **{freed:.1f}%** from **{from_ticker}** to",
             options,
-            index=default_idx,
-            key=key,
+            key=widget_key,
         )
         to_ticker = _EQUAL_REALLOC if choice == "Equal distribution across remaining sleeves" else str(choice).upper()
-        st.session_state[key] = to_ticker
+        st.session_state[dest_key] = to_ticker
         reallocations.append(
             {
                 "from_ticker": from_ticker,
