@@ -98,9 +98,35 @@ def get_active_workspace_id(st: Any | None = None) -> str:
 
 def set_active_workspace_id(st: Any, workspace_id: str) -> str:
     ws = normalize_workspace_id(workspace_id)
+    prev_raw = st.session_state.get(SESSION_KEY)
+    prev = normalize_workspace_id(str(prev_raw)) if prev_raw not in (None, "") else None
     st.session_state[SESSION_KEY] = ws
     persist_active_workspace_id(ws)
+    if prev is not None and prev != ws:
+        _on_active_workspace_changed(st)
     return ws
+
+
+def _on_active_workspace_changed(st: Any) -> None:
+    """Drop in-memory AMI caches so the new profile loads its own cloud/disk state."""
+    ss = st.session_state
+    for key in list(ss.keys()):
+        sk = str(key)
+        if sk.startswith(("_ami_", "_suite_ai_", "_cc_ai_")):
+            ss.pop(key, None)
+    ss.pop("_suite_disk_state_restored::applied_intelligence", None)
+    try:
+        from applied_intelligence_persistent_state import restore_applied_intelligence_disk_state_once
+
+        restore_applied_intelligence_disk_state_once(st)
+    except Exception:
+        pass
+    try:
+        from applied_math_return_insight import sync_dismissed_insights_from_cloud
+
+        sync_dismissed_insights_from_cloud(st, "applied_intelligence")
+    except Exception:
+        pass
 
 
 def _qp_get(st: Any, name: str) -> str:

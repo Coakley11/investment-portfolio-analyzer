@@ -29,6 +29,7 @@ _TABLE_STATE = "suite_app_current_state"
 _TABLE_RESUME = "suite_resume_items"
 _TABLE_SAVED = "suite_saved_items"
 _TABLE_SETTINGS = "suite_user_settings"
+_SAVED_ITEM_CONFLICT_COLS = "user_id,app,item_type,item_key"
 _FULL_SESSION_KEY = "full_session"
 
 
@@ -102,6 +103,26 @@ def normalize_app_key(app: str) -> str:
     if cleaned == "math":
         return "applied_intelligence"
     return cleaned
+
+
+def _scoped_resume_app(app: str) -> str:
+    """Workspace-scoped cloud key for resume rows (Daniel keeps legacy unscoped)."""
+    app_key = normalize_app_key(app)
+    try:
+        from suite_workspace import scoped_cloud_app_id
+
+        return scoped_cloud_app_id(app_key)
+    except Exception:
+        return app_key
+
+
+def _workspace_resume_app_keys() -> list[str]:
+    try:
+        from suite_workspace import scoped_cloud_app_id
+
+        return [scoped_cloud_app_id(app) for app in sorted(ACTIVE_APP_KEYS)]
+    except Exception:
+        return [normalize_app_key(app) for app in sorted(ACTIVE_APP_KEYS)]
 
 
 def _scoped_user_id() -> str:
@@ -230,12 +251,13 @@ def upsert_resume_item(
     subtitle: str = "",
     action_url: str = "",
 ) -> None:
-    app_key = normalize_app_key(app)
+    logical_app = normalize_app_key(app)
+    app_key = _scoped_resume_app(app)
     key = str(item_key or "").strip()
     title_clean = str(title or "").strip()
     if not app_key or not key or not title_clean:
         return
-    if app_key not in ACTIVE_APP_KEYS:
+    if logical_app not in ACTIVE_APP_KEYS:
         return
     body: dict[str, Any] = {
         "app": app_key,
@@ -258,7 +280,7 @@ def upsert_resume_item(
 
 
 def invalidate_resume_item(app: str, item_key: str) -> None:
-    app_key = normalize_app_key(app)
+    app_key = _scoped_resume_app(app)
     key = str(item_key or "").strip()
     if not app_key or not key:
         return
@@ -275,7 +297,7 @@ def invalidate_resume_item(app: str, item_key: str) -> None:
 
 
 def invalidate_app_resume_items(app: str) -> None:
-    app_key = normalize_app_key(app)
+    app_key = _scoped_resume_app(app)
     if not app_key:
         return
     params: dict[str, str] = {"app": f"eq.{app_key}"}
@@ -361,17 +383,22 @@ def load_current_states() -> dict[str, dict[str, Any]]:
     return out
 
 
-def load_active_resume_items(limit: int = 8) -> list[dict[str, Any]]:
+def load_active_resume_items(limit: int = 8, *, app: str | None = None) -> list[dict[str, Any]]:
+    app_keys = [_scoped_resume_app(app)] if app else _workspace_resume_app_keys()
+    if not app_keys:
+        return []
+    params: dict[str, str] = {
+        "select": "app,item_key,title,subtitle,action_url,updated_at",
+        "user_id": f"eq.{_scoped_user_id()}",
+        "valid": "eq.true",
+        "order": "updated_at.desc",
+        "limit": str(limit),
+        "app": f"in.({','.join(app_keys)})",
+    }
     rows = _request(
         "GET",
         _TABLE_RESUME,
-        params={
-            "select": "app,item_key,title,subtitle,action_url,updated_at",
-            "user_id": f"eq.{_scoped_user_id()}",
-            "valid": "eq.true",
-            "order": "updated_at.desc",
-            "limit": str(limit),
-        },
+        params=params,
         prefer="return=representation",
     )
     if not isinstance(rows, list):
@@ -390,6 +417,11 @@ def load_active_resume_items(limit: int = 8) -> list[dict[str, Any]]:
     ]
 
 
+def _is_duplicate_key_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "409" in str(exc) or "duplicate key" in msg or "unique constraint" in msg
+
+
 def upsert_saved_item(
     app: str,
     item_type: str,
@@ -397,28 +429,62 @@ def upsert_saved_item(
     *,
     title: str,
     payload: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
+    """
+    Idempotent write for ``suite_saved_items``.
+
+    Uses PostgREST upsert on ``(user_id, app, item_type, item_key)``; falls back to
+  PATCH when a duplicate-key 409 still occurs (older PostgREST / missing on_conflict).
+    """
     app_key = normalize_app_key(app)
     key = str(item_key or "").strip()
     title_clean = str(title or "").strip()
     itype = str(item_type or "item").strip() or "item"
     if not app_key or not key or not title_clean:
-        return
-    _request(
-        "POST",
-        _TABLE_SAVED,
-        json_body={
-            "user_id": _scoped_user_id(),
-            "app": app_key,
-            "item_type": itype,
-            "item_key": key,
-            "title": title_clean,
-            "payload": payload or {},
-            "valid": True,
-            "updated_at": _now_iso(),
-        },
-        prefer="resolution=merge-duplicates,return=minimal",
-    )
+        return {"write_mode": "skipped", "duplicate_handled": False}
+    uid = _scoped_user_id()
+    row_body = {
+        "user_id": uid,
+        "app": app_key,
+        "item_type": itype,
+        "item_key": key,
+        "title": title_clean,
+        "payload": payload or {},
+        "valid": True,
+        "updated_at": _now_iso(),
+    }
+    patch_body = {
+        "title": title_clean,
+        "payload": payload or {},
+        "valid": True,
+        "updated_at": _now_iso(),
+    }
+    patch_params = {
+        "user_id": f"eq.{uid}",
+        "app": f"eq.{app_key}",
+        "item_type": f"eq.{itype}",
+        "item_key": f"eq.{key}",
+    }
+    try:
+        _request(
+            "POST",
+            _TABLE_SAVED,
+            params={"on_conflict": _SAVED_ITEM_CONFLICT_COLS},
+            json_body=row_body,
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+        return {"write_mode": "upsert", "duplicate_handled": False}
+    except RuntimeError as exc:
+        if not _is_duplicate_key_error(exc):
+            raise
+        _request(
+            "PATCH",
+            _TABLE_SAVED,
+            params=patch_params,
+            json_body=patch_body,
+            prefer="return=minimal",
+        )
+        return {"write_mode": "update", "duplicate_handled": True}
 
 
 def invalidate_saved_item(app: str, item_type: str, item_key: str) -> None:

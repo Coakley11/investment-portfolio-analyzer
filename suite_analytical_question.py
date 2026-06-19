@@ -432,9 +432,11 @@ def load_analytical_question_payload(question_id: str) -> dict[str, Any]:
         log.warning("load_saved_items failed for question context: %s", exc)
     try:
         from suite_storage_supabase import load_active_resume_items
+        from suite_workspace import scoped_cloud_app_id
 
-        for row in load_active_resume_items(limit=40):
-            if str(row.get("app") or "") != "applied_intelligence":
+        scoped_ai = scoped_cloud_app_id("applied_intelligence")
+        for row in load_active_resume_items(limit=40, app="applied_intelligence"):
+            if str(row.get("app") or "") != scoped_ai:
                 continue
             if str(row.get("item_key") or "") != resume_key:
                 continue
