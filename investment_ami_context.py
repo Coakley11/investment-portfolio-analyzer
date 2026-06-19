@@ -33,6 +33,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "valuation",
         "macro_rates",
         "macro_recession",
+        "macro_inflation",
         "allocation_recommendation",
     }
 )
@@ -174,6 +175,14 @@ _RECESSION_PHRASES = (
     "bear market recession",
 )
 
+_INFLATION_PHRASES = (
+    "inflation",
+    "purchasing power",
+    "real return",
+    "cpi",
+    "cost of living",
+)
+
 
 def investment_ami_default_question(source_page: str) -> str:
     page = str(source_page or "").strip().lower()
@@ -204,6 +213,8 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "valuation"
     if _is_rate_rise_question(q):
         return "macro_rates"
+    if _is_inflation_question(q):
+        return "macro_inflation"
     if _is_recession_question(q):
         return "macro_recession"
     if any(p in q for p in _SCENARIO_PHRASES):
@@ -256,9 +267,15 @@ def _is_rate_rise_question(q: str) -> bool:
 def _is_recession_question(q: str) -> bool:
     if not any(p in q for p in _RECESSION_PHRASES):
         return False
+    if _is_inflation_question(q):
+        return False
     if _is_rate_rise_question(q):
         return False
     return True
+
+
+def _is_inflation_question(q: str) -> bool:
+    return any(p in q for p in _INFLATION_PHRASES)
 
 
 def _is_allocation_recommendation_question(q: str) -> bool:

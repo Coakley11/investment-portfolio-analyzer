@@ -27,6 +27,18 @@ def account_summary() -> dict[str, str]:
     }
 
 
+def _scoped_storage_app(app: str | None) -> str | None:
+    """Map logical app id to workspace-scoped cloud key (Daniel keeps legacy unscoped)."""
+    if not app:
+        return None
+    try:
+        from suite_workspace import scoped_cloud_app_id
+
+        return scoped_cloud_app_id(app)
+    except Exception:
+        return str(app or "").strip() or None
+
+
 def remember_saved_item(
     app: str,
     item_type: str,
@@ -34,21 +46,29 @@ def remember_saved_item(
     *,
     title: str,
     payload: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     """Persist a song, player, portfolio, simulation, etc. for this account."""
-    import suite_storage as storage
+    try:
+        import suite_storage as storage
+    except ImportError:
+        import suite_storage_supabase as storage
 
-    storage.upsert_saved_item(
-        app, item_type, item_key, title=title, payload=payload
+    scoped_app = _scoped_storage_app(app) or str(app or "").strip()
+    result = storage.upsert_saved_item(
+        scoped_app, item_type, item_key, title=title, payload=payload
     )
+    if isinstance(result, dict):
+        return result
+    return {"write_mode": "upsert", "duplicate_handled": False}
 
 
 def forget_saved_item(app: str, item_type: str, item_key: str) -> None:
     """Mark saved item invalid — removes it from active dashboard surfaces."""
     import suite_storage as storage
 
-    storage.invalidate_saved_item(app, item_type, item_key)
-    storage.invalidate_resume_item(app, item_key)
+    scoped_app = _scoped_storage_app(app) or str(app or "").strip()
+    storage.invalidate_saved_item(scoped_app, item_type, item_key)
+    storage.invalidate_resume_item(scoped_app, item_key)
 
 
 def load_saved_items(
@@ -59,7 +79,8 @@ def load_saved_items(
 ) -> list[dict[str, Any]]:
     import suite_storage as storage
 
-    return storage.load_saved_items(app=app, item_type=item_type, limit=limit)
+    app_key = _scoped_storage_app(app)
+    return storage.load_saved_items(app=app_key, item_type=item_type, limit=limit)
 
 
 def save_settings(app: str, settings: dict[str, Any]) -> None:
@@ -84,9 +105,10 @@ def sync_local_state_to_cloud(app: str, state: dict[str, Any]) -> None:
         return
     import suite_storage as storage
 
+    scoped_app = _scoped_storage_app(app) or str(app or "").strip()
     page = str(state.get("page") or "")
     summary = str(state.get("summary") or state.get("label") or "")
     metrics = {k: v for k, v in state.items() if k not in {"page", "summary", "label"}}
-    storage.save_current_state(app, page=page, summary=summary, metrics=metrics)
+    storage.save_current_state(scoped_app, page=page, summary=summary, metrics=metrics)
     if state.get("settings") and isinstance(state["settings"], dict):
         storage.save_user_settings(app, state["settings"])

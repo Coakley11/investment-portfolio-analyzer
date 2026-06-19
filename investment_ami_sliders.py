@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 _EQUAL_REALLOC = "__equal__"
+_CASH_TICKERS = frozenset({"BIL", "SHV", "SGOV", "BILS", "TBIL"})
 
 _SLIDER_PROBLEM_TYPES = frozenset(
     {
         "scenario_stress",
         "macro_rates",
         "macro_recession",
+        "macro_inflation",
         "allocation_recommendation",
         "rebalance_allocation",
     }
@@ -117,6 +119,19 @@ def slider_specs_for(problem_type: str, insight_data: dict[str, Any]) -> list[Sl
                 help_text="Scales earnings drag and volatility in the recession stress model.",
             ),
         ]
+    if pt == "macro_inflation":
+        return [
+            SliderSpec(
+                key="inflation_pct",
+                label="Inflation assumption (%)",
+                kind="int_slider",
+                default=4,
+                minimum=2,
+                maximum=10,
+                step=1,
+                help_text="2% = stable; 4% = elevated; 6%+ = high inflation stress on real returns.",
+            ),
+        ]
     if pt in ("allocation_recommendation", "rebalance_allocation"):
         specs: list[SliderSpec] = [
             SliderSpec(
@@ -185,6 +200,48 @@ def _detect_weight_reductions(
     return cuts
 
 
+def _detect_weight_increases(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+) -> list[tuple[str, float]]:
+    """Return (ticker, extra_pct) for each sleeve increased vs baseline."""
+    boosts: list[tuple[str, float]] = []
+    for ticker, new_w in overrides.items():
+        sym = str(ticker).upper()
+        base = baseline.get(sym, 0.0)
+        if new_w > base + 0.01:
+            boosts.append((sym, new_w - base))
+    return boosts
+
+
+def _funding_source_options(all_tickers: list[str], exclude_ticker: str) -> list[str]:
+    options = [t for t in all_tickers if t != exclude_ticker]
+    for cash in sorted(_CASH_TICKERS):
+        if cash in all_tickers and cash not in options:
+            options.append(cash)
+    options.append("Equal distribution across other sleeves")
+    return options
+
+
+def format_net_allocation_changes(
+    base_rows: list[tuple[str, float]],
+    prop_rows: list[tuple[str, float]],
+) -> str:
+    baseline = {t: p for t, p in base_rows}
+    proposed = {t: p for t, p in prop_rows}
+    tickers = sorted(set(baseline) | set(proposed), key=lambda t: baseline.get(t, proposed.get(t, 0)), reverse=True)
+    lines: list[str] = []
+    for ticker in tickers:
+        delta = float(proposed.get(ticker, 0.0)) - float(baseline.get(ticker, 0.0))
+        if abs(delta) < 0.01:
+            lines.append(f"- **{ticker}**: 0%")
+        elif delta > 0:
+            lines.append(f"- **{ticker}**: +{delta:.1f}%")
+        else:
+            lines.append(f"- **{ticker}**: {delta:.1f}%")
+    return "\n".join(lines)
+
+
 def build_scenario_params_from_sliders(
     specs: list[SliderSpec],
     values: dict[str, Any],
@@ -192,6 +249,7 @@ def build_scenario_params_from_sliders(
     problem_type: str,
     weight_baseline: dict[str, float] | None = None,
     reallocations: list[dict[str, Any]] | None = None,
+    increase_funding: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {}
     overrides: dict[str, float] = {}
@@ -215,6 +273,8 @@ def build_scenario_params_from_sliders(
         params["allocation_overrides"] = overrides
     if reallocations:
         params["allocation_reallocations"] = list(reallocations)
+    if increase_funding:
+        params["allocation_increase_funding"] = list(increase_funding)
     if problem_type == "macro_recession":
         params["recession_severity_scale"] = parse_recession_severity(params)
     return params
@@ -296,6 +356,7 @@ def _refresh_via_lightweight_solver(
         "scenario_stress",
         "macro_rates",
         "macro_recession",
+        "macro_inflation",
         "portfolio_concentration",
         "portfolio_risk",
         "etf_overlap",
@@ -518,6 +579,75 @@ def _render_reallocation_controls(
     return reallocations
 
 
+def _render_increase_funding_controls(
+    st: Any,
+    *,
+    insight_id: str,
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    all_tickers: list[str],
+) -> list[dict[str, Any]]:
+    """Option B mirror: ask where extra weight comes from when a sleeve is increased."""
+    boosts = _detect_weight_increases(baseline, overrides)
+    if not boosts:
+        return []
+
+    funding: list[dict[str, Any]] = []
+    st.markdown("**Where should extra allocation come from?**")
+    st.caption("Portfolios must total 100%. Choose an explicit source for each increase.")
+
+    for to_ticker, extra in boosts:
+        options = _funding_source_options(all_tickers, to_ticker)
+        dest_key = f"ami_fund_src_{insight_id}_{to_ticker}"
+        widget_key = f"ami_fund_sel_{insight_id}_{to_ticker}"
+
+        if widget_key not in st.session_state:
+            seed = st.session_state.get(dest_key)
+            default_idx = 0
+            if seed == _EQUAL_REALLOC:
+                default_idx = len(options) - 1
+            elif seed in options:
+                default_idx = options.index(seed)
+            elif seed:
+                upper = str(seed).upper()
+                if upper in options:
+                    default_idx = options.index(upper)
+            st.session_state[widget_key] = options[default_idx]
+
+        choice = st.selectbox(
+            f"Take additional **{extra:.1f}%** for **{to_ticker}** from",
+            options,
+            key=widget_key,
+        )
+        from_ticker = _EQUAL_REALLOC if choice == "Equal distribution across other sleeves" else str(choice).upper()
+        st.session_state[dest_key] = from_ticker
+        funding.append(
+            {
+                "to_ticker": to_ticker,
+                "amount_pct": round(extra, 2),
+                "from_ticker": from_ticker,
+            }
+        )
+    return funding
+
+
+def _format_net_allocation_changes(
+    baseline: dict[str, float],
+    proposed: dict[str, float],
+) -> str:
+    tickers = sorted(set(baseline) | set(proposed), key=lambda t: baseline.get(t, proposed.get(t, 0)), reverse=True)
+    lines: list[str] = []
+    for ticker in tickers:
+        delta = float(proposed.get(ticker, 0.0)) - float(baseline.get(ticker, 0.0))
+        if abs(delta) < 0.01:
+            lines.append(f"- **{ticker}**: 0%")
+        elif delta > 0:
+            lines.append(f"- **{ticker}**: +{delta:.1f}%")
+        else:
+            lines.append(f"- **{ticker}**: {delta:.1f}%")
+    return "\n".join(lines)
+
+
 def _preview_portfolios(
     st: Any,
     baseline: dict[str, float],
@@ -528,7 +658,8 @@ def _preview_portfolios(
 
         overrides = params.get("allocation_overrides") if isinstance(params.get("allocation_overrides"), dict) else {}
         realloc = params.get("allocation_reallocations") if isinstance(params.get("allocation_reallocations"), list) else []
-        proposed = _apply_explicit_reallocation(baseline, overrides, realloc)
+        funding = params.get("allocation_increase_funding") if isinstance(params.get("allocation_increase_funding"), list) else []
+        proposed = _apply_explicit_reallocation(baseline, overrides, realloc, funding)
         base_rows = sorted(baseline.items(), key=lambda x: x[1], reverse=True)
         prop_rows = sorted(proposed.items(), key=lambda x: x[1], reverse=True)
         if prop_rows == base_rows:
@@ -540,9 +671,15 @@ def _preview_portfolios(
         with c2:
             st.markdown("**Proposed portfolio**")
             st.markdown(_portfolio_label(prop_rows))
+        net = _format_net_allocation_changes(baseline, proposed)
+        if net:
+            st.markdown("**Net allocation changes**")
+            st.markdown(net)
         total = sum(proposed.values())
         if abs(total - 100) > 0.5:
-            st.warning(f"Proposed weights sum to **{total:.1f}%** — pick destinations for all reductions.")
+            st.warning(
+                f"Proposed weights sum to **{total:.1f}%** — pick sources/destinations for all allocation changes."
+            )
     except ImportError:
         pass
 
@@ -589,8 +726,16 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
             overrides[ticker] = wt
 
     reallocations: list[dict[str, Any]] = []
+    increase_funding: list[dict[str, Any]] = []
     if overrides and problem_type in ("allocation_recommendation", "rebalance_allocation"):
         reallocations = _render_reallocation_controls(
+            st,
+            insight_id=slider_scope_id,
+            baseline=weight_baseline,
+            overrides=overrides,
+            all_tickers=list(weight_baseline.keys()),
+        )
+        increase_funding = _render_increase_funding_controls(
             st,
             insight_id=slider_scope_id,
             baseline=weight_baseline,
@@ -604,6 +749,7 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
         problem_type=problem_type,
         weight_baseline=weight_baseline,
         reallocations=reallocations,
+        increase_funding=increase_funding,
     )
     _preview_portfolios(st, weight_baseline, merged)
 

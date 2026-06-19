@@ -811,6 +811,10 @@ def solve_phase2_or_structured(
         from investment_ami_macro import macro_recession_answer
 
         result = macro_recession_answer(ctx, beginner=beginner, question=question)
+    elif intent == "macro_inflation":
+        from investment_ami_macro import macro_inflation_answer
+
+        result = macro_inflation_answer(ctx, beginner=beginner, question=question)
     elif intent == "allocation_recommendation":
         from investment_ami_allocation import allocation_recommendation_answer
 

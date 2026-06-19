@@ -68,8 +68,9 @@ def _apply_explicit_reallocation(
     baseline: dict[str, float],
     overrides: dict[str, float],
     reallocations: list[dict[str, Any]],
+    increase_funding: list[dict[str, Any]] | None = None,
 ) -> dict[str, float]:
-    """Option B: user-chosen destination for freed weight (no silent renormalize)."""
+    """Option B: explicit destinations for freed weight and sources for increased sleeves."""
     weights = {str(k).upper(): float(v) for k, v in baseline.items()}
     for ticker, new_w in overrides.items():
         sym = str(ticker or "").strip().upper()
@@ -93,6 +94,24 @@ def _apply_explicit_reallocation(
                 weights[sym] = weights.get(sym, 0.0) + share
         elif to_t:
             weights[to_t.upper()] = weights.get(to_t.upper(), 0.0) + amount
+    for item in increase_funding or []:
+        if not isinstance(item, dict):
+            continue
+        to_t = str(item.get("to_ticker") or "").strip().upper()
+        from_t = str(item.get("from_ticker") or "").strip()
+        try:
+            amount = float(item.get("amount_pct") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if not to_t or amount <= 0:
+            continue
+        if from_t == "__equal__":
+            others = [t for t in weights if t != to_t]
+            share = amount / len(others) if others else 0.0
+            for sym in others:
+                weights[sym] = max(0.0, weights.get(sym, 0.0) - share)
+        elif from_t:
+            weights[from_t.upper()] = max(0.0, weights.get(from_t.upper(), 0.0) - amount)
     total = sum(weights.values())
     if total > 0 and abs(total - 100.0) > 0.25:
         weights = {t: w / total * 100.0 for t, w in weights.items()}
@@ -121,7 +140,11 @@ def _rows_with_allocation_overrides(ctx: dict[str, Any]) -> list[tuple[str, floa
         reallocations = [r for r in realloc_raw if isinstance(r, dict)]
     elif isinstance(params.get("allocation_reallocate"), dict):
         reallocations = [params["allocation_reallocate"]]
-    weights = _apply_explicit_reallocation(baseline, parsed_overrides, reallocations)
+    funding_raw = params.get("allocation_increase_funding")
+    increase_funding: list[dict[str, Any]] = []
+    if isinstance(funding_raw, list):
+        increase_funding = [r for r in funding_raw if isinstance(r, dict)]
+    weights = _apply_explicit_reallocation(baseline, parsed_overrides, reallocations, increase_funding)
     norm = [(t, w) for t, w in weights.items() if w > 0]
     return sorted(norm, key=lambda x: x[1], reverse=True)
 
@@ -400,6 +423,25 @@ def _diversification_summary(profile: dict[str, float | int | str], n_rows: int)
     return f"**{sleeves}** sleeves; equity **{equity:.0f}%** / bonds **{bonds:.0f}%**"
 
 
+def format_net_allocation_changes(
+    base_rows: list[tuple[str, float]],
+    prop_rows: list[tuple[str, float]],
+) -> str:
+    baseline = {t: p for t, p in base_rows}
+    proposed = {t: p for t, p in prop_rows}
+    tickers = sorted(set(baseline) | set(proposed), key=lambda t: baseline.get(t, proposed.get(t, 0)), reverse=True)
+    lines: list[str] = []
+    for ticker in tickers:
+        delta = float(proposed.get(ticker, 0.0)) - float(baseline.get(ticker, 0.0))
+        if abs(delta) < 0.01:
+            lines.append(f"- **{ticker}**: 0%")
+        elif delta > 0:
+            lines.append(f"- **{ticker}**: +{delta:.1f}%")
+        else:
+            lines.append(f"- **{ticker}**: {delta:.1f}%")
+    return "\n".join(lines)
+
+
 def _format_before_after_comparison_table(
     base_rows: list[tuple[str, float]],
     adj_rows: list[tuple[str, float]],
@@ -600,6 +642,7 @@ def allocation_recommendation_answer(
     what_if = sim if sim and not beginner else ""
     portfolio_changed = _portfolio_rows_differ(base_rows, rows)
     comparison_table = _format_before_after_comparison_table(base_rows, rows, ctx) if portfolio_changed and not beginner else ""
+    net_changes = format_net_allocation_changes(base_rows, rows) if portfolio_changed else ""
 
     base_exposure = resolve_tech_exposure(_ctx_with_adjusted_weights(ctx, base_rows))
     calc_chain = format_tech_exposure_calculation_chain(base_exposure)
@@ -629,6 +672,7 @@ def allocation_recommendation_answer(
         current_portfolio=format_portfolio_weights_table(base_rows),
         proposed_portfolio=format_portfolio_weights_table(rows) if portfolio_changed else "",
         portfolio_comparison=comparison_table,
+        net_allocation_changes=net_changes,
         current_strengths="\n".join(f"- {s}" for s in strengths),
         current_weaknesses="\n".join(f"- {w}" for w in weaknesses) if weaknesses else "- No major structural flags at current weights.",
         potential_increases=increases,

@@ -7,8 +7,11 @@ import unittest
 from investment_ami_context import detect_investment_send_intent
 from investment_ami_instant_solver import solve_instant_investment_insight
 from investment_ami_macro import (
+    inflation_portfolio_impacts,
+    macro_inflation_answer,
     macro_rates_answer,
     macro_recession_answer,
+    parse_inflation_pct,
     parse_rate_rise_pct,
     rate_rise_portfolio_impacts,
     recession_portfolio_impacts,
@@ -156,6 +159,74 @@ class TestMacroRecession(unittest.TestCase):
             {"equity": 0.3, "bonds": 0.4, "tbills": 0.2, "reit": 0.05, "dividend": 0.05, "qqq_spy": 0.0, "tech": 0.0}
         )
         self.assertLess(growth["net_return_shift_pp"], defensive["net_return_shift_pp"])
+
+
+class TestMacroInflation(unittest.TestCase):
+    _CTX = {
+        "experience_mode": "Advanced Mode",
+        "current_weights": {
+            "VTI": "50.0%",
+            "QQQ": "20.0%",
+            "VXUS": "20.0%",
+            "VNQ": "10.0%",
+        },
+        "holdings": ["VTI", "QQQ", "VXUS", "VNQ"],
+    }
+
+    def test_intent_inflation_question(self) -> None:
+        self.assertEqual(
+            detect_investment_send_intent("What happens if inflation rises to 6%?", ""),
+            "macro_inflation",
+        )
+        self.assertEqual(
+            detect_investment_send_intent("Is my portfolio protected from inflation?", ""),
+            "macro_inflation",
+        )
+
+    def test_inflation_not_recession(self) -> None:
+        self.assertNotEqual(
+            detect_investment_send_intent("What happens if inflation is 6%?", ""),
+            "macro_recession",
+        )
+
+    def test_parse_inflation_pct_from_params(self) -> None:
+        self.assertEqual(parse_inflation_pct({"inflation_pct": 6.0}), 6.0)
+        self.assertEqual(parse_inflation_pct({}), 4.0)
+
+    def test_macro_inflation_answer_sections(self) -> None:
+        result = macro_inflation_answer(
+            {**self._CTX, "scenario_params": {"inflation_pct": 6.0}},
+            beginner=False,
+            question="What happens if inflation rises to 6%?",
+        )
+        self.assertEqual(result.problem_type, "macro_inflation")
+        self.assertIn("direct_answer", result.analyst_sections)
+        self.assertIn("recommended_actions", result.analyst_sections)
+        view = result.analyst_sections["portfolio_analyst_view"].lower()
+        self.assertTrue(any(w in view for w in ("bond", "real", "purchasing")))
+
+    def test_end_to_end_inflation_solver(self) -> None:
+        solved = solve_instant_investment_insight(
+            "What happens if inflation rises to 6%?",
+            {**self._CTX, "scenario_params": {"inflation_pct": 6.0}},
+        )
+        self.assertIsNotNone(solved)
+        _, result = solved
+        self.assertEqual(result.problem_type, "macro_inflation")
+        self.assertIn("inflation", result.short_answer.lower())
+
+    def test_high_inflation_worse_real_return(self) -> None:
+        profile = {
+            "equity": 0.7,
+            "bonds": 0.2,
+            "tbills": 0.05,
+            "reit": 0.05,
+            "growth_proxy": 0.25,
+            "dividend": 0.1,
+        }
+        low = inflation_portfolio_impacts(profile, 2.0)
+        high = inflation_portfolio_impacts(profile, 8.0)
+        self.assertGreater(low["real_return_estimate_pct"], high["real_return_estimate_pct"])
 
 
 if __name__ == "__main__":

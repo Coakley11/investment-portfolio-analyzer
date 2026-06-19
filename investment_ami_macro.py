@@ -497,3 +497,201 @@ def macro_recession_answer(ctx: dict[str, Any], *, beginner: bool, question: str
             **({"recession_probability_pct": round(recession_prob * 100, 1)} if recession_prob is not None else {}),
         },
     )
+
+
+def parse_inflation_pct(params: dict[str, Any], *, default: float = 4.0) -> float:
+    raw = params.get("inflation_pct")
+    if raw in (None, ""):
+        return default
+    try:
+        return max(2.0, min(10.0, float(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def inflation_portfolio_impacts(
+    profile: dict[str, float | int | str],
+    inflation_pct: float,
+    *,
+    nominal_return_assumption: float = 7.0,
+) -> dict[str, Any]:
+    """Illustrative inflation stress on portfolio sleeves (educational model)."""
+    scale = float(inflation_pct) / 4.0
+    eq = float(profile.get("equity") or 0)
+    bonds = float(profile.get("bonds") or 0)
+    tbills = float(profile.get("tbills") or 0)
+    reit = float(profile.get("reit") or 0)
+    growth = float(profile.get("qqq_spy") or 0) + float(profile.get("tech") or 0) * 0.35
+    dividend = float(profile.get("dividend") or 0)
+
+    bond_price_drag = (-0.050 * bonds - 0.030 * float(profile.get("long_duration_bonds") or 0)) * scale * 100
+    equity_valuation_drag = (-0.022 * growth) * scale * 100
+    earnings_real_erosion = (-0.015 * eq) * max(0.0, (inflation_pct - 2.0) / 2.0) * 100
+    tbill_lift = (0.018 * tbills) * max(0.0, (inflation_pct - 2.0) / 2.0) * 100
+    reit_mixed = (-0.012 * reit) * scale * 100 + (0.006 * reit) * max(0.0, inflation_pct - 3.0) / 3.0 * 100
+    dividend_cushion = (0.008 * dividend) * max(0.0, inflation_pct - 2.5) / 2.5 * 100
+
+    components = {
+        "bond_price_drag_pp": round(bond_price_drag, 2),
+        "equity_valuation_drag_pp": round(equity_valuation_drag, 2),
+        "earnings_real_erosion_pp": round(earnings_real_erosion, 2),
+        "tbill_rate_lift_pp": round(tbill_lift, 2),
+        "reit_mixed_pp": round(reit_mixed, 2),
+        "dividend_cushion_pp": round(dividend_cushion, 2),
+    }
+    net_pp = sum(components.values())
+    real_return_est = round(nominal_return_assumption - inflation_pct, 1)
+    return {
+        "inflation_pct": inflation_pct,
+        "nominal_return_assumption_pct": nominal_return_assumption,
+        "real_return_estimate_pct": real_return_est,
+        "components_pp": components,
+        "net_return_shift_pp": round(net_pp, 2),
+        "profile_pct": {
+            "equity": round(eq * 100, 1),
+            "bonds": round(bonds * 100, 1),
+            "tbills": round(tbills * 100, 1),
+            "reit": round(reit * 100, 1),
+            "growth_proxy": round(growth * 100, 1),
+            "dividend": round(dividend * 100, 1),
+        },
+    }
+
+
+def _inflation_risk_notes(beginner: bool) -> str:
+    if beginner:
+        return (
+            "Educational inflation scenario based on your fund weights — not personal financial advice. "
+            "Real returns depend on earnings growth, starting yields, and policy response."
+        )
+    return (
+        "Educational inflation stress model only; not investment advice. "
+        "Illustrative shifts scale with inflation assumption and sleeve mix."
+    )
+
+
+def macro_inflation_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    """Portfolio-specific inflation / purchasing-power analysis."""
+    profile = allocation_profile_from_ctx(ctx)
+    params = dict(ctx.get("scenario_params") or {})
+    inflation_pct = parse_inflation_pct(params)
+    q = str(question or "").lower()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%", q)
+    if m and "inflation" in q:
+        try:
+            inflation_pct = max(2.0, min(10.0, float(m.group(1))))
+        except (TypeError, ValueError):
+            pass
+    impacts = inflation_portfolio_impacts(profile, inflation_pct)
+    comps = impacts["components_pp"]
+    prof = impacts["profile_pct"]
+    net = float(impacts["net_return_shift_pp"])
+    real_ret = float(impacts["real_return_estimate_pct"])
+
+    if prof["equity"] + prof["bonds"] + prof["reit"] + prof["tbills"] <= 0:
+        direct = "Add holdings with weights first — I need your portfolio mix to estimate inflation exposure."
+        sections = build_analyst_sections(
+            direct_answer=direct,
+            portfolio_analyst_view="Inflation erodes purchasing power; sleeve mix determines whether nominal returns keep up.",
+            recommended_actions="Enter tickers and weights, then ask again.",
+            risk_notes=_inflation_risk_notes(beginner),
+            beginner=beginner,
+        )
+        return InvestmentSolverResult(
+            short_answer=direct,
+            analyst_sections=sections,
+            problem_type="macro_inflation",
+            model_name="Inflation scenario analyst",
+            confidence_pct=55,
+        )
+
+    if inflation_pct >= 8:
+        level = "severe inflation stress"
+    elif inflation_pct >= 6:
+        level = "high inflation"
+    elif inflation_pct >= 4:
+        level = "elevated inflation"
+    else:
+        level = "moderate inflation"
+
+    if beginner:
+        direct = (
+            f"At **{inflation_pct:.0f}%** inflation ({level}), the main risk is **real-return erosion**. "
+            f"If nominal returns are ~**{impacts['nominal_return_assumption_pct']:.0f}%**, illustrative real return is about **{real_ret:.1f}%**."
+        )
+        analyst = (
+            "Inflation reduces purchasing power even when account balances rise. "
+            "Equity-heavy portfolios need earnings growth to outpace inflation; "
+            "bond-heavy portfolios can face yield/price pressure when inflation pushes rates higher."
+        )
+    else:
+        direct = (
+            f"At **{inflation_pct:.1f}%** inflation ({level}), illustrative portfolio return shift **{net:+.1f} pp** "
+            f"with real-return estimate **{real_ret:.1f}%** (nominal **{impacts['nominal_return_assumption_pct']:.0f}%** − inflation)."
+        )
+        analyst = (
+            f"Bond price drag ≈ **{comps['bond_price_drag_pp']:+.1f} pp** ({prof['bonds']:.0f}% bonds). "
+            f"Growth valuation drag ≈ **{comps['equity_valuation_drag_pp']:+.1f} pp** ({prof['growth_proxy']:.0f}% growth proxy). "
+            f"T-Bill lift ≈ **{comps['tbill_rate_lift_pp']:+.1f} pp** ({prof['tbills']:.0f}% cash-like). "
+            f"REIT mixed effect ≈ **{comps['reit_mixed_pp']:+.1f} pp** ({prof['reit']:.0f}% REIT)."
+        )
+
+    key_lines = [
+        f"- Inflation assumption: **{inflation_pct:.1f}%**",
+        f"- Equity sleeve: **{prof['equity']:.1f}%**",
+        f"- Bonds: **{prof['bonds']:.1f}%**",
+        f"- T-Bills / cash-like: **{prof['tbills']:.1f}%**",
+        f"- REIT: **{prof['reit']:.1f}%**",
+        f"- Growth exposure proxy: **{prof['growth_proxy']:.1f}%**",
+        f"- Dividend / value proxy: **{prof['dividend']:.1f}%**",
+        f"- Illustrative real return: **{real_ret:.1f}%**",
+        f"- Net illustrative shift: **{net:+.1f} pp**",
+    ]
+
+    tradeoffs = (
+        "**High growth / long-duration bonds** → more valuation and price pressure if inflation stays high.\n"
+        "**Short-duration bonds / T-Bills** → may benefit as rates rise, but must still beat inflation for real gains.\n"
+        "**Dividend / value sleeves** → pricing power can help, but not immune to rate-driven compression."
+    )
+
+    what_if = (
+        f"- Inflation **2%** → easier to preserve real purchasing power\n"
+        f"- Inflation **{inflation_pct:.0f}%** (current assumption) → purchasing-power pressure rises\n"
+        f"- Inflation **8%+** → valuation/rate stress increases for growth and long bonds"
+    )
+
+    actions: list[str] = []
+    if prof["bonds"] >= 35 and inflation_pct >= 5:
+        actions.append("Consider **short-duration bonds** or **T-Bills** if long bond price pressure is uncomfortable.")
+    if prof["growth_proxy"] >= 40 and inflation_pct >= 6:
+        actions.append("Trim **growth concentration** if higher rates compress valuations.")
+    if prof["tbills"] < 10 and inflation_pct >= 5:
+        actions.append("A modest **cash / T-Bill** sleeve can add flexibility when rates rise with inflation.")
+    if not actions:
+        actions.append("Monitor **real return** (nominal minus inflation), not headline account growth alone.")
+
+    sections = build_analyst_sections(
+        direct_answer=direct,
+        portfolio_analyst_view=analyst,
+        key_variables="\n".join(key_lines),
+        tradeoffs=tradeoffs,
+        what_if_scenarios=what_if if not beginner else "",
+        recommended_actions=" ".join(actions[:3]),
+        risk_notes=_inflation_risk_notes(beginner),
+        beginner=beginner,
+    )
+    return InvestmentSolverResult(
+        short_answer=direct,
+        analyst_sections=sections,
+        problem_type="macro_inflation",
+        model_name="Inflation scenario analyst",
+        math_idea="Inflation → real return erosion + sleeve-specific rate/valuation pressure.",
+        confidence_pct=81,
+        computed={
+            "inflation_pct": inflation_pct,
+            "real_return_estimate_pct": real_ret,
+            "net_return_shift_pp": net,
+            **comps,
+            **prof,
+        },
+    )

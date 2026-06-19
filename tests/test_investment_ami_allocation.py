@@ -278,11 +278,55 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
-        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2f-allocation-deep-dive2")
+        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2g-allocation-inflation1")
         self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)
         self.assertIn("portfolio_comparison", sections)
+
+
+    def test_increase_funding_from_single_sleeve(self) -> None:
+        from investment_ami_allocation import (
+            _apply_explicit_reallocation,
+            allocation_recommendation_answer,
+            format_net_allocation_changes,
+        )
+
+        baseline = {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0}
+        weights = _apply_explicit_reallocation(
+            baseline,
+            {"VXUS": 30.0},
+            [],
+            [{"to_ticker": "VXUS", "from_ticker": "VTI", "amount_pct": 10.0}],
+        )
+        self.assertAlmostEqual(weights["VTI"], 30.0, places=1)
+        self.assertAlmostEqual(weights["VXUS"], 30.0, places=1)
+        self.assertAlmostEqual(weights["BND"], 30.0, places=1)
+        self.assertAlmostEqual(weights["VNQ"], 10.0, places=1)
+        self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
+
+        ctx = {
+            "experience_mode": "Advanced Mode",
+            "current_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+            "scenario_params": {
+                "risk_tolerance": "Moderate",
+                "allocation_overrides": {"VXUS": 30.0},
+                "allocation_increase_funding": [
+                    {"to_ticker": "VXUS", "from_ticker": "VTI", "amount_pct": 10.0},
+                ],
+            },
+        }
+        result = allocation_recommendation_answer(ctx, beginner=False, question="Should I rebalance?")
+        sections = result.analyst_sections
+        self.assertIn("30.0%", sections.get("proposed_portfolio", ""))
+        net = sections.get("net_allocation_changes", "")
+        self.assertIn("VTI", net)
+        self.assertIn("-10.0%", net)
+        self.assertIn("VXUS", net)
+        self.assertIn("+10.0%", net)
+        base_rows = [("VTI", 40.0), ("BND", 30.0), ("VXUS", 20.0), ("VNQ", 10.0)]
+        prop_rows = [("VTI", 30.0), ("BND", 30.0), ("VXUS", 30.0), ("VNQ", 10.0)]
+        self.assertIn("-10.0%", format_net_allocation_changes(base_rows, prop_rows))
 
 
 if __name__ == "__main__":
