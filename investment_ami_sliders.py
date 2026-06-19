@@ -306,11 +306,15 @@ def build_scenario_params_from_sliders(
                 overrides[ticker] = wt
             continue
         params[spec.key] = val
-    if overrides:
+    if problem_type in ("allocation_recommendation", "rebalance_allocation"):
+        params["allocation_overrides"] = dict(overrides)
+        params["allocation_reallocations"] = list(reallocations or [])
+        params["allocation_increase_funding"] = list(increase_funding or [])
+    elif overrides:
         params["allocation_overrides"] = overrides
-    if reallocations:
+    if reallocations and problem_type not in ("allocation_recommendation", "rebalance_allocation"):
         params["allocation_reallocations"] = list(reallocations)
-    if increase_funding:
+    if increase_funding and problem_type not in ("allocation_recommendation", "rebalance_allocation"):
         params["allocation_increase_funding"] = list(increase_funding)
     if problem_type == "macro_recession":
         params["recession_severity_scale"] = parse_recession_severity(params)
@@ -730,8 +734,13 @@ def _preview_portfolios(
         realloc = params.get("allocation_reallocations") if isinstance(params.get("allocation_reallocations"), list) else []
         funding = params.get("allocation_increase_funding") if isinstance(params.get("allocation_increase_funding"), list) else []
         proposed = _apply_explicit_reallocation(baseline, overrides, realloc, funding)
+        prop_rows = sorted(
+            set(baseline) | set(proposed),
+            key=lambda t: proposed.get(t, 0.0),
+            reverse=True,
+        )
+        prop_rows = [(t, float(proposed.get(t, 0.0))) for t in prop_rows]
         base_rows = sorted(baseline.items(), key=lambda x: x[1], reverse=True)
-        prop_rows = sorted(proposed.items(), key=lambda x: x[1], reverse=True)
         if prop_rows == base_rows:
             return
         c1, c2 = st.columns(2)
@@ -745,6 +754,15 @@ def _preview_portfolios(
         if net:
             st.markdown("**Net allocation changes**")
             st.markdown(net)
+        try:
+            from investment_ami_allocation import format_funding_breakdown
+
+            fb = format_funding_breakdown(baseline, overrides, params)
+            if fb:
+                st.markdown("**Funding breakdown**")
+                st.markdown(fb)
+        except ImportError:
+            pass
         if any(w < -0.01 for w in proposed.values()):
             st.error("Proposed portfolio contains negative weights — adjust funding sources.")
         total = sum(proposed.values())

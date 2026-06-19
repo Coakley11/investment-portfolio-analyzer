@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2h-allocation-funding-guard1"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-v2-phase2i-allocation-funding-audit1"
 
 _TECH_TICKERS = frozenset(
     {

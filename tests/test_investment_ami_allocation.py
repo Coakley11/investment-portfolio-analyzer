@@ -158,7 +158,9 @@ class TestAmiSliders(unittest.TestCase):
             problem_type="allocation_recommendation",
             weight_baseline={"QQQ": 20.0, "VTI": 50.0},
         )
-        self.assertNotIn("allocation_overrides", params)
+        self.assertEqual(params.get("allocation_overrides"), {})
+        self.assertEqual(params.get("allocation_reallocations"), [])
+        self.assertEqual(params.get("allocation_increase_funding"), [])
         values["alloc_QQQ"] = 10
         params2 = build_scenario_params_from_sliders(
             specs,
@@ -278,7 +280,7 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
-        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2h-allocation-funding-guard1")
+        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2i-allocation-funding-audit1")
         self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)
@@ -362,6 +364,67 @@ class TestAmiSliders(unittest.TestCase):
         self.assertTrue(all(w >= -0.01 for w in weights.values()))
         self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
         self.assertAlmostEqual(weights["VTI"], 90.0, places=1)
+
+    def test_bnd_increase_funded_from_vnq_regression(self) -> None:
+        """Regression: BND +10% funded from VNQ must not corrupt other sleeves."""
+        from investment_ami_allocation import (
+            _apply_explicit_reallocation,
+            allocation_recommendation_answer,
+            format_net_allocation_changes,
+        )
+
+        baseline = {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0}
+        funding = [{"to_ticker": "BND", "from_ticker": "VNQ", "amount_pct": 10.0}]
+        weights = _apply_explicit_reallocation(baseline, {"BND": 40.0}, [], funding)
+        self.assertAlmostEqual(weights["VTI"], 40.0, places=1)
+        self.assertAlmostEqual(weights["BND"], 40.0, places=1)
+        self.assertAlmostEqual(weights["VXUS"], 20.0, places=1)
+        self.assertAlmostEqual(weights["VNQ"], 0.0, places=1)
+        self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
+
+        ctx = {
+            "experience_mode": "Advanced Mode",
+            "current_weights": {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0},
+            "scenario_params": {
+                "risk_tolerance": "Moderate",
+                "allocation_overrides": {"BND": 40.0},
+                "allocation_reallocations": [],
+                "allocation_increase_funding": funding,
+            },
+        }
+        result = allocation_recommendation_answer(ctx, beginner=False, question="Should I rebalance?")
+        sections = result.analyst_sections
+        proposed = sections.get("proposed_portfolio", "")
+        self.assertIn("BND", proposed)
+        self.assertIn("40.0%", proposed)
+        self.assertIn("0.0%", proposed)
+        net = sections.get("net_allocation_changes", "")
+        self.assertIn("BND", net)
+        self.assertIn("+10.0%", net)
+        self.assertIn("VNQ", net)
+        self.assertIn("-10.0%", net)
+        fb = sections.get("funding_breakdown", "")
+        self.assertIn("VNQ", fb)
+        self.assertIn("-10.0%", fb)
+        base_rows = [("VTI", 40.0), ("BND", 30.0), ("VXUS", 20.0), ("VNQ", 10.0)]
+        prop_rows = [("VTI", 40.0), ("BND", 40.0), ("VXUS", 20.0), ("VNQ", 0.0)]
+        self.assertEqual(format_net_allocation_changes(base_rows, prop_rows), net)
+
+    def test_stale_reallocation_ignored_when_only_increasing(self) -> None:
+        from investment_ami_allocation import _apply_explicit_reallocation
+
+        baseline = {"VTI": 40.0, "BND": 30.0, "VXUS": 20.0, "VNQ": 10.0}
+        stale_realloc = [{"from_ticker": "VTI", "amount_pct": 40.0, "to_ticker": "VNQ"}]
+        weights = _apply_explicit_reallocation(
+            baseline,
+            {"BND": 40.0},
+            stale_realloc,
+            [{"to_ticker": "BND", "from_ticker": "VNQ", "amount_pct": 10.0}],
+        )
+        self.assertAlmostEqual(weights["VTI"], 40.0, places=1)
+        self.assertAlmostEqual(weights["BND"], 40.0, places=1)
+        self.assertAlmostEqual(weights["VNQ"], 0.0, places=1)
+        self.assertAlmostEqual(sum(weights.values()), 100.0, places=1)
 
 
 if __name__ == "__main__":

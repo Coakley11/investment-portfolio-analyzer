@@ -69,27 +69,30 @@ def _subtract_increase_funding(
     to_ticker: str,
     amount: float,
     from_ticker: str,
-) -> None:
-    """Reduce source sleeve(s) to fund an increase without going below 0%."""
+) -> dict[str, float]:
+    """Reduce source sleeve(s) to fund an increase without going below 0%. Returns reductions by ticker."""
+    reductions: dict[str, float] = {}
     to_sym = str(to_ticker or "").strip().upper()
     try:
         need = float(amount)
     except (TypeError, ValueError):
-        return
+        return reductions
     if not to_sym or need <= 0:
-        return
+        return reductions
 
     others = [t for t in weights if t != to_sym]
     if from_ticker == "__proportional__":
         avail = {t: float(weights.get(t, 0.0)) for t in others}
         total = sum(avail.values())
         if total <= 0:
-            return
+            return reductions
         take_total = min(need, total)
         for sym, w in avail.items():
             reduction = take_total * (w / total)
             weights[sym] = max(0.0, weights.get(sym, 0.0) - reduction)
-        return
+            if reduction > 0.001:
+                reductions[sym] = reductions.get(sym, 0.0) + reduction
+        return reductions
 
     if from_ticker == "__equal__":
         remaining = min(need, sum(float(weights.get(t, 0.0)) for t in others))
@@ -102,16 +105,73 @@ def _subtract_increase_funding(
                 take = min(share, current)
                 weights[sym] = max(0.0, current - take)
                 remaining -= take
+                if take > 0.001:
+                    reductions[sym] = reductions.get(sym, 0.0) + take
                 if weights[sym] > 0.01:
                     next_active.append(sym)
             active = next_active
-        return
+        return reductions
 
     from_sym = str(from_ticker or "").strip().upper()
     if from_sym:
         current = float(weights.get(from_sym, 0.0))
         take = min(need, current)
         weights[from_sym] = max(0.0, current - take)
+        if take > 0.001:
+            reductions[from_sym] = take
+    return reductions
+
+
+def _filter_reallocations_for_overrides(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    reallocations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Only keep reallocations for sleeves actually reduced in current overrides."""
+    kept: list[dict[str, Any]] = []
+    for item in reallocations:
+        if not isinstance(item, dict):
+            continue
+        from_t = str(item.get("from_ticker") or "").strip().upper()
+        if not from_t or from_t not in overrides:
+            continue
+        try:
+            amount = float(item.get("amount_pct") or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+        base = float(baseline.get(from_t, 0.0))
+        new_w = float(overrides.get(from_t, base))
+        if base - new_w >= amount - 0.01:
+            kept.append(item)
+    return kept
+
+
+def _filter_increase_funding_for_overrides(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    increase_funding: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Only keep funding rows for sleeves actually increased in current overrides."""
+    kept: list[dict[str, Any]] = []
+    for item in increase_funding:
+        if not isinstance(item, dict):
+            continue
+        to_t = str(item.get("to_ticker") or "").strip().upper()
+        if not to_t or to_t not in overrides:
+            continue
+        try:
+            amount = float(item.get("amount_pct") or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+        base = float(baseline.get(to_t, 0.0))
+        new_w = float(overrides.get(to_t, base))
+        if new_w - base >= amount - 0.01:
+            kept.append(item)
+    return kept
 
 
 def _apply_explicit_reallocation(
@@ -119,8 +179,14 @@ def _apply_explicit_reallocation(
     overrides: dict[str, float],
     reallocations: list[dict[str, Any]],
     increase_funding: list[dict[str, Any]] | None = None,
+    *,
+    funding_breakdown: list[dict[str, Any]] | None = None,
 ) -> dict[str, float]:
     """Option B: explicit destinations for freed weight and sources for increased sleeves."""
+    reallocations = _filter_reallocations_for_overrides(baseline, overrides, reallocations)
+    funding_list = _filter_increase_funding_for_overrides(
+        baseline, overrides, list(increase_funding or [])
+    )
     weights = {str(k).upper(): float(v) for k, v in baseline.items()}
     for ticker, new_w in overrides.items():
         sym = str(ticker or "").strip().upper()
@@ -144,7 +210,7 @@ def _apply_explicit_reallocation(
                 weights[sym] = weights.get(sym, 0.0) + share
         elif to_t:
             weights[to_t.upper()] = weights.get(to_t.upper(), 0.0) + amount
-    for item in increase_funding or []:
+    for item in funding_list:
         if not isinstance(item, dict):
             continue
         to_t = str(item.get("to_ticker") or "").strip().upper()
@@ -155,12 +221,36 @@ def _apply_explicit_reallocation(
             amount = 0.0
         if not to_t or amount <= 0:
             continue
-        _subtract_increase_funding(weights, to_t, amount, from_t)
+        reductions = _subtract_increase_funding(weights, to_t, amount, from_t)
+        if funding_breakdown is not None:
+            label = from_t
+            if from_t == "__proportional__":
+                label = "proportional"
+            elif from_t == "__equal__":
+                label = "equal"
+            funding_breakdown.append(
+                {
+                    "to_ticker": to_t,
+                    "amount_pct": amount,
+                    "from_mode": label,
+                    "reductions": dict(reductions),
+                }
+            )
     weights = {t: max(0.0, float(w)) for t, w in weights.items()}
     total = sum(weights.values())
-    if not increase_funding and total > 0 and abs(total - 100.0) > 0.25:
+    if not funding_list and total > 0 and abs(total - 100.0) > 0.25:
         weights = {t: w / total * 100.0 for t, w in weights.items()}
     return weights
+
+
+def _proposed_weight_rows(
+    baseline: dict[str, float],
+    weights: dict[str, float],
+) -> list[tuple[str, float]]:
+    """All baseline tickers in proposed mix, including sleeves taken to 0%."""
+    tickers = set(baseline) | set(weights)
+    rows = [(t, float(weights.get(t, 0.0))) for t in tickers]
+    return sorted(rows, key=lambda x: x[1], reverse=True)
 
 
 def _rows_with_allocation_overrides(ctx: dict[str, Any]) -> list[tuple[str, float]]:
@@ -189,9 +279,15 @@ def _rows_with_allocation_overrides(ctx: dict[str, Any]) -> list[tuple[str, floa
     increase_funding: list[dict[str, Any]] = []
     if isinstance(funding_raw, list):
         increase_funding = [r for r in funding_raw if isinstance(r, dict)]
-    weights = _apply_explicit_reallocation(baseline, parsed_overrides, reallocations, increase_funding)
-    norm = [(t, w) for t, w in weights.items() if w > 0]
-    return sorted(norm, key=lambda x: x[1], reverse=True)
+    breakdown: list[dict[str, Any]] = []
+    weights = _apply_explicit_reallocation(
+        baseline,
+        parsed_overrides,
+        reallocations,
+        increase_funding,
+        funding_breakdown=breakdown,
+    )
+    return _proposed_weight_rows(baseline, weights)
 
 
 def has_defensive_row(rows: list[tuple[str, float]]) -> bool:
@@ -487,6 +583,53 @@ def format_net_allocation_changes(
     return "\n".join(lines)
 
 
+def format_funding_breakdown(
+    baseline: dict[str, float],
+    overrides: dict[str, float],
+    params: dict[str, Any],
+) -> str:
+    """Human-readable funding sources for sleeve increases."""
+    realloc_raw = params.get("allocation_reallocations")
+    reallocations: list[dict[str, Any]] = []
+    if isinstance(realloc_raw, list):
+        reallocations = [r for r in realloc_raw if isinstance(r, dict)]
+    funding_raw = params.get("allocation_increase_funding")
+    increase_funding: list[dict[str, Any]] = []
+    if isinstance(funding_raw, list):
+        increase_funding = [r for r in funding_raw if isinstance(r, dict)]
+    if not increase_funding:
+        return ""
+
+    parsed_overrides = {str(k).upper(): float(v) for k, v in overrides.items()}
+    breakdown: list[dict[str, Any]] = []
+    _apply_explicit_reallocation(
+        baseline,
+        parsed_overrides,
+        reallocations,
+        increase_funding,
+        funding_breakdown=breakdown,
+    )
+    if not breakdown:
+        return ""
+
+    blocks: list[str] = []
+    for item in breakdown:
+        to_t = str(item.get("to_ticker") or "").upper()
+        amount = float(item.get("amount_pct") or 0)
+        mode = str(item.get("from_mode") or "")
+        reductions = item.get("reductions") if isinstance(item.get("reductions"), dict) else {}
+        if not to_t or amount <= 0 or not reductions:
+            continue
+        mode_label = {
+            "proportional": "proportional across other sleeves",
+            "equal": "equal across other sleeves",
+        }.get(mode, f"**{mode}**")
+        blocks.append(f"Additional **{amount:.1f}%** allocated to **{to_t}** (funded {mode_label}):")
+        for sym in sorted(reductions, key=lambda t: reductions[t], reverse=True):
+            blocks.append(f"- **{sym}**: -{float(reductions[sym]):.1f}%")
+    return "\n\n".join(blocks)
+
+
 def _format_before_after_comparison_table(
     base_rows: list[tuple[str, float]],
     adj_rows: list[tuple[str, float]],
@@ -688,6 +831,15 @@ def allocation_recommendation_answer(
     portfolio_changed = _portfolio_rows_differ(base_rows, rows)
     comparison_table = _format_before_after_comparison_table(base_rows, rows, ctx) if portfolio_changed and not beginner else ""
     net_changes = format_net_allocation_changes(base_rows, rows) if portfolio_changed else ""
+    scenario_params = dict(ctx.get("scenario_params") or {})
+    overrides_raw = scenario_params.get("allocation_overrides")
+    funding_breakdown = ""
+    if portfolio_changed and isinstance(overrides_raw, dict) and overrides_raw:
+        funding_breakdown = format_funding_breakdown(
+            {t: p for t, p in base_rows},
+            {str(k).upper(): float(v) for k, v in overrides_raw.items()},
+            scenario_params,
+        )
 
     base_exposure = resolve_tech_exposure(_ctx_with_adjusted_weights(ctx, base_rows))
     calc_chain = format_tech_exposure_calculation_chain(base_exposure)
@@ -718,6 +870,7 @@ def allocation_recommendation_answer(
         proposed_portfolio=format_portfolio_weights_table(rows) if portfolio_changed else "",
         portfolio_comparison=comparison_table,
         net_allocation_changes=net_changes,
+        funding_breakdown=funding_breakdown,
         current_strengths="\n".join(f"- {s}" for s in strengths),
         current_weaknesses="\n".join(f"- {w}" for w in weaknesses) if weaknesses else "- No major structural flags at current weights.",
         potential_increases=increases,
