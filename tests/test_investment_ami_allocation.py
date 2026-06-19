@@ -278,6 +278,8 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
+        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2f-allocation-deep-dive2")
+        self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)
         self.assertIn("portfolio_comparison", sections)

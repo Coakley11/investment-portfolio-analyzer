@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 _EQUAL_REALLOC = "__equal__"
@@ -367,6 +368,9 @@ def _stage_refreshed_insight(
     kn["scenario_params"] = dict(params)
     payload["key_numbers"] = kn
     payload["scenario_params"] = dict(params)
+    payload["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
+    payload["canonical_instant"] = True
+    payload["scenario_refreshed_at"] = datetime.now(timezone.utc).isoformat()
 
     ss = st.session_state
     stage_pending_insight(st, payload)
@@ -384,6 +388,14 @@ def _stage_refreshed_insight(
         store_applied_math_insight(payload, st=st)
     except Exception:
         pass
+    qid = str(preserved_qid or payload.get("question_id") or "").strip()
+    if qid:
+        try:
+            from suite_analytical_question import sync_analytical_question_instant_insight
+
+            sync_analytical_question_instant_insight(qid, payload)
+        except Exception:
+            pass
     try:
         from investment_persistent_state import notify_pending_insight_change
 

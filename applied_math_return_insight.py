@@ -273,7 +273,7 @@ def _flatten_insight_store_diag_on_blob(blob: dict[str, Any], trace: dict[str, A
 
 
 def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
-    """Rank stored insight payloads — prefer blobs with usable source_state."""
+    """Rank stored insight payloads — prefer refreshed scenario blobs over stale snapshots."""
     if not isinstance(payload, dict) or not payload:
         return -1
     score = 0
@@ -291,7 +291,49 @@ def _insight_blob_restore_score(payload: dict[str, Any]) -> int:
         score += 3
     if payload.get("store_blob_written_success") is True:
         score += 1
+    sections = payload.get("analyst_sections") if isinstance(payload.get("analyst_sections"), dict) else {}
+    if sections.get("proposed_portfolio"):
+        score += 25
+    if sections.get("portfolio_comparison"):
+        score += 20
+    if payload.get("scenario_params") or (payload.get("key_numbers") or {}).get("scenario_params"):
+        score += 15
+    if payload.get("scenario_refreshed_at"):
+        score += 10
+    build = str(payload.get("solver_build_id") or "")
+    if "phase2f" in build:
+        score += 8
+    elif "phase2e" in build:
+        score += 2
+    if payload.get("canonical_instant"):
+        score += 5
     return score
+
+
+def _canonical_insight_freshness_score(insight: dict[str, Any]) -> int:
+    return _insight_blob_restore_score(insight)
+
+
+def _pick_freshest_canonical_insight(
+    candidates: list[dict[str, Any]],
+    *,
+    url_iid: str = "",
+) -> dict[str, Any]:
+    best: dict[str, Any] = {}
+    best_score = -1
+    iid = str(url_iid or "").strip()
+    for raw in candidates:
+        if not isinstance(raw, dict) or not str(raw.get("conclusion") or "").strip():
+            continue
+        if iid:
+            cand_iid = str(raw.get("insight_id") or "").strip()
+            if cand_iid and cand_iid != iid:
+                continue
+        score = _canonical_insight_freshness_score(raw)
+        if score > best_score:
+            best = dict(raw)
+            best_score = score
+    return best
 
 
 def _enrich_insight_from_question_blob(
@@ -1521,40 +1563,42 @@ def resolve_canonical_instant_insight(
     """
     Resolve the canonical instant insight for AMI deep dive.
 
-    Prefers in-session pending insight (slider-refreshed) over cloud snapshots with the
-    same insight_id so allocation scenarios stay in sync with Investment.
+    Picks the freshest candidate across session pending, insight store, and the
+    question-send instant_insight snapshot so slider-refreshed allocation scenarios
+    are not overridden by the original phase2e blob.
     """
     ctx = dict(context or {})
-    instant = ctx.get("instant_insight")
-    if isinstance(instant, dict) and str(instant.get("conclusion") or "").strip():
-        hydrate_insight_scenario_params(st, instant)
-        return instant
-
     app_key = str(source_app or ctx.get("source_app") or "").strip().lower()
     url_iid = _query_param(st, "suite_ami_insight") or str(st.session_state.get("_suite_ami_insight") or "").strip()
 
+    candidates: list[dict[str, Any]] = []
     pending = st.session_state.get(SESSION_PENDING_KEY)
-    if isinstance(pending, dict) and str(pending.get("conclusion") or "").strip():
-        pending_iid = str(pending.get("insight_id") or "").strip()
-        if not url_iid or not pending_iid or pending_iid == url_iid:
-            hydrate_insight_scenario_params(st, pending)
-            return pending
+    if isinstance(pending, dict):
+        candidates.append(pending)
+    canonical_ss = st.session_state.get("_ami_investment_instant_canonical")
+    if isinstance(canonical_ss, dict):
+        candidates.append(canonical_ss)
 
     if url_iid:
         loaded = load_applied_math_insight(url_iid, source_app=app_key)
-        if str(loaded.get("conclusion") or "").strip():
-            hydrate_insight_scenario_params(st, loaded)
-            st.session_state[SESSION_PENDING_KEY] = dict(loaded)
-            return loaded
+        if isinstance(loaded, dict) and loaded:
+            candidates.append(loaded)
 
     qid = str(st.session_state.get("_suite_ai_question_id") or ctx.get("question_id") or "").strip()
     if qid:
         loaded = load_applied_math_insight_for_question(qid, source_app=app_key)
-        if str(loaded.get("conclusion") or "").strip():
-            hydrate_insight_scenario_params(st, loaded)
-            st.session_state[SESSION_PENDING_KEY] = dict(loaded)
-            return loaded
-    return {}
+        if isinstance(loaded, dict) and loaded:
+            candidates.append(loaded)
+
+    instant = ctx.get("instant_insight")
+    if isinstance(instant, dict):
+        candidates.append(instant)
+
+    picked = _pick_freshest_canonical_insight(candidates, url_iid=url_iid)
+    if picked:
+        hydrate_insight_scenario_params(st, picked)
+        st.session_state[SESSION_PENDING_KEY] = dict(picked)
+    return picked
 
 
 def load_applied_math_insight_for_question(question_id: str, *, source_app: str = "") -> dict[str, Any]:
@@ -1583,7 +1627,10 @@ def load_applied_math_insight_for_question(question_id: str, *, source_app: str 
                 if str(payload.get("question_id") or "") != qid:
                     continue
                 score = _insight_blob_restore_score(payload)
-                if payload.get("canonical_instant"):
+                if payload.get("canonical_instant") and not (
+                    (payload.get("analyst_sections") or {}).get("proposed_portfolio")
+                    or payload.get("scenario_refreshed_at")
+                ):
                     score += 10
                 if score > best_score:
                     best = dict(payload)

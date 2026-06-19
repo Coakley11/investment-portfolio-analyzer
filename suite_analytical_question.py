@@ -377,6 +377,26 @@ def persist_question_context_blob(payload: dict[str, Any]) -> None:
     _store_question_context_blob(payload)
 
 
+def sync_analytical_question_instant_insight(
+    question_id: str,
+    instant_insight: dict[str, Any],
+) -> bool:
+    """Merge refreshed instant insight into the analytical question context blob."""
+    qid = str(question_id or "").strip()
+    if not qid or not isinstance(instant_insight, dict) or not instant_insight:
+        return False
+    payload = load_analytical_question_payload(qid)
+    if not isinstance(payload, dict) or not payload:
+        return False
+    merged = dict(instant_insight)
+    payload["instant_insight"] = merged
+    ctx = dict(payload.get("context") or {})
+    ctx["instant_insight"] = merged
+    payload["context"] = ctx
+    persist_question_context_blob(payload)
+    return True
+
+
 def load_analytical_question_context(question_id: str) -> dict[str, Any]:
     """Load full context blob by question_id from saved items or resume subtitle."""
     return load_analytical_question_payload(question_id).get("context") or {}

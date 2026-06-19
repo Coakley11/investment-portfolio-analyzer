@@ -139,11 +139,15 @@ class TestInvestmentAmiUx(unittest.TestCase):
             "conclusion": "Updated scenario",
             "analyst_sections": {"proposed_portfolio": "- **VTI** 35.0%"},
             "scenario_params": {"allocation_overrides": {"VTI": 35.0}},
+            "scenario_refreshed_at": "2026-06-19T00:00:00+00:00",
+            "solver_build_id": "investment-ami-v2-phase2f-allocation-deep-dive2",
         }
         stale = {
             "insight_id": "abc123",
             "conclusion": "Original saved insight",
             "analyst_sections": {"current_portfolio": "- **VTI** 40.0%"},
+            "canonical_instant": True,
+            "solver_build_id": "investment-ami-v2-phase2e-allocation-rec1",
         }
         with patch("applied_math_return_insight.load_applied_math_insight", return_value=stale):
             resolved = resolve_canonical_instant_insight(st, {}, source_app="investment")
@@ -153,6 +157,35 @@ class TestInvestmentAmiUx(unittest.TestCase):
             st.session_state.get("_ami_scenario_params", {}).get("allocation_overrides", {}).get("VTI"),
             35.0,
         )
+
+    def test_resolve_prefers_refreshed_over_stale_instant_insight_context(self) -> None:
+        from applied_math_return_insight import resolve_canonical_instant_insight
+
+        st = _FakeSt()
+        st.query_params = {"suite_ami_insight": "abc123"}
+        ctx = {
+            "instant_insight": {
+                "insight_id": "abc123",
+                "conclusion": "Original submit snapshot",
+                "canonical_instant": True,
+                "solver_build_id": "investment-ami-v2-phase2e-allocation-rec1",
+                "analyst_sections": {"current_portfolio": "- **VTI** 40.0%"},
+            }
+        }
+        refreshed = {
+            "insight_id": "abc123",
+            "conclusion": "Refreshed allocation scenario",
+            "solver_build_id": "investment-ami-v2-phase2f-allocation-deep-dive2",
+            "scenario_refreshed_at": "2026-06-19T00:00:00+00:00",
+            "analyst_sections": {
+                "proposed_portfolio": "- **VTI** 35.0%",
+                "portfolio_comparison": "| Metric | Current | Proposed |",
+            },
+        }
+        with patch("applied_math_return_insight.load_applied_math_insight", return_value=refreshed):
+            resolved = resolve_canonical_instant_insight(st, ctx, source_app="investment")
+        self.assertEqual(resolved.get("conclusion"), "Refreshed allocation scenario")
+        self.assertIn("portfolio_comparison", resolved.get("analyst_sections") or {})
 
 
 if __name__ == "__main__":
