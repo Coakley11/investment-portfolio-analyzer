@@ -136,6 +136,12 @@ except Exception:
     pass
 
 try:
+    from suite_app_shell import apply_suite_auth_gate
+
+    apply_suite_auth_gate(st)
+except Exception:
+    pass
+try:
     from applied_math_return_insight import hydrate_investment_ami_return_state, insight_return_query_id
 
     if insight_return_query_id(st) or str(st.query_params.get("suite_ai_question_id") or "").strip():
@@ -1045,11 +1051,16 @@ def render_sidebar() -> dict:
         except Exception as _pr1_diag_exc:
             st.session_state["_pr1_diag_checkbox_error"] = str(_pr1_diag_exc)
     try:
-        from suite_command_center_link import render_command_center_sidebar_link
+        from suite_app_shell import render_suite_sidebar_account_shell
 
-        render_command_center_sidebar_link(st)
+        render_suite_sidebar_account_shell(st)
     except Exception:
-        pass
+        try:
+            from suite_command_center_link import render_command_center_sidebar_link
+
+            render_command_center_sidebar_link(st)
+        except Exception:
+            pass
     _inv_dev = False
     try:
         from suite_workspace import can_show_developer_tools
