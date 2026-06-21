@@ -7,3 +7,5 @@ plotly>=5.18.0
 
 supabase>=2.0.0
 
+
+extra-streamlit-components>=0.1.60
