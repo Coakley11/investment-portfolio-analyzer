@@ -19,6 +19,7 @@ from suite_analytical_question import (
     investment_ami_default_question,
     source_question_card_title,
 )
+from investment_ami_context import INVESTMENT_INSIGHT_QUESTION_CARD_TITLE
 
 
 class _FakeSessionState(dict):
@@ -73,9 +74,9 @@ class TestInvestmentInsightCard(unittest.TestCase):
         q = investment_ami_default_question("Portfolio Health")
         self.assertIn(q, INVESTMENT_AMI_STARTER_QUESTIONS)
         self.assertNotIn("meaningful", q.lower())
-        self.assertIn(
+        self.assertEqual(
             source_question_card_title("investment"),
-            "Applied Investment Insight question from Investment",
+            INVESTMENT_INSIGHT_QUESTION_CARD_TITLE,
         )
 
     def test_hydrate_from_cloud(self) -> None:

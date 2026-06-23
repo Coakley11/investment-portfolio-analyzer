@@ -22,7 +22,32 @@ SESSION_DISMISSED_AT_KEY = "_ami_dismissed_insight_at"
 SESSION_PERSIST_INSIGHT_DIRTY = "_suite_persist_insight_dirty"
 SESSION_INSIGHT_SOURCE_TAB_KEY = "insight_source_tab"
 SESSION_SOURCE_INVESTMENT_TAB_KEY = "source_investment_tab"
-INVESTMENT_INSIGHT_PANEL_TITLE = "Applied Investment Insight"
+try:
+    from investment_ami_context import (
+        INVESTMENT_INSIGHT_FALLBACK_DEPLOY_MESSAGE,
+        INVESTMENT_INSIGHT_FALLBACK_LOCAL_MESSAGE,
+        INVESTMENT_INSIGHT_FULL_ANALYSIS_BUTTON,
+        INVESTMENT_INSIGHT_FULL_ANALYSIS_CAPTION,
+        INVESTMENT_INSIGHT_LOADED_MESSAGE,
+        INVESTMENT_INSIGHT_PANEL_TITLE,
+        INVESTMENT_INSIGHT_RECEIVED_MESSAGE,
+    )
+except ImportError:
+    INVESTMENT_INSIGHT_PANEL_TITLE = "Investment Insight"
+    INVESTMENT_INSIGHT_LOADED_MESSAGE = "Investment Insight loaded."
+    INVESTMENT_INSIGHT_RECEIVED_MESSAGE = (
+        "Question received — open **View Investment Insight** for your answer."
+    )
+    INVESTMENT_INSIGHT_FALLBACK_LOCAL_MESSAGE = (
+        "Local analysis is unavailable — your question was saved."
+    )
+    INVESTMENT_INSIGHT_FALLBACK_DEPLOY_MESSAGE = (
+        "Instant analysis is not bundled on this deploy."
+    )
+    INVESTMENT_INSIGHT_FULL_ANALYSIS_CAPTION = (
+        "View the full investment analysis for detailed reasoning and scenarios."
+    )
+    INVESTMENT_INSIGHT_FULL_ANALYSIS_BUTTON = "View Investment Insight →"
 
 _INVESTMENT_TAB_CANONICAL: dict[str, str] = {
     "portfolio health": "Portfolio Health",
@@ -198,7 +223,7 @@ def _load_return_insight_for_query(
     else:
         insight = {
             "insight_id": query_iid,
-            "conclusion": "Applied Investment Insight loaded.",
+            "conclusion": INVESTMENT_INSIGHT_LOADED_MESSAGE,
             "question": "",
             "source_app": key,
         }
@@ -1010,19 +1035,24 @@ def build_submit_fallback_insight(
     app = str(source_app or "").strip().lower()
     page = str(source_page or "").strip()
     qid = str(question_id or "").strip()
-    why = (
+    why = INVESTMENT_INSIGHT_FALLBACK_LOCAL_MESSAGE if app == "investment" else (
         "Local solver is unavailable on this server — your question was saved and "
         "the full Applied Math analysis opens via **Open full analysis**."
     )
     if reason and reason not in ("ok", "solver_ok", "solver_unavailable", "ami_repo_not_found"):
-        why += f" ({reason})"
+        if app != "investment":
+            why += f" ({reason})"
     elif reason == "ami_repo_not_found":
         why = (
-            "Instant solver is not bundled on this deploy — your question was sent to "
-            "Command Center. Use **Open full analysis** for the complete answer."
+            INVESTMENT_INSIGHT_FALLBACK_DEPLOY_MESSAGE
+            if app == "investment"
+            else (
+                "Instant solver is not bundled on this deploy — your question was sent to "
+                "Command Center. Use **Open full analysis** for the complete answer."
+            )
         )
     conclusion = (
-        "Question received — open **full analysis** for your Investment Insight answer."
+        INVESTMENT_INSIGHT_RECEIVED_MESSAGE
         if app == "investment"
         else "Question received — open full analysis for details."
     )
@@ -1035,7 +1065,7 @@ def build_submit_fallback_insight(
         source_page=page,
         conclusion=conclusion,
         method="Investment Insight",
-        model_name="Applied Math (full analysis)",
+        model_name="Investment Insight",
         math_summary=why,
         assumptions=[],
         confidence="medium",
@@ -1402,9 +1432,9 @@ def store_applied_math_insight(
             "applied_intelligence",
             "investment",
         ):
-            default_title = "Applied Math insight"
-            if str(data.get("source_app") or "").strip().lower() == "investment":
-                default_title = "Applied Investment Insight"
+            default_title = "Investment Insight"
+            if str(data.get("source_app") or "").strip().lower() != "investment":
+                default_title = "Applied Math insight"
             remember_saved_item(
                 store_app,
                 INSIGHT_ITEM_TYPE,
@@ -1430,7 +1460,7 @@ def store_applied_math_insight(
                 "applied_intelligence",
                 "investment",
             ):
-                default_title = "Applied Investment Insight"
+                default_title = "Investment Insight"
                 if str(data.get("source_app") or "").strip().lower() != "investment":
                     default_title = "Applied Math insight"
                 remember_saved_item(
@@ -1830,7 +1860,7 @@ def apply_ami_insight_from_query(st: Any, app_key: str) -> bool:
     insight = load_applied_math_insight(iid, source_app=app_key)
     if not insight:
         placeholder = (
-            "Applied Investment Insight loaded."
+            INVESTMENT_INSIGHT_LOADED_MESSAGE
             if str(app_key or "").strip().lower() == "investment"
             else "Applied Math insight loaded."
         )
@@ -1979,12 +2009,21 @@ def render_applied_math_insight_panel(
             extra = f" ({data.get('confidence_pct')}%)" if data.get("confidence_pct") else ""
             st.caption(f"Confidence: **{conf}**{extra}")
         elif not show_details and isinstance(sections, dict) and sections:
-            st.caption("Open full analysis in Applied Intelligence for detailed reasoning and scenarios.")
+            st.caption(
+                INVESTMENT_INSIGHT_FULL_ANALYSIS_CAPTION
+                if app == "investment"
+                else "Open full analysis in Applied Intelligence for detailed reasoning and scenarios."
+            )
         url = str(data.get("full_analysis_url") or "").strip()
         c1, c2 = st.columns(2)
         with c1:
             if url:
-                st.link_button("Open full analysis →", url, use_container_width=True)
+                full_label = (
+                    INVESTMENT_INSIGHT_FULL_ANALYSIS_BUTTON
+                    if app == "investment"
+                    else "Open full analysis →"
+                )
+                st.link_button(full_label, url, use_container_width=True)
         with c2:
             insight_id = str(data.get("insight_id") or "pending")[:12]
             if st.button("Dismiss insight", key=f"ami_insight_dismiss_{insight_id}", use_container_width=True):

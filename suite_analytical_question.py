@@ -18,6 +18,41 @@ from typing import Any
 
 from activity_time import parse_activity_timestamp, utc_now_iso
 
+try:
+    from investment_ami_context import (
+        INVESTMENT_AMI_STARTER_QUESTIONS,
+        INVESTMENT_INSIGHT_ACTIVITY_PREFIX,
+        INVESTMENT_INSIGHT_QUESTION_CARD_TITLE,
+        INVESTMENT_INSIGHT_CONTINUE_BUTTON,
+        INVESTMENT_INSIGHT_SIDEBAR_CAPTION,
+        INVESTMENT_INSIGHT_SIDEBAR_HEADING,
+        INVESTMENT_INSIGHT_SUBMIT_LABEL,
+        investment_ami_default_question,
+        investment_insight_duplicate_message,
+        investment_insight_question_placeholder,
+        investment_insight_sent_message,
+    )
+except ImportError:
+    INVESTMENT_AMI_STARTER_QUESTIONS = ()  # type: ignore[misc, assignment]
+    INVESTMENT_INSIGHT_ACTIVITY_PREFIX = "Asked for Investment Insight"
+    INVESTMENT_INSIGHT_QUESTION_CARD_TITLE = "Investment Insight question from Investment"
+    INVESTMENT_INSIGHT_CONTINUE_BUTTON = "View Investment Insight →"
+    INVESTMENT_INSIGHT_SIDEBAR_CAPTION = "Ask about allocation, risk, and your portfolio."
+    INVESTMENT_INSIGHT_SIDEBAR_HEADING = "Get Investment Insight"
+    INVESTMENT_INSIGHT_SUBMIT_LABEL = "Generate Investment Insight"
+
+    def investment_ami_default_question(source_page: str = "") -> str:  # type: ignore[misc]
+        return "Is my portfolio too concentrated?"
+
+    def investment_insight_question_placeholder(source_page: str = "") -> str:  # type: ignore[misc]
+        return f"e.g. {investment_ami_default_question(source_page)}"
+
+    def investment_insight_sent_message() -> str:  # type: ignore[misc]
+        return "Investment insight request saved."
+
+    def investment_insight_duplicate_message() -> str:  # type: ignore[misc]
+        return "You already asked this recently."
+
 log = logging.getLogger(__name__)
 
 AMI_SIDEBAR_DEPLOY_LABEL = "Applied Math question sender live"
@@ -223,8 +258,10 @@ def source_question_card_title(
     app = normalize_source_app_id(source_app, context)
     if app == "music":
         return "Music Coach question from Music"
+    if app == "investment":
+        return INVESTMENT_INSIGHT_QUESTION_CARD_TITLE
     label = _SOURCE_LABELS.get(app, app.replace("_", " ").title())
-    if app in {"baseball", "nba", "investment"}:
+    if app in {"baseball", "nba"}:
         return f"Applied Math question from {label}"
     return f"Question from {label}"
 
@@ -574,6 +611,8 @@ def analytical_question_continue_copy(payload: dict[str, Any]) -> tuple[str, str
     title = source_question_card_title(app, ctx)
     if app == "music":
         return (title, question, "Continue with Music Coach →")
+    if app == "investment":
+        return (title, question, INVESTMENT_INSIGHT_CONTINUE_BUTTON)
     return (title, question, ANALYTICAL_QUESTION_BUTTON_LABEL)
 
 
@@ -776,6 +815,8 @@ def submit_analytical_question(
         )
         if metrics["source_app"] == "music":
             summary = f"Asked Music Coach: {payload['question'][:80]}"
+        elif metrics["source_app"] == "investment":
+            summary = f"{INVESTMENT_INSIGHT_ACTIVITY_PREFIX}: {payload['question'][:80]}"
         else:
             summary = f"Asked Applied Math: {payload['question'][:80]}"
         try:
@@ -840,6 +881,30 @@ def build_submit_context(
     return ctx
 
 
+def _ami_sidebar_feedback_messages(source_app: str) -> tuple[str, str]:
+    """Return (duplicate_message, success_message) for AMI sidebar submit."""
+    app = str(source_app or "").strip().lower()
+    if app == "music":
+        return (
+            "That question was already sent recently. Open Command Center to continue with the Music Coach.",
+            "Question sent to Command Center. Open Command Center to continue with the Music Coach.",
+        )
+    if app == "nba":
+        return (
+            "That NBA insight was already requested recently. Open Command Center to review it.",
+            "NBA insight request saved. Open Command Center when you're ready to review it.",
+        )
+    if app == "investment":
+        return (
+            investment_insight_duplicate_message(),
+            investment_insight_sent_message(),
+        )
+    return (
+        "That question was already sent recently. Open Command Center to continue in Applied Intelligence.",
+        "Question sent to Command Center. Open Command Center to continue in Applied Intelligence.",
+    )
+
+
 def render_analyze_with_applied_math_sidebar(
     st: Any,
     *,
@@ -863,6 +928,7 @@ def render_analyze_with_applied_math_sidebar(
 
     is_music = str(source_app or "").strip().lower() == "music"
     is_nba = str(source_app or "").strip().lower() == "nba"
+    is_investment = str(source_app or "").strip().lower() == "investment"
     if is_music:
         st.sidebar.markdown("### Ask the Music Coach")
         st.sidebar.caption(
@@ -875,10 +941,16 @@ def render_analyze_with_applied_math_sidebar(
             "Ask an NBA or playoff question about the team, matchup, or page you're viewing."
         )
         submit_label = "Get NBA Insight"
+    elif is_investment:
+        st.sidebar.markdown(f"### {INVESTMENT_INSIGHT_SIDEBAR_HEADING}")
+        st.sidebar.caption(INVESTMENT_INSIGHT_SIDEBAR_CAPTION)
+        submit_label = INVESTMENT_INSIGHT_SUBMIT_LABEL
     else:
         st.sidebar.markdown("### Analyze with Applied Math")
         st.sidebar.caption("Ask a math question about what you are viewing.")
         submit_label = "Send to Command Center"
+
+    dup_msg, ok_msg = _ami_sidebar_feedback_messages(str(source_app or ""))
 
     last = ss.get("_ami_last_send")
     if (
@@ -886,16 +958,7 @@ def render_analyze_with_applied_math_sidebar(
         and last.get("source_app") == source_app
         and _recent_duplicate_send(ss, str(last.get("question_id") or ""))
     ):
-        sent_msg = (
-            "Question sent to Command Center. Open Command Center to continue with the Music Coach."
-            if is_music
-            else (
-                "NBA insight request saved. Open Command Center when you're ready to review it."
-                if is_nba
-                else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
-            )
-        )
-        st.sidebar.success(sent_msg)
+        st.sidebar.success(ok_msg)
 
     question = st.sidebar.text_area(
         "Question",
@@ -906,7 +969,11 @@ def render_analyze_with_applied_math_sidebar(
             else (
                 nba_insight_question_placeholder(source_page)
                 if is_nba
-                else "e.g. Is this trend meaningful statistically?"
+                else (
+                    investment_insight_question_placeholder(source_page)
+                    if is_investment
+                    else "e.g. Is this trend meaningful statistically?"
+                )
             )
         ),
         height=88,
@@ -948,24 +1015,6 @@ def render_analyze_with_applied_math_sidebar(
             )
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
-            dup_msg = (
-                "That question was already sent recently. Open Command Center to continue with the Music Coach."
-                if is_music
-                else (
-                    "That NBA insight was already requested recently. Open Command Center to review it."
-                    if is_nba
-                    else "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
-                )
-            )
-            ok_msg = (
-                "Question sent to Command Center. Open Command Center to continue with the Music Coach."
-                if is_music
-                else (
-                    "NBA insight request saved. Open Command Center when you're ready to review it."
-                    if is_nba
-                    else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
-                )
-            )
             if result.get("duplicate"):
                 st.sidebar.info(dup_msg)
             else:

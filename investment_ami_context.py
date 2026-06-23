@@ -19,6 +19,47 @@ INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
     "What growth rate is implied for VOO?",
 )
 
+# User-facing AMI copy — outcome language, not platform implementation names.
+INVESTMENT_INSIGHT_PANEL_TITLE = "Investment Insight"
+INVESTMENT_INSIGHT_SIDEBAR_HEADING = "Get Investment Insight"
+INVESTMENT_INSIGHT_SIDEBAR_CAPTION = (
+    "Ask about allocation, concentration, risk, ETFs, macro, or your current portfolio."
+)
+INVESTMENT_INSIGHT_SUBMIT_LABEL = "Generate Investment Insight"
+INVESTMENT_INSIGHT_CONTINUE_BUTTON = "View Investment Insight →"
+INVESTMENT_INSIGHT_FULL_ANALYSIS_BUTTON = "View Investment Insight →"
+INVESTMENT_INSIGHT_FULL_ANALYSIS_CAPTION = (
+    "View the full investment analysis for detailed reasoning and scenarios."
+)
+INVESTMENT_INSIGHT_QUESTION_CARD_TITLE = "Investment Insight question from Investment"
+INVESTMENT_INSIGHT_ACTIVITY_PREFIX = "Asked for Investment Insight"
+INVESTMENT_INSIGHT_LOADED_MESSAGE = "Investment Insight loaded."
+INVESTMENT_INSIGHT_RECEIVED_MESSAGE = (
+    "Question received — open **View Investment Insight** for your answer."
+)
+INVESTMENT_INSIGHT_FALLBACK_LOCAL_MESSAGE = (
+    "Local analysis is unavailable — your question was saved and "
+    "**View Investment Insight** opens the complete answer."
+)
+INVESTMENT_INSIGHT_FALLBACK_DEPLOY_MESSAGE = (
+    "Instant analysis is not bundled on this deploy — use "
+    "**View Investment Insight** for the complete answer."
+)
+
+
+def investment_insight_sent_message() -> str:
+    return (
+        "Investment insight request saved. Your answer appears on this page — "
+        "use **View Investment Insight** for the full analysis."
+    )
+
+
+def investment_insight_duplicate_message() -> str:
+    return (
+        "You already asked this recently. Review the insight on this page or "
+        "refine your question."
+    )
+
 _INVESTMENT_SOLVER_INTENTS = frozenset(
     {
         "portfolio_concentration",
@@ -189,6 +230,10 @@ def investment_ami_default_question(source_page: str) -> str:
     if "health" in page or "portfolio" in page:
         return INVESTMENT_AMI_STARTER_QUESTIONS[0]
     return INVESTMENT_AMI_STARTER_QUESTIONS[2]
+
+
+def investment_insight_question_placeholder(source_page: str = "") -> str:
+    return f"e.g. {investment_ami_default_question(source_page)}"
 
 
 def is_beginner_experience(ctx: dict[str, Any]) -> bool:
