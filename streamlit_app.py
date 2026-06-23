@@ -30,6 +30,7 @@ from components.beginner_navigation import (
     _holdings_fingerprint,
     active_main_tab,
     is_etf_holdings_tab,
+    is_real_portfolio_tab,
     mark_portfolio_built,
     render_beginner_sidebar_checklist,
     render_recommended_next_step_card,
@@ -3447,6 +3448,16 @@ if active_main_tab(_active_tab, "frontier", beginner=beginner_mode):
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
+
+# ── My Portfolio (real ownership ledger) ──────────────────────────────────────
+
+if is_real_portfolio_tab(_active_tab):
+    try:
+        from components.real_portfolio import render_real_portfolio_tab
+
+        render_real_portfolio_tab(beginner=beginner_mode)
+    except ImportError:
+        st.warning("Real portfolio module is not available in this build.")
 
 # ── ETF Holdings Explorer (Advanced only) ─────────────────────────────────────
 

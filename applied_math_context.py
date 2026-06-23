@@ -235,6 +235,18 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     live_weights = current_weights_from_holdings_df(session_state.get("holdings_df"))
     if live_weights:
         ctx["current_weights"] = live_weights
+
+    txn_records = session_state.get("portfolio_transactions")
+    if isinstance(txn_records, list) and txn_records:
+        try:
+            import portfolio_engine as pe
+
+            real_ctx = pe.build_ami_portfolio_context(pe.transactions_from_records(txn_records))
+            ctx["real_portfolio"] = real_ctx
+            if real_ctx.get("position_weights"):
+                ctx.setdefault("current_weights_real", real_ctx["position_weights"])
+        except Exception:
+            pass
     return ctx
 
 

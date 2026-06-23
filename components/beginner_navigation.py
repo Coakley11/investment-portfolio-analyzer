@@ -21,6 +21,7 @@ BEGINNER_TAB_LABELS = [
     "⑧ Scenarios (Optional)",
     "⑨ Optimizer (Optional)",
     "⑩ Frontier (Optional)",
+    "⑪ My Portfolio",
 ]
 
 ADVANCED_TAB_LABELS = [
@@ -35,6 +36,7 @@ ADVANCED_TAB_LABELS = [
     "Optimization",
     "Efficient Frontier",
     "ETF Holdings Explorer",
+    "My Portfolio",
 ]
 
 STEP_TAB_LABEL: dict[str, str] = {
@@ -137,6 +139,9 @@ _MAIN_TAB_STEP_ORDER: tuple[str, ...] = (
     "frontier",
 )
 
+REAL_PORTFOLIO_TAB_LABEL = "My Portfolio"
+BEGINNER_REAL_PORTFOLIO_TAB_LABEL = "⑪ My Portfolio"
+
 
 def main_tab_label(step: str, *, beginner: bool) -> str:
     """Resolve the section label for a semantic step in the current experience mode."""
@@ -156,6 +161,11 @@ def active_main_tab(active: str, step: str, *, beginner: bool) -> bool:
 
 def is_etf_holdings_tab(active: str) -> bool:
     return str(active or "").strip() == ETF_HOLDINGS_TAB_LABEL
+
+
+def is_real_portfolio_tab(active: str) -> bool:
+    cleaned = str(active or "").strip()
+    return cleaned in (REAL_PORTFOLIO_TAB_LABEL, BEGINNER_REAL_PORTFOLIO_TAB_LABEL)
 
 
 def normalize_tab_label_for_mode(label: str, *, beginner: bool) -> str:

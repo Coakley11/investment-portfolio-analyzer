@@ -1,0 +1,407 @@
+"""Real portfolio UI — dashboard, positions, transactions, and position sizing."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+import dashboard_charts as charts
+import portfolio_engine as pe
+from components.ui_helpers import APP_DISCLAIMER, format_money
+
+REAL_PORTFOLIO_SUBTABS = (
+    "Dashboard",
+    "Positions",
+    "Transactions",
+    "Position Sizing",
+)
+
+SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
+SESSION_SUBTAB_KEY = "real_portfolio_subtab"
+
+
+def _ss() -> Any:
+    return st.session_state
+
+
+def get_portfolio_transactions() -> list[pe.PortfolioTransaction]:
+    records = _ss().get(SESSION_TRANSACTIONS_KEY) or []
+    if not isinstance(records, list):
+        return []
+    return pe.transactions_from_records(records)
+
+
+def set_portfolio_transactions(transactions: list[pe.PortfolioTransaction]) -> None:
+    _ss()[SESSION_TRANSACTIONS_KEY] = pe.transactions_to_records(transactions)
+
+
+def _hero(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"""
+        <div style="background:linear-gradient(135deg,#0f2847 0%,#141c2b 100%);
+        border:1px solid rgba(77,163,255,0.35);border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1rem;">
+        <div style="font-size:1.35rem;font-weight:700;color:#f1f5f9;">{title}</div>
+        <div style="color:#94a3b8;font-size:0.92rem;margin-top:0.35rem;">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _metric_row(cols: list, labels: list[str], values: list[str], *, help_texts: list[str] | None = None) -> None:
+    for col, label, value in zip(cols, labels, values):
+        with col:
+            st.metric(label, value)
+
+
+def _gain_color(value: float) -> str:
+    if value > 0:
+        return "#2ecc71"
+    if value < 0:
+        return "#e74c3c"
+    return "#94a3b8"
+
+
+def _format_pct(value: float) -> str:
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.2f}%"
+
+
+def _format_gain(value: float) -> str:
+    sign = "+" if value > 0 else ""
+    return f"{sign}{format_money(value)}"
+
+
+def render_portfolio_dashboard(*, beginner: bool = False) -> None:
+    transactions = get_portfolio_transactions()
+    summary = pe.compute_portfolio_summary(transactions)
+    positions, cash = pe.build_positions(transactions)
+
+    if not transactions:
+        st.info(
+            "No transactions yet. Open **Transactions** to record buys, sells, and cash deposits. "
+            "Your dashboard will populate automatically."
+        )
+        return
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    _metric_row(
+        [c1, c2, c3, c4, c5, c6],
+        [
+            "Total Portfolio Value",
+            "Total Invested",
+            "Total Gain/Loss $",
+            "Total Gain/Loss %",
+            "Cash Balance",
+            "Holdings",
+        ],
+        [
+            format_money(summary.total_portfolio_value),
+            format_money(summary.total_invested_capital),
+            _format_gain(summary.total_gain_loss_dollar),
+            _format_pct(summary.total_gain_loss_pct),
+            format_money(summary.cash_balance),
+            str(summary.num_holdings),
+        ],
+    )
+
+    st.markdown("#### Allocation")
+    a1, a2, a3, a4 = st.columns(4)
+    buckets = summary.allocation_by_bucket
+    for col, key in zip([a1, a2, a3, a4], ["Stocks", "ETFs", "Cash", "Other"]):
+        with col:
+            st.metric(f"{key} %", f"{buckets.get(key, 0.0):.1f}%")
+
+    if positions:
+        pos_df = pe.positions_to_dataframe(positions)
+        chart_df = pos_df[["Ticker", "Weight %"]].copy()
+        chart_df["Weight"] = chart_df["Weight %"] / 100.0
+        st.plotly_chart(
+            charts.allocation_chart(chart_df[["Ticker", "Weight"]]),
+            use_container_width=True,
+        )
+
+    st.markdown("#### Position Weights")
+    if summary.largest_position:
+        lp = summary.largest_position
+        sp = summary.smallest_position
+        w1, w2 = st.columns(2)
+        with w1:
+            st.caption(f"**Largest:** {lp.ticker} — {lp.weight_pct:.1f}% ({format_money(lp.market_value)})")
+        with w2:
+            if sp:
+                st.caption(f"**Smallest:** {sp.ticker} — {sp.weight_pct:.1f}% ({format_money(sp.market_value)})")
+
+        weight_df = pos_df[["Ticker", "Company Name", "Weight %", "Market Value"]].copy()
+        st.dataframe(weight_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Performance")
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        st.markdown("**Top Gainers**")
+        if summary.top_gainers:
+            for p in summary.top_gainers:
+                if p.gain_loss_pct > 0:
+                    st.markdown(
+                        f"- **{p.ticker}** {_format_pct(p.gain_loss_pct)} "
+                        f"({_format_gain(p.gain_loss_dollar)})"
+                    )
+        else:
+            st.caption("No gainers yet.")
+    with p2:
+        st.markdown("**Top Losers**")
+        if summary.top_losers:
+            for p in summary.top_losers:
+                st.markdown(
+                    f"- **{p.ticker}** {_format_pct(p.gain_loss_pct)} "
+                    f"({_format_gain(p.gain_loss_dollar)})"
+                )
+        else:
+            st.caption("No losers yet.")
+    with p3:
+        st.markdown("**Biggest Positions**")
+        for p in summary.biggest_positions:
+            st.markdown(f"- **{p.ticker}** {p.weight_pct:.1f}% — {format_money(p.market_value)}")
+
+    st.caption(f"Manual entry portfolio tracker. {APP_DISCLAIMER}")
+
+
+def render_portfolio_positions(*, beginner: bool = False) -> None:
+    transactions = get_portfolio_transactions()
+    positions, cash = pe.build_positions(transactions)
+
+    if not positions and not transactions:
+        st.info("Add transactions to build your position list.")
+        return
+
+    st.caption(f"Live prices via yfinance. Cash balance: **{format_money(cash)}**")
+    df = pe.positions_to_dataframe(positions)
+    if df.empty:
+        st.warning("No open positions — cash-only portfolio or all positions sold.")
+        return
+
+    display = df.copy()
+    display["Shares Owned"] = display["Shares Owned"].map(lambda x: f"{x:,.4f}")
+    display["Avg Cost Basis"] = display["Avg Cost Basis"].map(lambda x: f"${x:,.2f}")
+    display["Current Price"] = display["Current Price"].map(lambda x: f"${x:,.2f}")
+    display["Market Value"] = display["Market Value"].map(format_money)
+    display["Gain/Loss $"] = df["Gain/Loss $"].map(_format_gain)
+    display["Gain/Loss %"] = df["Gain/Loss %"].map(_format_pct)
+    display["Weight %"] = df["Weight %"].map(lambda x: f"{x:.2f}%")
+
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+def render_portfolio_transactions(*, beginner: bool = False) -> None:
+    transactions = get_portfolio_transactions()
+
+    st.markdown("##### Add Transaction")
+    with st.form("real_portfolio_add_txn", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            action = st.selectbox(
+                "Action",
+                ["buy", "sell", "cash_deposit", "cash_withdrawal"],
+                format_func=lambda x: x.replace("_", " ").title(),
+            )
+            txn_date = st.date_input("Date")
+        with c2:
+            ticker = st.text_input("Ticker", placeholder="VOO (leave blank for cash-only)")
+            quantity = st.number_input("Quantity (shares or $ for cash)", min_value=0.0, value=0.0, step=1.0)
+        with c3:
+            price = st.number_input("Execution price ($)", min_value=0.0, value=0.0, step=0.01)
+            notes = st.text_input("Notes", placeholder="Optional")
+        asset_type = st.selectbox(
+            "Asset type",
+            ["stock", "etf", "bond", "cash", "other"],
+            index=1,
+            help="Used for allocation breakdown. Auto-inferred from ticker when possible.",
+        )
+        submitted = st.form_submit_button("Add Transaction", type="primary")
+
+    if submitted:
+        sym = str(ticker or "").strip().upper()
+        if action in ("buy", "sell") and not sym:
+            st.error("Enter a ticker for buy/sell transactions.")
+        elif action in ("buy", "sell") and quantity <= 0:
+            st.error("Quantity must be greater than zero.")
+        elif action in ("buy", "sell") and price <= 0:
+            st.error("Execution price must be greater than zero.")
+        elif action.startswith("cash") and quantity <= 0 and price <= 0:
+            st.error("Enter a dollar amount in Quantity or Execution price for cash transactions.")
+        else:
+            inferred_asset = pe.normalize_asset_type(asset_type, sym) if sym else "cash"
+            txn = pe.PortfolioTransaction(
+                id=pe._new_id(),
+                action=action,  # type: ignore[arg-type]
+                date=txn_date.isoformat(),
+                ticker=sym,
+                quantity=quantity if quantity > 0 else price,
+                execution_price=price if action in ("buy", "sell") else 1.0,
+                notes=notes,
+                company_name=pe.infer_company_name(sym) if sym else "Cash",
+                asset_type=inferred_asset,
+            )
+            updated = transactions + [txn]
+            set_portfolio_transactions(updated)
+            try:
+                from investment_persistent_state import autosave_investment_state
+
+                st.session_state[f"_suite_persist_local_dirty::investment"] = True
+                autosave_investment_state(st, trigger="portfolio_transactions_change")
+            except ImportError:
+                pass
+            st.success("Transaction added.")
+            st.rerun()
+
+    st.markdown("##### Transaction History")
+    if not transactions:
+        st.caption("No transactions recorded yet.")
+        return
+
+    df = pe.transactions_to_dataframe(transactions)
+    st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
+
+    st.markdown("##### Remove Transaction")
+    options = {f"{t.date} · {t.action} · {t.ticker or 'CASH'} · {t.quantity}": t.id for t in reversed(transactions)}
+    pick = st.selectbox("Select transaction to delete", [""] + list(options.keys()))
+    if st.button("Delete Selected", disabled=not pick):
+        txn_id = options.get(pick)
+        if txn_id:
+            set_portfolio_transactions([t for t in transactions if t.id != txn_id])
+            try:
+                from investment_persistent_state import autosave_investment_state
+
+                st.session_state[f"_suite_persist_local_dirty::investment"] = True
+                autosave_investment_state(st, trigger="portfolio_transactions_change")
+            except ImportError:
+                pass
+            st.rerun()
+
+
+def render_position_sizing(*, beginner: bool = False) -> None:
+    transactions = get_portfolio_transactions()
+    summary = pe.compute_portfolio_summary(transactions)
+
+    st.markdown("##### Position Sizing Assistant")
+    st.caption(
+        "Estimate a reasonable position size based on your portfolio, cash, and risk tolerance. "
+        "Educational guidance only."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        portfolio_size = st.number_input(
+            "Portfolio size ($)",
+            min_value=0.0,
+            value=float(max(summary.total_portfolio_value, 0.0)),
+            step=1000.0,
+        )
+    with c2:
+        cash_available = st.number_input(
+            "Cash available ($)",
+            min_value=0.0,
+            value=float(max(summary.cash_balance, 0.0)),
+            step=500.0,
+        )
+    with c3:
+        risk = st.selectbox("Risk tolerance", ["Conservative", "Moderate", "Aggressive"])
+
+    c4, c5 = st.columns(2)
+    with c4:
+        target_ticker = st.text_input("Ticker for sizing (optional)", placeholder="VOO")
+    with c5:
+        add_amount = st.number_input("Additional investment ($)", min_value=0.0, value=0.0, step=500.0)
+
+    if st.button("Calculate Suggested Size", type="primary"):
+        result = pe.compute_position_sizing(
+            transactions,
+            portfolio_size=portfolio_size,
+            cash_available=cash_available,
+            risk_tolerance=risk,  # type: ignore[arg-type]
+            target_ticker=target_ticker,
+            additional_investment=add_amount,
+        )
+        st.session_state["_portfolio_sizing_result"] = result
+
+    result = st.session_state.get("_portfolio_sizing_result")
+    if isinstance(result, pe.PositionSizingResult):
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Suggested Position Size", format_money(result.suggested_dollar_amount))
+        r2.metric("Target Allocation %", f"{result.suggested_allocation_pct:.1f}%")
+        r3.metric("Projected Weight", f"{result.projected_weight_pct:.1f}%")
+
+        if result.concentration_warnings:
+            st.markdown("**Concentration Warnings**")
+            for w in result.concentration_warnings:
+                st.warning(w)
+
+        if result.allocation_bucket_preview:
+            st.markdown("**Allocation Preview**")
+            preview = result.allocation_bucket_preview
+            cols = st.columns(4)
+            for col, key in zip(cols, ["Stocks", "ETFs", "Cash", "Other"]):
+                col.metric(key, f"{preview.get(key, 0.0):.1f}%")
+
+    st.divider()
+    st.markdown("##### What-If: Add Money to a Position")
+    w1, w2, w3 = st.columns([2, 2, 1])
+    with w1:
+        whatif_ticker = st.text_input("What-if ticker", key="whatif_ticker", placeholder="QQQ")
+    with w2:
+        whatif_amount = st.number_input("Amount to add ($)", min_value=0.0, value=5000.0, step=500.0)
+    with w3:
+        st.write("")
+        st.write("")
+        run_whatif = st.button("Simulate", use_container_width=True)
+
+    if run_whatif and whatif_ticker and whatif_amount > 0:
+        sim = pe.simulate_add_to_position(transactions, whatif_ticker, whatif_amount)
+        if not sim.get("ok"):
+            st.error(sim.get("message", "Simulation failed."))
+        else:
+            st.success(
+                f"Adding {format_money(sim['amount'])} to **{sim['ticker']}** "
+                f"({sim['shares_added']:.4f} shares @ ${sim['price']:.2f})"
+            )
+            s1, s2 = st.columns(2)
+            s1.metric("Position Weight Before", f"{sim['position_weight_before']:.1f}%")
+            s2.metric("Position Weight After", f"{sim['position_weight_after']:.1f}%")
+
+
+def render_real_portfolio_tab(*, beginner: bool = False) -> None:
+    """Main entry: sub-tab navigation for the real portfolio engine."""
+    subtitle = (
+        "Track what you actually own — positions, gains, and sizing guidance."
+        if beginner
+        else "Manual portfolio ledger: positions derived from transactions, live marks, allocation, and sizing."
+    )
+    _hero("My Portfolio", subtitle)
+
+    labels = list(REAL_PORTFOLIO_SUBTABS)
+    try:
+        from investment_persistent_state import validate_state_option
+
+        validate_state_option(st, SESSION_SUBTAB_KEY, labels, labels[0])
+    except ImportError:
+        if SESSION_SUBTAB_KEY not in _ss():
+            _ss()[SESSION_SUBTAB_KEY] = labels[0]
+
+    active = st.radio(
+        "Portfolio section",
+        labels,
+        key=SESSION_SUBTAB_KEY,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if active == labels[0]:
+        render_portfolio_dashboard(beginner=beginner)
+    elif active == labels[1]:
+        render_portfolio_positions(beginner=beginner)
+    elif active == labels[2]:
+        render_portfolio_transactions(beginner=beginner)
+    elif active == labels[3]:
+        render_position_sizing(beginner=beginner)

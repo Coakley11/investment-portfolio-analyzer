@@ -109,6 +109,7 @@ _PERSIST_SCALAR_KEYS = (
     "visited_mc",
     "visited_implement",
     "run_risk_macro",
+    "real_portfolio_subtab",
 )
 
 _LEGACY_TAB_KEY = "health_active_tab"
@@ -1179,6 +1180,9 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
                     state["holdings_fingerprint"] = fp
         except Exception:
             pass
+    txn_records = ss.get("portfolio_transactions")
+    if isinstance(txn_records, list) and txn_records:
+        state["portfolio_transactions"] = copy.deepcopy(txn_records)
     summary = ss.get("health_summary")
     if isinstance(summary, dict):
         state["health_summary"] = copy.deepcopy(summary)
@@ -1242,6 +1246,10 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             records = _holdings_records_from_blob(val)
             if records:
                 _apply_holdings_df_records(st, records, source="restore_blob")
+            continue
+        if key == "portfolio_transactions":
+            if isinstance(val, list):
+                st.session_state["portfolio_transactions"] = copy.deepcopy(val)
             continue
         if key in ("analysis_start_date", "analysis_end_date"):
             coerced = _coerce_persisted_analysis_date(val)
