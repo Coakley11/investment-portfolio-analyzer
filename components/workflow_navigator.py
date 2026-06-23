@@ -111,6 +111,43 @@ def render_workflow_navigator(
     return clicked
 
 
+def render_my_portfolio_access(
+    st_obj: Any,
+    *,
+    beginner_mode: bool,
+    active_tab: str,
+) -> bool:
+    """Always-visible entry to the real portfolio ledger (Phase 1 ownership tracking)."""
+    from components.beginner_navigation import (
+        BEGINNER_REAL_PORTFOLIO_TAB_LABEL,
+        REAL_PORTFOLIO_TAB_LABEL,
+        is_real_portfolio_tab,
+    )
+
+    label = BEGINNER_REAL_PORTFOLIO_TAB_LABEL if beginner_mode else REAL_PORTFOLIO_TAB_LABEL
+    is_active = is_real_portfolio_tab(active_tab)
+    c1, c2 = st.columns([1.15, 3.85])
+    clicked = False
+    with c1:
+        if st.button(
+            "My Portfolio",
+            key="nav_my_portfolio",
+            type="primary" if is_active else "secondary",
+            use_container_width=True,
+            help="Track real holdings, transactions, gains, allocation, and position sizing",
+        ):
+            commit_investment_tab_navigation(st_obj, label, beginner_mode=beginner_mode)
+            clicked = True
+    with c2:
+        hint = (
+            "Viewing your real portfolio — positions, transactions, gains, and sizing."
+            if is_active
+            else "Track what you actually own: cash, buys/sells, live gains, and allocation."
+        )
+        st.caption(hint)
+    return clicked
+
+
 def render_optional_tools_navigator(
     st_obj: Any,
     *,
@@ -119,7 +156,13 @@ def render_optional_tools_navigator(
     active_tab: str,
 ) -> bool:
     """Collapsed row for tabs outside the core 5-step workflow."""
-    from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS
+    from components.beginner_navigation import (
+        ADVANCED_TAB_LABELS,
+        BEGINNER_REAL_PORTFOLIO_TAB_LABEL,
+        BEGINNER_TAB_LABELS,
+        ETF_HOLDINGS_TAB_LABEL,
+        REAL_PORTFOLIO_TAB_LABEL,
+    )
 
     labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
     optional: list[tuple[str, str]] = []
@@ -134,6 +177,11 @@ def render_optional_tools_navigator(
             (labels[9], "frontier"),
         ]
     )
+    if not beginner_mode and len(labels) > 10:
+        optional.append((ETF_HOLDINGS_TAB_LABEL, "etf_holdings"))
+    portfolio_label = BEGINNER_REAL_PORTFOLIO_TAB_LABEL if beginner_mode else REAL_PORTFOLIO_TAB_LABEL
+    if portfolio_label not in [t for t, _ in optional]:
+        optional.append((portfolio_label, "my_portfolio"))
     clicked = False
     with st.expander("Optional tools", expanded=False):
         st.caption("Charts, macro, optimizer, and other tools — not required for the core journey.")
@@ -168,7 +216,10 @@ def apply_workflow_navigation(
     nav_clicked = render_workflow_navigator(
         st_obj, beginner_mode=beginner_mode, tab_labels=tab_labels, active_tab=active
     )
+    portfolio_clicked = render_my_portfolio_access(
+        st_obj, beginner_mode=beginner_mode, active_tab=str(active or "")
+    )
     opt_clicked = render_optional_tools_navigator(
         st_obj, beginner_mode=beginner_mode, tab_labels=tab_labels, active_tab=active
     )
-    return nav_clicked or opt_clicked
+    return nav_clicked or portfolio_clicked or opt_clicked
