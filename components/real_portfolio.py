@@ -21,7 +21,7 @@ REAL_PORTFOLIO_SUBTABS = (
 SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-06-23-cash-accounting-v2"
+REAL_PORTFOLIO_BUILD_ID = "2026-06-23-schd-quote-v3"
 
 
 def _ss() -> Any:
@@ -225,8 +225,15 @@ def render_portfolio_positions(*, beginner: bool = False) -> None:
         return
 
     st.caption(
-        f"Live prices via yfinance (split-adjusted daily close). Cash balance: **{pe.format_currency(cash)}**"
+        f"Live prices via yfinance (last traded / closing price). Cash balance: **{pe.format_currency(cash)}**"
     )
+    split_adjusted = [p for p in positions if p.stock_splits_applied > 0]
+    if split_adjusted:
+        tickers = ", ".join(
+            f"{p.ticker} ({p.stock_splits_applied} split{'s' if p.stock_splits_applied != 1 else ''})"
+            for p in split_adjusted
+        )
+        st.caption(f"Share counts adjusted for stock splits: {tickers}.")
     if positions:
         sources = pe.fetch_price_sources([p.ticker for p in positions])
         if sources:
@@ -338,27 +345,8 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
         st.caption("No transactions recorded yet.")
         return
 
-    df = pe.transactions_to_dataframe(transactions)
-    if not df.empty:
-        display_txn = df.drop(columns=["id"], errors="ignore").copy()
-        if "Price" in display_txn.columns:
-            display_txn["Price"] = display_txn["Price"].map(
-                lambda x: "—" if pe._safe_float(x) <= 0 else pe.format_currency(x)
-            )
-        if "Total" in display_txn.columns:
-            display_txn["Total"] = display_txn["Total"].map(pe.format_currency)
-        if "Quantity" in display_txn.columns:
-            display_txn["Quantity"] = display_txn.apply(
-                lambda row: (
-                    pe.format_currency(row["Quantity"])
-                    if str(row.get("Action", "")).lower().startswith("cash")
-                    else pe.format_shares(row["Quantity"])
-                ),
-                axis=1,
-            )
-        st.dataframe(display_txn, use_container_width=True, hide_index=True)
-    else:
-        st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
+    df = pe.transactions_display_dataframe(transactions)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
     _render_cash_accounting_summary(transactions)
 

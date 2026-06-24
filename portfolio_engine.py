@@ -115,9 +115,10 @@ def compute_cash_ledger_summary(transactions: list[PortfolioTransaction]) -> Cas
 
 def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
     """
-    Latest mark for a ticker — prefers split-adjusted daily close over stale .info fields.
+    Latest per-share market price for marking open positions.
 
-    Returns (price, source_label).
+    Uses actual last-traded / closing prices (not split-back-adjusted history) so
+    marks align with brokerage share counts and execution prices.
     """
     sym = str(symbol or "").strip().upper()
     if not sym or sym in ("CASH", "US TREASURY", "MORTGAGE", "CORP BOND"):
@@ -126,17 +127,12 @@ def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
         import yfinance as yf
 
         ticker = yf.Ticker(sym)
-        hist = ticker.history(period="10d", auto_adjust=True)
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            close = float(hist["Close"].iloc[-1])
-            if close > 0:
-                return close, "yfinance_adj_close"
         fast = getattr(ticker, "fast_info", None)
         last = getattr(fast, "last_price", None) if fast is not None else None
         if last is not None:
             px = float(last)
             if px > 0:
-                return px, "yfinance_fast_info"
+                return px, "yfinance_last_price"
         info = ticker.info or {}
         for key in ("regularMarketPrice", "currentPrice", "previousClose"):
             val = info.get(key)
@@ -144,6 +140,16 @@ def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
                 px = float(val)
                 if px > 0:
                     return px, f"yfinance_{key}"
+        hist = ticker.history(period="10d", auto_adjust=False)
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            close = float(hist["Close"].iloc[-1])
+            if close > 0:
+                return close, "yfinance_close"
+        hist_adj = ticker.history(period="10d", auto_adjust=True)
+        if hist_adj is not None and not hist_adj.empty and "Close" in hist_adj.columns:
+            close = float(hist_adj["Close"].iloc[-1])
+            if close > 0:
+                return close, "yfinance_adj_close"
     except Exception:
         pass
     px = eh._latest_price(sym)
@@ -151,6 +157,40 @@ def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
         return float(px), "etf_holdings_fallback"
     return None, ""
 
+
+def _stock_splits_for_symbol(symbol: str) -> list[tuple[dt.date, float]]:
+    """Return (ex-date, ratio) stock splits for a ticker, oldest first."""
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return []
+    try:
+        import yfinance as yf
+
+        splits = yf.Ticker(sym).splits
+        if splits is None or len(splits) == 0:
+            return []
+        out: list[tuple[dt.date, float]] = []
+        for ts, ratio in splits.items():
+            split_date = ts.date() if hasattr(ts, "date") else _parse_date(str(ts))
+            r = _safe_float(ratio)
+            if r > 1.0:
+                out.append((split_date, r))
+        out.sort(key=lambda x: x[0])
+        return out
+    except Exception:
+        return []
+
+
+def _apply_split_to_ledger(ledger: dict[str, dict[str, Any]], ticker: str, ratio: float) -> None:
+    entry = ledger.get(ticker)
+    if not entry:
+        return
+    shares = _safe_float(entry.get("shares"))
+    if shares <= 0 or ratio <= 1.0:
+        return
+    entry["shares"] = shares * ratio
+    splits_applied = int(entry.get("splits_applied", 0)) + 1
+    entry["splits_applied"] = splits_applied
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -278,6 +318,7 @@ class PortfolioPosition:
     gain_loss_dollar: float
     gain_loss_pct: float
     weight_pct: float
+    stock_splits_applied: int = 0
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -365,18 +406,45 @@ def _ledger_from_transactions(
     Replay transactions into per-ticker ledger and cash balance.
 
     Cash uses an order-independent identity (deposits − withdrawals − buys + sells).
+    Stock splits from yfinance are applied on their ex-dates to shares held.
     """
     ledger: dict[str, dict[str, Any]] = {}
     cash = compute_cash_ledger_summary(transactions).net_cash
 
-    for txn in transactions:
+    trade_tickers = {
+        str(t.ticker or "").strip().upper()
+        for t in transactions
+        if t.action in ("buy", "sell") and str(t.ticker or "").strip()
+    }
+    split_events: list[tuple[dt.date, str, float]] = []
+    for sym in trade_tickers:
+        for split_date, ratio in _stock_splits_for_symbol(sym):
+            split_events.append((split_date, sym, ratio))
+
+    txn_events: list[tuple[dt.date, PortfolioTransaction]] = [
+        (_parse_date(t.date), t)
+        for t in transactions
+        if t.action not in ("cash_deposit", "cash_withdrawal")
+    ]
+
+    timeline: list[tuple[dt.date, int, str, Any]] = []
+    for split_date, sym, ratio in split_events:
+        timeline.append((split_date, 0, "split", (sym, ratio)))
+    for txn_date, txn in txn_events:
+        timeline.append((txn_date, 1, "txn", txn))
+    timeline.sort(key=lambda row: (row[0], row[1]))
+
+    for _when, _order, kind, payload in timeline:
+        if kind == "split":
+            sym, ratio = payload
+            _apply_split_to_ledger(ledger, sym, ratio)
+            continue
+
+        txn: PortfolioTransaction = payload
         action = txn.action
         qty = _safe_float(txn.quantity)
         price = _safe_float(txn.execution_price)
         ticker = str(txn.ticker or "").strip().upper()
-
-        if action in ("cash_deposit", "cash_withdrawal"):
-            continue
 
         if action not in ("buy", "sell") or not ticker:
             continue
@@ -388,6 +456,7 @@ def _ledger_from_transactions(
                 "total_cost": 0.0,
                 "company_name": txn.company_name or infer_company_name(ticker),
                 "asset_type": normalize_asset_type(txn.asset_type, ticker),
+                "splits_applied": 0,
             },
         )
         if txn.company_name:
@@ -443,6 +512,7 @@ def build_positions(
                 gain_loss_dollar=gain_dollar,
                 gain_loss_pct=gain_pct,
                 weight_pct=0.0,
+                stock_splits_applied=int(entry.get("splits_applied") or 0),
             )
         )
 
@@ -479,6 +549,40 @@ def transactions_to_dataframe(transactions: list[PortfolioTransaction]) -> pd.Da
                 "Notes": t.notes,
             }
         )
+    return pd.DataFrame(rows)
+
+
+def transactions_display_dataframe(transactions: list[PortfolioTransaction]) -> pd.DataFrame:
+    """Human-readable transaction table — cash rows omit share price."""
+    if not transactions:
+        return pd.DataFrame()
+    rows: list[dict[str, str]] = []
+    for t in reversed(transactions):
+        action_label = t.action.replace("_", " ").title()
+        if t.action in ("cash_deposit", "cash_withdrawal"):
+            amount = t.quantity if t.quantity > 0 else t.execution_price
+            rows.append(
+                {
+                    "Date": t.date,
+                    "Action": action_label,
+                    "Ticker": "—",
+                    "Amount": format_currency(amount),
+                    "Notes": t.notes or "",
+                }
+            )
+        else:
+            total = t.quantity * t.execution_price
+            rows.append(
+                {
+                    "Date": t.date,
+                    "Action": action_label,
+                    "Ticker": t.ticker,
+                    "Shares": format_shares(t.quantity),
+                    "Price/Share": format_currency(t.execution_price),
+                    "Total": format_currency(total),
+                    "Notes": t.notes or "",
+                }
+            )
     return pd.DataFrame(rows)
 
 

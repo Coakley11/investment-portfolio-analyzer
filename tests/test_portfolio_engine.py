@@ -118,6 +118,47 @@ def test_format_currency_and_shares():
     assert pe.format_shares(40.0) == "40 shares"
 
 
+def test_stock_split_adjusts_shares_and_market_value(monkeypatch):
+    """SCHD 3:1 split (Oct 2024): pre-split lots should triple in share count."""
+    monkeypatch.setattr(
+        pe,
+        "_stock_splits_for_symbol",
+        lambda sym: [(dt.date(2024, 10, 11), 3.0)] if sym == "SCHD" else [],
+    )
+    txns = [_buy("SCHD", 25, 85.0, day="2024-06-01")]
+    positions, _cash = pe.build_positions(txns, prices={"SCHD": 32.02})
+    assert len(positions) == 1
+    pos = positions[0]
+    assert pos.ticker == "SCHD"
+    assert abs(pos.shares_owned - 75.0) < 0.01
+    assert abs(pos.average_cost_basis - 85.0 / 3.0) < 0.01
+    assert abs(pos.market_value - 75.0 * 32.02) < 0.05
+    assert pos.stock_splits_applied == 1
+
+
+def test_cash_transaction_display_omits_share_price():
+    txns = [
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="cash_deposit",
+            date="2024-01-01",
+            ticker="",
+            quantity=50_000.0,
+            execution_price=1.0,
+        ),
+        _buy("VOO", 10, 688.11),
+    ]
+    df = pe.transactions_display_dataframe(txns)
+    cash_row = df.iloc[1]
+    assert "Price" not in df.columns
+    assert "Amount" in df.columns
+    assert cash_row["Amount"] == "$50,000.00"
+    assert cash_row["Ticker"] == "—"
+    sec_row = df.iloc[0]
+    assert sec_row["Price/Share"] == "$688.11"
+    assert sec_row["Shares"] == "10 shares"
+
+
 def test_portfolio_summary_allocation_buckets():
     txns = [
         pe.PortfolioTransaction(
