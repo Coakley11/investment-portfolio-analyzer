@@ -9,7 +9,7 @@ import streamlit as st
 
 import dashboard_charts as charts
 import portfolio_engine as pe
-from components.ui_helpers import APP_DISCLAIMER, format_money
+from components.ui_helpers import APP_DISCLAIMER
 
 REAL_PORTFOLIO_SUBTABS = (
     "Dashboard",
@@ -21,7 +21,7 @@ REAL_PORTFOLIO_SUBTABS = (
 SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-06-23-cash-form-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-06-23-cash-accounting-v2"
 
 
 def _ss() -> Any:
@@ -89,7 +89,28 @@ def _format_pct(value: float) -> str:
 
 def _format_gain(value: float) -> str:
     sign = "+" if value > 0 else ""
-    return f"{sign}{format_money(value)}"
+    return f"{sign}{pe.format_currency(value)}"
+
+
+def _render_cash_accounting_summary(transactions: list[pe.PortfolioTransaction]) -> None:
+    if not transactions:
+        return
+    ledger = pe.compute_cash_ledger_summary(transactions)
+    with st.expander("Cash accounting breakdown", expanded=False):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Deposits", pe.format_currency(ledger.total_deposits))
+        c2.metric("Withdrawals", pe.format_currency(ledger.total_withdrawals))
+        c3.metric("Buy costs", pe.format_currency(ledger.total_buy_cost))
+        c4.metric("Sell proceeds", pe.format_currency(ledger.total_sell_proceeds))
+        c5.metric("Net cash", pe.format_currency(ledger.net_cash))
+        st.caption(
+            "Net cash = deposits − withdrawals − buy costs + sell proceeds. "
+            "Order of entry does not affect this balance."
+        )
+        if ledger.net_cash < -0.01:
+            st.warning(
+                "Cash is negative — purchases exceed deposits. Add a deposit or review transaction amounts."
+            )
 
 
 def render_portfolio_dashboard(*, beginner: bool = False) -> None:
@@ -116,14 +137,22 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
             "Holdings",
         ],
         [
-            format_money(summary.total_portfolio_value),
-            format_money(summary.total_invested_capital),
+            pe.format_currency(summary.total_portfolio_value),
+            pe.format_currency(summary.total_invested_capital),
             _format_gain(summary.total_gain_loss_dollar),
             _format_pct(summary.total_gain_loss_pct),
-            format_money(summary.cash_balance),
+            pe.format_currency(summary.cash_balance),
             str(summary.num_holdings),
         ],
     )
+
+    if summary.cash_balance < -0.01:
+        st.warning(
+            f"Cash balance is {pe.format_currency(summary.cash_balance)} — "
+            "purchases exceed recorded deposits. Review transactions or add a deposit."
+        )
+
+    _render_cash_accounting_summary(transactions)
 
     st.markdown("#### Allocation")
     a1, a2, a3, a4 = st.columns(4)
@@ -147,12 +176,13 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
         sp = summary.smallest_position
         w1, w2 = st.columns(2)
         with w1:
-            st.caption(f"**Largest:** {lp.ticker} — {lp.weight_pct:.1f}% ({format_money(lp.market_value)})")
+            st.caption(f"**Largest:** {lp.ticker} — {lp.weight_pct:.1f}% ({pe.format_currency(lp.market_value)})")
         with w2:
             if sp:
-                st.caption(f"**Smallest:** {sp.ticker} — {sp.weight_pct:.1f}% ({format_money(sp.market_value)})")
+                st.caption(f"**Smallest:** {sp.ticker} — {sp.weight_pct:.1f}% ({pe.format_currency(sp.market_value)})")
 
         weight_df = pos_df[["Ticker", "Company Name", "Weight %", "Market Value"]].copy()
+        weight_df["Market Value"] = weight_df["Market Value"].map(pe.format_currency)
         st.dataframe(weight_df, use_container_width=True, hide_index=True)
 
     st.markdown("#### Performance")
@@ -181,7 +211,7 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
     with p3:
         st.markdown("**Biggest Positions**")
         for p in summary.biggest_positions:
-            st.markdown(f"- **{p.ticker}** {p.weight_pct:.1f}% — {format_money(p.market_value)}")
+            st.markdown(f"- **{p.ticker}** {p.weight_pct:.1f}% — {pe.format_currency(p.market_value)}")
 
     st.caption(f"Manual entry portfolio tracker. {APP_DISCLAIMER}")
 
@@ -194,17 +224,24 @@ def render_portfolio_positions(*, beginner: bool = False) -> None:
         st.info("Add transactions to build your position list.")
         return
 
-    st.caption(f"Live prices via yfinance. Cash balance: **{format_money(cash)}**")
+    st.caption(
+        f"Live prices via yfinance (split-adjusted daily close). Cash balance: **{pe.format_currency(cash)}**"
+    )
+    if positions:
+        sources = pe.fetch_price_sources([p.ticker for p in positions])
+        if sources:
+            src_line = ", ".join(f"{sym} ({src})" for sym, src in sorted(sources.items()))
+            st.caption(f"Quote sources: {src_line}")
     df = pe.positions_to_dataframe(positions)
     if df.empty:
         st.warning("No open positions — cash-only portfolio or all positions sold.")
         return
 
     display = df.copy()
-    display["Shares Owned"] = display["Shares Owned"].map(lambda x: f"{x:,.4f}")
-    display["Avg Cost Basis"] = display["Avg Cost Basis"].map(lambda x: f"${x:,.2f}")
-    display["Current Price"] = display["Current Price"].map(lambda x: f"${x:,.2f}")
-    display["Market Value"] = display["Market Value"].map(format_money)
+    display["Shares Owned"] = display["Shares Owned"].map(pe.format_shares)
+    display["Avg Cost Basis"] = display["Avg Cost Basis"].map(pe.format_currency)
+    display["Current Price"] = display["Current Price"].map(pe.format_currency)
+    display["Market Value"] = display["Market Value"].map(pe.format_currency)
     display["Gain/Loss $"] = df["Gain/Loss $"].map(_format_gain)
     display["Gain/Loss %"] = df["Gain/Loss %"].map(_format_pct)
     display["Weight %"] = df["Weight %"].map(lambda x: f"{x:.2f}%")
@@ -302,7 +339,28 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
         return
 
     df = pe.transactions_to_dataframe(transactions)
-    st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
+    if not df.empty:
+        display_txn = df.drop(columns=["id"], errors="ignore").copy()
+        if "Price" in display_txn.columns:
+            display_txn["Price"] = display_txn["Price"].map(
+                lambda x: "—" if pe._safe_float(x) <= 0 else pe.format_currency(x)
+            )
+        if "Total" in display_txn.columns:
+            display_txn["Total"] = display_txn["Total"].map(pe.format_currency)
+        if "Quantity" in display_txn.columns:
+            display_txn["Quantity"] = display_txn.apply(
+                lambda row: (
+                    pe.format_currency(row["Quantity"])
+                    if str(row.get("Action", "")).lower().startswith("cash")
+                    else pe.format_shares(row["Quantity"])
+                ),
+                axis=1,
+            )
+        st.dataframe(display_txn, use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(df.drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
+
+    _render_cash_accounting_summary(transactions)
 
     st.markdown("##### Remove Transaction")
     options = {f"{t.date} · {t.action} · {t.ticker or 'CASH'} · {t.quantity}": t.id for t in reversed(transactions)}
@@ -369,7 +427,7 @@ def render_position_sizing(*, beginner: bool = False) -> None:
     result = st.session_state.get("_portfolio_sizing_result")
     if isinstance(result, pe.PositionSizingResult):
         r1, r2, r3 = st.columns(3)
-        r1.metric("Suggested Position Size", format_money(result.suggested_dollar_amount))
+        r1.metric("Suggested Position Size", pe.format_currency(result.suggested_dollar_amount))
         r2.metric("Target Allocation %", f"{result.suggested_allocation_pct:.1f}%")
         r3.metric("Projected Weight", f"{result.projected_weight_pct:.1f}%")
 
@@ -403,8 +461,8 @@ def render_position_sizing(*, beginner: bool = False) -> None:
             st.error(sim.get("message", "Simulation failed."))
         else:
             st.success(
-                f"Adding {format_money(sim['amount'])} to **{sim['ticker']}** "
-                f"({sim['shares_added']:.4f} shares @ ${sim['price']:.2f})"
+                f"Adding {pe.format_currency(sim['amount'])} to **{sim['ticker']}** "
+                f"({pe.format_shares(sim['shares_added'])} @ {pe.format_currency(sim['price'])})"
             )
             s1, s2 = st.columns(2)
             s1.metric("Position Weight Before", f"{sim['position_weight_before']:.1f}%")

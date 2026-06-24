@@ -33,11 +33,19 @@ def test_ledger_builds_position_and_average_cost():
     assert pos.shares_owned == 15
     assert abs(pos.average_cost_basis - (10 * 400 + 5 * 430) / 15) < 0.01
     assert abs(pos.market_value - 15 * 450) < 0.01
-    assert cash == 0.0
+    assert abs(cash - (-(10 * 400 + 5 * 430))) < 0.01
 
 
 def test_sell_reduces_shares_and_updates_cash():
     txns = [
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="cash_deposit",
+            date="2024-01-01",
+            ticker="",
+            quantity=10_000.0,
+            execution_price=1.0,
+        ),
         _buy("VTI", 20, 200.0),
         pe.PortfolioTransaction(
             id=pe._new_id(),
@@ -53,7 +61,7 @@ def test_sell_reduces_shares_and_updates_cash():
     positions, cash = pe.build_positions(txns, prices=prices)
     assert len(positions) == 1
     assert positions[0].shares_owned == 15
-    assert cash == 5 * 210.0
+    assert abs(cash - (10_000.0 - 20 * 200.0 + 5 * 210.0)) < 0.01
 
 
 def test_cash_deposit_increases_cash_balance():
@@ -71,7 +79,43 @@ def test_cash_deposit_increases_cash_balance():
     prices = {"BND": 82.0}
     positions, cash = pe.build_positions(txns, prices=prices)
     assert len(positions) == 1
-    assert cash == 5000.0 - 10 * 80.0
+    assert abs(cash - (5000.0 - 10 * 80.0)) < 0.01
+
+
+def test_buy_before_deposit_uses_order_independent_cash():
+    """Regression: buys entered before deposits must still reduce cash."""
+    txns = [
+        _buy("VOO", 100, 485.46),
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="cash_deposit",
+            date="2024-01-02",
+            ticker="",
+            quantity=10_000.0,
+            execution_price=1.0,
+        ),
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="cash_deposit",
+            date="2024-01-03",
+            ticker="",
+            quantity=50_000.0,
+            execution_price=1.0,
+        ),
+    ]
+    _positions, cash = pe.build_positions(txns, prices={"VOO": 500.0})
+    expected = 60_000.0 - 48_546.0
+    assert abs(cash - expected) < 0.01
+    ledger = pe.compute_cash_ledger_summary(txns)
+    assert abs(ledger.net_cash - expected) < 0.01
+
+
+def test_format_currency_and_shares():
+    assert pe.format_currency(27521.1) == "$27,521.10"
+    assert pe.format_currency(-12.5) == "-$12.50"
+    assert pe.format_shares(40) == "40 shares"
+    assert pe.format_shares(10.25) == "10.25 shares"
+    assert pe.format_shares(40.0) == "40 shares"
 
 
 def test_portfolio_summary_allocation_buckets():

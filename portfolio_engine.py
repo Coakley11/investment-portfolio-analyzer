@@ -48,6 +48,110 @@ TRANSACTION_COLUMNS = [
 _KNOWN_ETF_TICKERS = frozenset(t.upper() for t in eh.POPULAR_ETF_TICKERS)
 
 
+def format_currency(value: float, *, decimals: int = 2) -> str:
+    """Format a dollar amount as $27,521.10."""
+    amount = _safe_float(value)
+    sign = "-" if amount < 0 else ""
+    return f"{sign}${abs(amount):,.{decimals}f}"
+
+
+def format_shares(value: float) -> str:
+    """Human-readable share count — whole numbers without decimals when exact."""
+    shares = _safe_float(value)
+    if abs(shares) < 1e-9:
+        return "0 shares"
+    rounded = round(shares)
+    if abs(shares - rounded) < 1e-6:
+        count = int(rounded)
+        word = "share" if count == 1 else "shares"
+        return f"{count:,} {word}"
+    text = f"{shares:,.4f}".rstrip("0").rstrip(".")
+    return f"{text} shares"
+
+
+
+@dataclass
+class CashLedgerSummary:
+    total_deposits: float
+    total_withdrawals: float
+    total_buy_cost: float
+    total_sell_proceeds: float
+    net_cash: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "total_deposits": self.total_deposits,
+            "total_withdrawals": self.total_withdrawals,
+            "total_buy_cost": self.total_buy_cost,
+            "total_sell_proceeds": self.total_sell_proceeds,
+            "net_cash": self.net_cash,
+        }
+
+
+def compute_cash_ledger_summary(transactions: list[PortfolioTransaction]) -> CashLedgerSummary:
+    """Order-independent cash accounting identity for validation and UI."""
+    deposits = withdrawals = buy_cost = sell_proceeds = 0.0
+    for txn in transactions:
+        action = txn.action
+        qty = _safe_float(txn.quantity)
+        price = _safe_float(txn.execution_price)
+        if action == "cash_deposit":
+            deposits += qty if qty > 0 else price
+        elif action == "cash_withdrawal":
+            withdrawals += qty if qty > 0 else price
+        elif action == "buy":
+            buy_cost += qty * price
+        elif action == "sell":
+            sell_proceeds += qty * price
+    net = deposits - withdrawals - buy_cost + sell_proceeds
+    return CashLedgerSummary(
+        total_deposits=deposits,
+        total_withdrawals=withdrawals,
+        total_buy_cost=buy_cost,
+        total_sell_proceeds=sell_proceeds,
+        net_cash=net,
+    )
+
+
+def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
+    """
+    Latest mark for a ticker — prefers split-adjusted daily close over stale .info fields.
+
+    Returns (price, source_label).
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym or sym in ("CASH", "US TREASURY", "MORTGAGE", "CORP BOND"):
+        return None, ""
+    try:
+        import yfinance as yf
+
+        ticker = yf.Ticker(sym)
+        hist = ticker.history(period="10d", auto_adjust=True)
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            close = float(hist["Close"].iloc[-1])
+            if close > 0:
+                return close, "yfinance_adj_close"
+        fast = getattr(ticker, "fast_info", None)
+        last = getattr(fast, "last_price", None) if fast is not None else None
+        if last is not None:
+            px = float(last)
+            if px > 0:
+                return px, "yfinance_fast_info"
+        info = ticker.info or {}
+        for key in ("regularMarketPrice", "currentPrice", "previousClose"):
+            val = info.get(key)
+            if val is not None:
+                px = float(val)
+                if px > 0:
+                    return px, f"yfinance_{key}"
+    except Exception:
+        pass
+    px = eh._latest_price(sym)
+    if px is not None and px > 0:
+        return float(px), "etf_holdings_fallback"
+    return None, ""
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -236,10 +340,22 @@ def _fetch_prices(tickers: list[str]) -> dict[str, float]:
     for sym in tickers:
         if not sym or sym == "CASH":
             continue
-        px = eh._latest_price(sym)
+        px, _src = fetch_latest_price(sym)
         if px is not None and px > 0:
             prices[sym] = float(px)
     return prices
+
+
+def fetch_price_sources(tickers: list[str]) -> dict[str, str]:
+    """Map ticker → quote source label (for UI diagnostics)."""
+    out: dict[str, str] = {}
+    for sym in tickers:
+        if not sym or sym == "CASH":
+            continue
+        _px, src = fetch_latest_price(sym)
+        if src:
+            out[sym] = src
+    return out
 
 
 def _ledger_from_transactions(
@@ -248,10 +364,10 @@ def _ledger_from_transactions(
     """
     Replay transactions into per-ticker ledger and cash balance.
 
-    Ledger fields: shares, total_cost, company_name, asset_type
+    Cash uses an order-independent identity (deposits − withdrawals − buys + sells).
     """
     ledger: dict[str, dict[str, Any]] = {}
-    cash = 0.0
+    cash = compute_cash_ledger_summary(transactions).net_cash
 
     for txn in transactions:
         action = txn.action
@@ -259,12 +375,7 @@ def _ledger_from_transactions(
         price = _safe_float(txn.execution_price)
         ticker = str(txn.ticker or "").strip().upper()
 
-        if action == "cash_deposit":
-            cash += qty if qty > 0 else price
-            continue
-        if action == "cash_withdrawal":
-            amount = qty if qty > 0 else price
-            cash = max(0.0, cash - amount)
+        if action in ("cash_deposit", "cash_withdrawal"):
             continue
 
         if action not in ("buy", "sell") or not ticker:
@@ -288,19 +399,15 @@ def _ledger_from_transactions(
             cost = qty * price
             entry["shares"] += qty
             entry["total_cost"] += cost
-            cash = max(0.0, cash - cost)
         elif action == "sell":
             shares_before = entry["shares"]
             if shares_before <= 0 or qty <= 0:
                 continue
             sell_qty = min(qty, shares_before)
             avg_cost = entry["total_cost"] / shares_before if shares_before > 0 else 0.0
-            proceeds = sell_qty * price
             entry["shares"] -= sell_qty
             entry["total_cost"] = max(0.0, entry["total_cost"] - avg_cost * sell_qty)
-            cash += proceeds
 
-    # Drop zero positions
     ledger = {k: v for k, v in ledger.items() if _safe_float(v.get("shares")) > 1e-9}
     return ledger, cash
 
