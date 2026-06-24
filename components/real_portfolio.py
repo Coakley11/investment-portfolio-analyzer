@@ -20,6 +20,8 @@ REAL_PORTFOLIO_SUBTABS = (
 
 SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
+# Visible in Transactions UI — bump when cash-form or ledger behavior changes.
+REAL_PORTFOLIO_BUILD_ID = "2026-06-23-cash-form-v1"
 
 
 def _ss() -> Any:
@@ -35,6 +37,22 @@ def get_portfolio_transactions() -> list[pe.PortfolioTransaction]:
 
 def set_portfolio_transactions(transactions: list[pe.PortfolioTransaction]) -> None:
     _ss()[SESSION_TRANSACTIONS_KEY] = pe.transactions_to_records(transactions)
+
+
+def _persist_new_transaction(
+    transactions: list[pe.PortfolioTransaction],
+    txn: pe.PortfolioTransaction,
+) -> None:
+    set_portfolio_transactions(transactions + [txn])
+    try:
+        from investment_persistent_state import autosave_investment_state
+
+        st.session_state[f"_suite_persist_local_dirty::investment"] = True
+        autosave_investment_state(st, trigger="portfolio_transactions_change")
+    except ImportError:
+        pass
+    st.success("Transaction added.")
+    st.rerun()
 
 
 def _hero(title: str, subtitle: str) -> None:
@@ -194,67 +212,89 @@ def render_portfolio_positions(*, beginner: bool = False) -> None:
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
+_BUY_SELL_ASSET_TYPES = ("stock", "etf", "bond", "other")
+_CASH_ACTIONS = frozenset({"cash_deposit", "cash_withdrawal"})
+
+
 def render_portfolio_transactions(*, beginner: bool = False) -> None:
     transactions = get_portfolio_transactions()
 
     st.markdown("##### Add Transaction")
+    st.caption(f"Form build: `{REAL_PORTFOLIO_BUILD_ID}` — Cash Deposit shows Date + Amount only.")
+    action = st.selectbox(
+        "Action",
+        ["buy", "sell", "cash_deposit", "cash_withdrawal"],
+        format_func=lambda x: x.replace("_", " ").title(),
+        key="real_portfolio_txn_action",
+    )
+    is_cash = action in _CASH_ACTIONS
+
     with st.form("real_portfolio_add_txn", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            action = st.selectbox(
-                "Action",
-                ["buy", "sell", "cash_deposit", "cash_withdrawal"],
-                format_func=lambda x: x.replace("_", " ").title(),
+        txn_date = st.date_input("Date")
+        if is_cash:
+            amount = st.number_input(
+                "Amount ($)",
+                min_value=0.0,
+                value=0.0,
+                step=100.0,
+                help="Dollar amount to deposit or withdraw from cash balance.",
             )
-            txn_date = st.date_input("Date")
-        with c2:
-            ticker = st.text_input("Ticker", placeholder="VOO (leave blank for cash-only)")
-            quantity = st.number_input("Quantity (shares or $ for cash)", min_value=0.0, value=0.0, step=1.0)
-        with c3:
-            price = st.number_input("Execution price ($)", min_value=0.0, value=0.0, step=0.01)
             notes = st.text_input("Notes", placeholder="Optional")
-        asset_type = st.selectbox(
-            "Asset type",
-            ["stock", "etf", "bond", "cash", "other"],
-            index=1,
-            help="Used for allocation breakdown. Auto-inferred from ticker when possible.",
-        )
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                ticker = st.text_input("Ticker", placeholder="VOO")
+                quantity = st.number_input("Quantity (shares)", min_value=0.0, value=0.0, step=1.0)
+            with c2:
+                price = st.number_input("Execution price ($)", min_value=0.0, value=0.0, step=0.01)
+                notes = st.text_input("Notes", placeholder="Optional")
+            asset_type = st.selectbox(
+                "Asset type",
+                list(_BUY_SELL_ASSET_TYPES),
+                index=0,
+                help="Used for allocation breakdown.",
+            )
         submitted = st.form_submit_button("Add Transaction", type="primary")
 
     if submitted:
-        sym = str(ticker or "").strip().upper()
-        if action in ("buy", "sell") and not sym:
-            st.error("Enter a ticker for buy/sell transactions.")
-        elif action in ("buy", "sell") and quantity <= 0:
-            st.error("Quantity must be greater than zero.")
-        elif action in ("buy", "sell") and price <= 0:
-            st.error("Execution price must be greater than zero.")
-        elif action.startswith("cash") and quantity <= 0 and price <= 0:
-            st.error("Enter a dollar amount in Quantity or Execution price for cash transactions.")
+        if is_cash:
+            if amount <= 0:
+                st.error("Enter an amount greater than zero.")
+            else:
+                txn = pe.PortfolioTransaction(
+                    id=pe._new_id(),
+                    action=action,  # type: ignore[arg-type]
+                    date=txn_date.isoformat(),
+                    ticker="",
+                    quantity=float(amount),
+                    execution_price=1.0,
+                    notes=notes,
+                    company_name="Cash",
+                    asset_type="cash",
+                )
+                _persist_new_transaction(transactions, txn)
         else:
-            inferred_asset = pe.normalize_asset_type(asset_type, sym) if sym else "cash"
-            txn = pe.PortfolioTransaction(
-                id=pe._new_id(),
-                action=action,  # type: ignore[arg-type]
-                date=txn_date.isoformat(),
-                ticker=sym,
-                quantity=quantity if quantity > 0 else price,
-                execution_price=price if action in ("buy", "sell") else 1.0,
-                notes=notes,
-                company_name=pe.infer_company_name(sym) if sym else "Cash",
-                asset_type=inferred_asset,
-            )
-            updated = transactions + [txn]
-            set_portfolio_transactions(updated)
-            try:
-                from investment_persistent_state import autosave_investment_state
-
-                st.session_state[f"_suite_persist_local_dirty::investment"] = True
-                autosave_investment_state(st, trigger="portfolio_transactions_change")
-            except ImportError:
-                pass
-            st.success("Transaction added.")
-            st.rerun()
+            sym = str(ticker or "").strip().upper()
+            if not sym:
+                st.error("Enter a ticker for buy/sell transactions.")
+            elif quantity <= 0:
+                st.error("Quantity must be greater than zero.")
+            elif price <= 0:
+                st.error("Execution price must be greater than zero.")
+            else:
+                inferred_asset = pe.normalize_asset_type(asset_type, sym)
+                txn = pe.PortfolioTransaction(
+                    id=pe._new_id(),
+                    action=action,  # type: ignore[arg-type]
+                    date=txn_date.isoformat(),
+                    ticker=sym,
+                    quantity=quantity,
+                    execution_price=price,
+                    notes=notes,
+                    company_name=pe.infer_company_name(sym),
+                    asset_type=inferred_asset,
+                )
+                _persist_new_transaction(transactions, txn)
 
     st.markdown("##### Transaction History")
     if not transactions:
