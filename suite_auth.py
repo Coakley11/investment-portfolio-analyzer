@@ -12,6 +12,7 @@ Synced to sibling repos via ``scripts/sync_suite_cloud_modules.py``.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 AUTH_ENABLED_ENV = "SUITE_AUTH_ENABLED"
@@ -89,12 +90,16 @@ def current_auth_email(session_state: dict[str, Any]) -> str:
 
 
 def allowed_workspaces_for_user(external_user_id: str) -> tuple[str, ...]:
-    """Workspace ownership v1 — preset profiles allowed for this account."""
+    """Owned workspace(s) allowed for this account — one workspace unless admin demo."""
     key = str(external_user_id or "").strip().lower()
     if key in _DEFAULT_ALLOWED_WORKSPACES:
-        return _DEFAULT_ALLOWED_WORKSPACES[key]
+        if key == "daniel":
+            return _DEFAULT_ALLOWED_WORKSPACES[key]
+        return (key,)
     if key == "default":
         return ("daniel", "ariel", "guest", "test_user")
+    if re.fullmatch(r"[a-z0-9_]+", key):
+        return (key,)
     return ("daniel", "guest", "test_user")
 
 
@@ -127,7 +132,7 @@ def _infer_external_id_from_email(email: str) -> str:
         return ""
     if "ariel" in low:
         return "ariel"
-    if "daniel" in low or "coakley" in low:
+    if "daniel" in low:
         return "daniel"
     local = low.split("@", 1)[0]
     if local in _DEFAULT_ALLOWED_WORKSPACES:
@@ -136,19 +141,40 @@ def _infer_external_id_from_email(email: str) -> str:
 
 
 def enforce_workspace_ownership(session_state: dict[str, Any]) -> None:
-    """Clamp active workspace to profiles owned by the signed-in account."""
+    """Clamp active workspace to the signed-in account's owned workspace."""
     if not is_auth_enabled() or not is_authenticated(session_state):
         return
     try:
         from types import SimpleNamespace
 
         from suite_workspace import get_active_workspace_id, normalize_workspace_id, set_active_workspace_id
+        from suite_workspace_registry import (
+            ensure_owned_workspace_for_session,
+            get_owned_workspace_id,
+            workspace_access_allowed,
+        )
 
         st = SimpleNamespace(session_state=session_state)
-        allowed = allowed_workspaces_for_session(session_state)
+        ensure_owned_workspace_for_session(session_state)
+        owned = normalize_workspace_id(get_owned_workspace_id(session_state))
+        allowed = tuple(
+            normalize_workspace_id(w)
+            for w in allowed_workspaces_for_session(session_state)
+        )
         active = normalize_workspace_id(get_active_workspace_id(st))
+        if owned and active != owned and not workspace_access_allowed(active, session_state=session_state):
+            set_active_workspace_id(st, owned)
+            return
+        if owned and len(allowed) == 1 and active != owned:
+            set_active_workspace_id(st, owned)
+            return
+        if preferred := normalize_workspace_id(resolve_auth_external_id(session_state)):
+            if preferred in allowed and active != preferred and len(allowed) == 1:
+                set_active_workspace_id(st, preferred)
+                return
         if active not in allowed and allowed:
-            set_active_workspace_id(st, allowed[0])
+            target = owned or allowed[0]
+            set_active_workspace_id(st, target)
     except ImportError:
         pass
 
