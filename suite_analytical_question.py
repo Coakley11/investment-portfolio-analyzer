@@ -16,42 +16,7 @@ from datetime import datetime, timezone
 from collections.abc import Callable
 from typing import Any
 
-from activity_time import parse_activity_timestamp, utc_now_iso
-
-try:
-    from investment_ami_context import (
-        INVESTMENT_AMI_STARTER_QUESTIONS,
-        INVESTMENT_INSIGHT_ACTIVITY_PREFIX,
-        INVESTMENT_INSIGHT_QUESTION_CARD_TITLE,
-        INVESTMENT_INSIGHT_CONTINUE_BUTTON,
-        INVESTMENT_INSIGHT_SIDEBAR_CAPTION,
-        INVESTMENT_INSIGHT_SIDEBAR_HEADING,
-        INVESTMENT_INSIGHT_SUBMIT_LABEL,
-        investment_ami_default_question,
-        investment_insight_duplicate_message,
-        investment_insight_question_placeholder,
-        investment_insight_sent_message,
-    )
-except ImportError:
-    INVESTMENT_AMI_STARTER_QUESTIONS = ()  # type: ignore[misc, assignment]
-    INVESTMENT_INSIGHT_ACTIVITY_PREFIX = "Asked for Investment Insight"
-    INVESTMENT_INSIGHT_QUESTION_CARD_TITLE = "Investment Insight question from Investment"
-    INVESTMENT_INSIGHT_CONTINUE_BUTTON = "View Investment Insight →"
-    INVESTMENT_INSIGHT_SIDEBAR_CAPTION = "Ask about allocation, risk, and your portfolio."
-    INVESTMENT_INSIGHT_SIDEBAR_HEADING = "Get Investment Insight"
-    INVESTMENT_INSIGHT_SUBMIT_LABEL = "Generate Investment Insight"
-
-    def investment_ami_default_question(source_page: str = "") -> str:  # type: ignore[misc]
-        return "Is my portfolio too concentrated?"
-
-    def investment_insight_question_placeholder(source_page: str = "") -> str:  # type: ignore[misc]
-        return f"e.g. {investment_ami_default_question(source_page)}"
-
-    def investment_insight_sent_message() -> str:  # type: ignore[misc]
-        return "Investment insight request saved."
-
-    def investment_insight_duplicate_message() -> str:  # type: ignore[misc]
-        return "You already asked this recently."
+from activity_time import format_eastern_time_label, parse_activity_timestamp, utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +26,8 @@ _CTX_JSON_SUBTITLE_LIMIT = 8000
 _CONTEXT_ITEM_TYPE = "analytical_question_context"
 ANALYTICAL_QUESTION_CONTINUE_PRIORITY = 64
 ANALYTICAL_QUESTION_BUTTON_LABEL = "Continue in Applied Mathematics →"
+PRACTICE_LOG_ANALYSIS_TITLE = "Music Practice Log Analysis"
+PRACTICE_LOG_ANALYSIS_CONTINUE_PRIORITY = 65
 _SEND_COOLDOWN_SECONDS = 120
 
 _SOURCE_AREA: dict[str, str] = {
@@ -250,18 +217,29 @@ def source_app_label(source_app: str) -> str:
     return _SOURCE_LABELS.get(key, key.replace("_", " ").title())
 
 
+def is_practice_log_analysis_context(context: dict[str, Any] | None) -> bool:
+    ctx = dict(context or {})
+    return (
+        str(ctx.get("user_request") or "") == "analyze_practice"
+        or str(ctx.get("intent") or "") in {"practice_history_analysis", "practice_log_analysis"}
+        or str(ctx.get("display_category") or "") == "analysis_handoff"
+        or str(ctx.get("handoff_kind") or "") == "practice_log_analysis"
+    )
+
+
 def source_question_card_title(
     source_app: str,
     context: dict[str, Any] | None = None,
 ) -> str:
     """Normalized Continue / activity title for cross-app questions."""
-    app = normalize_source_app_id(source_app, context)
+    ctx = dict(context or {})
+    app = normalize_source_app_id(source_app, ctx)
+    if is_practice_log_analysis_context(ctx):
+        return PRACTICE_LOG_ANALYSIS_TITLE
     if app == "music":
         return "Music Coach question from Music"
-    if app == "investment":
-        return INVESTMENT_INSIGHT_QUESTION_CARD_TITLE
     label = _SOURCE_LABELS.get(app, app.replace("_", " ").title())
-    if app in {"baseball", "nba"}:
+    if app in {"baseball", "nba", "investment"}:
         return f"Applied Math question from {label}"
     return f"Question from {label}"
 
@@ -603,23 +581,117 @@ def format_context_lines(context: dict[str, Any] | None) -> list[str]:
     return lines[:16]
 
 
+def format_practice_analysis_updated_label(generated_at: str) -> str:
+    """Human-readable updated timestamp for Command Center cards (America/New_York, ET)."""
+    raw = str(generated_at or "").strip()
+    if not raw:
+        return ""
+    dt = parse_activity_timestamp(raw)
+    if dt is None:
+        return raw[:19].replace("T", " ")
+    return format_eastern_time_label(dt)
+
+
+def _practice_log_top_song(payload: dict[str, Any]) -> str:
+    ctx = dict(payload.get("context") or {})
+    pl = ctx.get("practice_log_summary") if isinstance(ctx.get("practice_log_summary"), dict) else {}
+    by_song = pl.get("practice_time_by_song") if isinstance(pl.get("practice_time_by_song"), dict) else {}
+    if by_song:
+        top_key = max(by_song, key=lambda k: int(by_song.get(k) or 0))
+        return str(top_key or "").strip()
+    songs = pl.get("most_practiced_songs")
+    if isinstance(songs, list) and songs:
+        return str(songs[0] or "").strip()
+    return ""
+
+
+def _practice_log_instrument_label(payload: dict[str, Any]) -> str:
+    ctx = dict(payload.get("context") or {})
+    pl = ctx.get("practice_log_summary") if isinstance(ctx.get("practice_log_summary"), dict) else {}
+    by_inst = pl.get("practice_time_by_instrument") if isinstance(pl.get("practice_time_by_instrument"), dict) else {}
+    if not by_inst:
+        return ""
+    items = [(str(k), int(v or 0)) for k, v in by_inst.items() if str(k).strip()]
+    if not items:
+        return ""
+    items.sort(key=lambda row: -row[1])
+    total = sum(mins for _, mins in items) or 1
+    fmt = lambda key: str(key).replace("_", " ").title()
+    if len(items) == 1:
+        return f"Main instrument: {fmt(items[0][0])}"
+    top_key, top_mins = items[0]
+    if top_mins / total >= 0.6:
+        return f"Main instrument: {fmt(top_key)}"
+    return "Multiple instruments"
+
+
+def practice_log_analysis_instrument_song_line(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    top_song = _practice_log_top_song(payload)
+    if top_song:
+        parts.append(f"Top song: {top_song}")
+    inst = _practice_log_instrument_label(payload)
+    if inst:
+        parts.append(inst)
+    return " · ".join(parts)
+
+
+def practice_log_analysis_card_subtitle(payload: dict[str, Any]) -> str:
+    generated = str(
+        payload.get("report_generated_at")
+        or (payload.get("context") or {}).get("report_generated_at")
+        or ""
+    ).strip()
+    parts: list[str] = []
+    top_song = _practice_log_top_song(payload)
+    if top_song:
+        parts.append(f"Top song: {top_song}")
+    inst = _practice_log_instrument_label(payload)
+    if inst:
+        parts.append(inst)
+    updated = format_practice_analysis_updated_label(generated)
+    if updated:
+        parts.append(f"Updated {updated}")
+    if parts:
+        return " · ".join(parts)
+    ctx = dict(payload.get("context") or {})
+    pl = ctx.get("practice_log_summary") if isinstance(ctx.get("practice_log_summary"), dict) else {}
+    count = int(pl.get("session_count") or 0)
+    mins = int(pl.get("total_minutes") or 0)
+    if count > 0:
+        return f"{count} session(s), {mins} min logged — review patterns and next focus"
+    return "Practice history analysis from Music Practice Coach"
+
+
+def practice_log_analysis_resume_subtitle(payload: dict[str, Any]) -> str:
+    return practice_log_analysis_card_subtitle(payload)
+
+
 def analytical_question_continue_copy(payload: dict[str, Any]) -> tuple[str, str, str]:
     """Return (title, subtitle, button_label) for Command Center Continue cards."""
     ctx = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     app = normalize_source_app_id(str(payload.get("source_app") or ""), ctx)
     question = str(payload.get("question") or "").strip()
+    if is_practice_log_analysis_context(ctx):
+        card_payload = {
+            "source_app": payload.get("source_app") or app,
+            "context": ctx,
+            "report_generated_at": payload.get("report_generated_at") or ctx.get("report_generated_at"),
+        }
+        subtitle = practice_log_analysis_card_subtitle(card_payload)
+        return (PRACTICE_LOG_ANALYSIS_TITLE, subtitle, "Continue Practice Log Analysis →")
     title = source_question_card_title(app, ctx)
     if app == "music":
         return (title, question, "Continue with Music Coach →")
-    if app == "investment":
-        return (title, question, INVESTMENT_INSIGHT_CONTINUE_BUTTON)
     return (title, question, ANALYTICAL_QUESTION_BUTTON_LABEL)
 
 
 def analytical_question_storage_subtitle(payload: dict[str, Any]) -> str:
     """Resume-item subtitle for storage/rebuild — question only on CC cards; context stays in metrics/URL."""
-    question = str(payload.get("question") or "").strip()
     ctx = dict(payload.get("context") or {})
+    if is_practice_log_analysis_context(ctx):
+        return practice_log_analysis_resume_subtitle(payload)
+    question = str(payload.get("question") or "").strip()
     ctx_json = json.dumps(ctx, ensure_ascii=False) if ctx else ""
     if ctx_json:
         return f"{question}\n__ctx_json__:{ctx_json[:_CTX_JSON_SUBTITLE_LIMIT]}"
@@ -815,8 +887,6 @@ def submit_analytical_question(
         )
         if metrics["source_app"] == "music":
             summary = f"Asked Music Coach: {payload['question'][:80]}"
-        elif metrics["source_app"] == "investment":
-            summary = f"{INVESTMENT_INSIGHT_ACTIVITY_PREFIX}: {payload['question'][:80]}"
         else:
             summary = f"Asked Applied Math: {payload['question'][:80]}"
         try:
@@ -881,30 +951,6 @@ def build_submit_context(
     return ctx
 
 
-def _ami_sidebar_feedback_messages(source_app: str) -> tuple[str, str]:
-    """Return (duplicate_message, success_message) for AMI sidebar submit."""
-    app = str(source_app or "").strip().lower()
-    if app == "music":
-        return (
-            "That question was already sent recently. Open Command Center to continue with the Music Coach.",
-            "Question sent to Command Center. Open Command Center to continue with the Music Coach.",
-        )
-    if app == "nba":
-        return (
-            "That NBA insight was already requested recently. Open Command Center to review it.",
-            "NBA insight request saved. Open Command Center when you're ready to review it.",
-        )
-    if app == "investment":
-        return (
-            investment_insight_duplicate_message(),
-            investment_insight_sent_message(),
-        )
-    return (
-        "That question was already sent recently. Open Command Center to continue in Applied Intelligence.",
-        "Question sent to Command Center. Open Command Center to continue in Applied Intelligence.",
-    )
-
-
 def render_analyze_with_applied_math_sidebar(
     st: Any,
     *,
@@ -928,7 +974,6 @@ def render_analyze_with_applied_math_sidebar(
 
     is_music = str(source_app or "").strip().lower() == "music"
     is_nba = str(source_app or "").strip().lower() == "nba"
-    is_investment = str(source_app or "").strip().lower() == "investment"
     if is_music:
         st.sidebar.markdown("### Ask the Music Coach")
         st.sidebar.caption(
@@ -941,16 +986,10 @@ def render_analyze_with_applied_math_sidebar(
             "Ask an NBA or playoff question about the team, matchup, or page you're viewing."
         )
         submit_label = "Get NBA Insight"
-    elif is_investment:
-        st.sidebar.markdown(f"### {INVESTMENT_INSIGHT_SIDEBAR_HEADING}")
-        st.sidebar.caption(INVESTMENT_INSIGHT_SIDEBAR_CAPTION)
-        submit_label = INVESTMENT_INSIGHT_SUBMIT_LABEL
     else:
         st.sidebar.markdown("### Analyze with Applied Math")
         st.sidebar.caption("Ask a math question about what you are viewing.")
         submit_label = "Send to Command Center"
-
-    dup_msg, ok_msg = _ami_sidebar_feedback_messages(str(source_app or ""))
 
     last = ss.get("_ami_last_send")
     if (
@@ -958,7 +997,16 @@ def render_analyze_with_applied_math_sidebar(
         and last.get("source_app") == source_app
         and _recent_duplicate_send(ss, str(last.get("question_id") or ""))
     ):
-        st.sidebar.success(ok_msg)
+        sent_msg = (
+            "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+            if is_music
+            else (
+                "NBA insight request saved. Open Command Center when you're ready to review it."
+                if is_nba
+                else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+            )
+        )
+        st.sidebar.success(sent_msg)
 
     question = st.sidebar.text_area(
         "Question",
@@ -969,11 +1017,7 @@ def render_analyze_with_applied_math_sidebar(
             else (
                 nba_insight_question_placeholder(source_page)
                 if is_nba
-                else (
-                    investment_insight_question_placeholder(source_page)
-                    if is_investment
-                    else "e.g. Is this trend meaningful statistically?"
-                )
+                else "e.g. Is this trend meaningful statistically?"
             )
         ),
         height=88,
@@ -1015,6 +1059,24 @@ def render_analyze_with_applied_math_sidebar(
             )
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
+            dup_msg = (
+                "That question was already sent recently. Open Command Center to continue with the Music Coach."
+                if is_music
+                else (
+                    "That NBA insight was already requested recently. Open Command Center to review it."
+                    if is_nba
+                    else "That question was already sent recently. Open Command Center to continue in Applied Intelligence."
+                )
+            )
+            ok_msg = (
+                "Question sent to Command Center. Open Command Center to continue with the Music Coach."
+                if is_music
+                else (
+                    "NBA insight request saved. Open Command Center when you're ready to review it."
+                    if is_nba
+                    else "Question sent to Command Center. Open Command Center to continue in Applied Intelligence."
+                )
+            )
             if result.get("duplicate"):
                 st.sidebar.info(dup_msg)
             else:

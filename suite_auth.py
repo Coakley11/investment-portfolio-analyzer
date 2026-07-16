@@ -90,8 +90,15 @@ def current_auth_email(session_state: dict[str, Any]) -> str:
 
 
 def allowed_workspaces_for_user(external_user_id: str) -> tuple[str, ...]:
-    """Owned workspace(s) allowed for this account — one workspace unless admin demo."""
+    """Owned workspace(s) allowed for this account — one workspace unless admin."""
     key = str(external_user_id or "").strip().lower()
+    try:
+        from suite_workspace_registry import admin_allowed_workspaces, is_admin_account
+
+        if is_admin_account(external_id=key):
+            return admin_allowed_workspaces(external_id=key)
+    except ImportError:
+        pass
     if key in _DEFAULT_ALLOWED_WORKSPACES:
         if key == "daniel":
             return _DEFAULT_ALLOWED_WORKSPACES[key]
@@ -1170,15 +1177,15 @@ def auth_recovery_diagnostics(st: Any | None = None) -> dict[str, Any]:
 
 
 def render_auth_recovery_diagnostics(st: Any, *, expanded: bool = False, force: bool = False) -> None:
-    """Developer-only recovery landing diagnostics (force=True during recovery wait screen)."""
-    if not force:
-        try:
-            from suite_workspace import can_show_developer_tools
+    """Admin-only recovery landing diagnostics (``force`` kept for call-site compat; still gated)."""
+    del force  # never bypass admin gate
+    try:
+        from suite_workspace_registry import is_admin_user
 
-            if not can_show_developer_tools(st=st):
-                return
-        except ImportError:
+        if not is_admin_user(session_state=getattr(st, "session_state", None)):
             return
+    except ImportError:
+        return
     with st.expander("Auth recovery (dev)", expanded=expanded):
         st.json(auth_recovery_diagnostics(st=st))
         st.caption(

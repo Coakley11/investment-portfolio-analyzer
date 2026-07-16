@@ -29,8 +29,121 @@ UPDATED_AT_KEY = "updated_at"
 SESSION_OWNED_WORKSPACE_KEY = "_suite_owned_workspace_id"
 SESSION_OWNED_WORKSPACE_LABEL_KEY = "_suite_owned_workspace_label"
 
-_ADMIN_EXTERNAL_IDS = frozenset({"daniel"})
+# Authorized admin accounts — email local-part is the immutable identity key.
+# Resolved suite external_id ``daniel`` is NOT an admin grant by itself; it only
+# describes the workspace/profile id inferred for daniel.cohen11@… emails.
+ADMIN_EMAIL_LOCAL_PARTS = frozenset({"coakley11", "daniel.cohen11"})
+ADMIN_ACCOUNTS = ADMIN_EMAIL_LOCAL_PARTS  # public alias used by tests/docs
+_ADMIN_EXTERNAL_IDS = ADMIN_EMAIL_LOCAL_PARTS  # backward-compatible alias
+_COAKLEY_EXTERNAL_ID = "coakley11"
+_DANIEL_RESOLVED_EXTERNAL_ID = "daniel"
 _DEMO_WORKSPACE_IDS = frozenset({"guest", "test_user"})
+_ADMIN_DEMO_WORKSPACES = ("daniel", "ariel", "guest", "test_user")
+
+
+def _normalize_identity(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _email_local_part(email: str) -> str:
+    text = _normalize_identity(email)
+    if "@" in text:
+        return text.split("@", 1)[0]
+    return text
+
+
+def _admin_locals_from_email(email: str) -> set[str]:
+    local = _email_local_part(email)
+    return {local} if local else set()
+
+
+def _is_admin_from_verified_locals(locals_: set[str]) -> bool:
+    cleaned = {x for x in locals_ if x and x not in ("default",)}
+    return bool(cleaned & ADMIN_EMAIL_LOCAL_PARTS)
+
+
+def _session_mapping(session_state: Any) -> Any | None:
+    """Accept dicts and Streamlit SessionState (mapping-like); reject None."""
+    if session_state is None:
+        return None
+    if hasattr(session_state, "get"):
+        return session_state
+    return None
+
+
+def is_admin_user(
+    *,
+    session_state: dict[str, Any] | None = None,
+    external_id: str = "",
+    email: str = "",
+) -> bool:
+    """
+    Server-side admin authorization for developer / diagnostics / ops tools.
+
+    Grants access only when a **verified email local-part** is ``coakley11`` or
+    ``daniel.cohen11``. Fail-safe: returns False when identity cannot be
+    determined — never defaults to admin.
+
+    Workspace ids, display names, account slugs, query params, unsigned/demo
+    workspaces, and forged session ``external_id`` values never grant admin.
+    Bare external_id ``daniel`` is never sufficient without the daniel.cohen11 email.
+    """
+    verified_locals: set[str] = set()
+    auth_resolved = False
+    ss = _session_mapping(session_state)
+
+    if email:
+        verified_locals |= _admin_locals_from_email(email)
+
+    if ss is not None:
+        try:
+            from suite_auth import (
+                current_auth_email,
+                is_auth_enabled,
+                is_authenticated,
+            )
+
+            if is_auth_enabled():
+                if not is_authenticated(ss):
+                    return False
+                sess_email = current_auth_email(ss)
+                if not sess_email:
+                    return False
+                # Auth path: email is authoritative. Ignore session external_id /
+                # workspace / display-name fields — those are not immutable identity.
+                verified_locals |= _admin_locals_from_email(sess_email)
+                auth_resolved = True
+        except Exception:
+            if not verified_locals:
+                return False
+
+    if auth_resolved:
+        return _is_admin_from_verified_locals(verified_locals)
+
+    if verified_locals:
+        return _is_admin_from_verified_locals(verified_locals)
+
+    # Programmatic / secrets fallback — never treat bare ``daniel`` as admin.
+    ext = _normalize_identity(external_id)
+    if ext == _COAKLEY_EXTERNAL_ID:
+        return True
+    if ext == _DANIEL_RESOLVED_EXTERNAL_ID:
+        return False
+
+    if not ext:
+        try:
+            from suite_user import get_external_user_id, get_user_email
+
+            secrets_email = get_user_email()
+            if secrets_email:
+                return _is_admin_from_verified_locals(_admin_locals_from_email(secrets_email))
+            secrets_ext = _normalize_identity(get_external_user_id())
+            # Secrets suite_user_id may be ``coakley11``; never elevate on ``daniel`` alone.
+            return secrets_ext == _COAKLEY_EXTERNAL_ID
+        except Exception:
+            return False
+
+    return False
 
 
 def _utc_now_iso() -> str:
@@ -94,30 +207,39 @@ def derive_workspace_label(*, slug: str, email: str = "", display_name: str = ""
     return workspace_label(slug)
 
 
-def is_admin_account(*, external_id: str = "", session_state: dict[str, Any] | None = None) -> bool:
-    ext = str(external_id or "").strip().lower()
-    if not ext and isinstance(session_state, dict):
-        try:
-            from suite_auth import resolve_auth_external_id
+def is_admin_account(
+    *,
+    external_id: str = "",
+    email: str = "",
+    session_state: dict[str, Any] | None = None,
+) -> bool:
+    """Backward-compatible alias for :func:`is_admin_user`."""
+    return is_admin_user(session_state=session_state, external_id=external_id, email=email)
 
-            ext = str(resolve_auth_external_id(session_state) or "").strip().lower()
-        except ImportError:
-            ext = ""
-    return ext in _ADMIN_EXTERNAL_IDS
+
+def admin_allowed_workspaces(*, external_id: str = "") -> tuple[str, ...]:
+    """Demo presets plus the account's own slug when it is not already a preset."""
+    key = _normalize_identity(external_id)
+    base = list(_ADMIN_DEMO_WORKSPACES)
+    if key and key not in base and key not in ("default",):
+        base.append(key)
+    return tuple(base)
 
 
 def can_switch_workspaces(*, session_state: dict[str, Any] | None = None) -> bool:
-    """True when multi-workspace picker is allowed (admin demo / Daniel dev)."""
+    """True when multi-workspace picker is allowed (authorized admin only when auth is on)."""
     try:
         from suite_auth import is_auth_enabled, is_authenticated
 
         if not is_auth_enabled():
+            # Shared secrets / local multi-profile mode — picker stays available.
             return True
-        if not isinstance(session_state, dict) or not is_authenticated(session_state):
-            return True
-        return is_admin_account(session_state=session_state)
-    except ImportError:
-        return True
+        ss = _session_mapping(session_state)
+        if ss is None or not is_authenticated(ss):
+            return False
+        return is_admin_user(session_state=ss)
+    except Exception:
+        return False
 
 
 def get_registry_record(owner_user_id: str) -> dict[str, Any] | None:

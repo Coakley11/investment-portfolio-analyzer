@@ -56,9 +56,9 @@ def render_suite_sidebar_account_shell(
 ) -> None:
     """Render workspace badge, optional account panel, and Command Center link."""
     try:
-        from suite_workspace import init_suite_workspace
+        from suite_workspace import bootstrap_suite_workspace
 
-        init_suite_workspace(st)
+        bootstrap_suite_workspace(st)
     except ImportError:
         pass
 
@@ -71,7 +71,7 @@ def render_suite_sidebar_account_shell(
         if can_show_developer_tools(st=st):
             render_suite_namespace_notices(st)
     except ImportError:
-        render_suite_namespace_notices(st)
+        pass
 
     try:
         from suite_account_settings import render_account_workspace_access
@@ -114,6 +114,12 @@ def render_suite_sidebar_account_shell(
                 from suite_auth import render_auth_recovery_diagnostics
 
                 render_auth_recovery_diagnostics(st, expanded=False)
+            except ImportError:
+                pass
+            try:
+                from suite_workspace import render_workspace_ownership_diagnostics
+
+                render_workspace_ownership_diagnostics(st, sidebar=True)
             except ImportError:
                 pass
     except Exception:

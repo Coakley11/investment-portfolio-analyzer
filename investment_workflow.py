@@ -556,13 +556,18 @@ def developer_diagnostics_enabled(st_obj: Any | None = None) -> bool:
 
 
 def developer_access_available(st_obj: Any | None = None) -> bool:
-    """True when the Developer sidebar section should be visible (Daniel workspace only)."""
+    """True when the Developer sidebar section should be visible (authorized admin only)."""
     try:
-        from suite_workspace import is_developer_workspace
+        from suite_workspace import is_admin_session
 
-        return is_developer_workspace(st=st_obj)
+        return is_admin_session(st=st_obj)
     except ImportError:
-        return False
+        try:
+            from suite_workspace import is_developer_workspace
+
+            return is_developer_workspace(st=st_obj)
+        except ImportError:
+            return False
 
 
 def render_developer_sidebar_controls(st_obj: Any | None = None) -> None:

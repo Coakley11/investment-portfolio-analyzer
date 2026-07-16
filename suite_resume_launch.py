@@ -204,6 +204,64 @@ def _apply_baseball(st: Any, resume: str, page: str) -> None:
         target_page = "Comparison Tool"
     if not target_page and resume.startswith("trend:"):
         target_page = "Trend Value"
+    if not target_page and resume.startswith("bb:live_draft:"):
+        target_page = "Live Draft Room"
+    if not target_page and resume.startswith("bb:draft_lab:"):
+        target_page = "Draft Simulation Test Mode"
+    draft_room = _qp_get(st, "suite_draft_room")
+    if not draft_room and resume.startswith("bb:live_draft:"):
+        draft_room = resume.split(":", 2)[-1].strip()
+    if not draft_room and resume.startswith("bb:draft_lab:"):
+        tail = resume.split(":", 2)[-1].strip()
+        if tail.startswith("team:"):
+            draft_room = tail.split(":", 1)[-1].strip()
+        elif tail not in {"team", "team_analysis"}:
+            draft_room = tail
+    if draft_room:
+        st.session_state["_suite_resume_draft_room"] = draft_room
+    draft_section = _qp_get(st, "suite_draft_section")
+    if not draft_section and resume.startswith("bb:draft_lab:team:"):
+        draft_section = "team_analysis"
+    if draft_section:
+        st.session_state["_suite_resume_draft_section"] = draft_section
+    proposal_id = _qp_get(st, "suite_trade_proposal")
+    if not proposal_id and resume.startswith("bb:trade_center:"):
+        proposal_id = resume.split(":", 2)[-1].strip()
+    if proposal_id:
+        st.session_state["_suite_resume_trade_proposal"] = proposal_id
+    league_id = _qp_get(st, "suite_league")
+    if not league_id and resume.startswith("bb:library:"):
+        league_id = resume.split(":", 2)[-1].strip()
+    if league_id:
+        st.session_state["_suite_resume_league_id"] = league_id
+    invite_id = _qp_get(st, "suite_invite")
+    if not invite_id and resume.startswith("bb:invite:"):
+        invite_id = resume.split(":", 2)[-1].strip()
+    if invite_id:
+        st.session_state["_suite_resume_invite_id"] = invite_id
+    lineup_week = _qp_get(st, "suite_lineup_week")
+    if not lineup_week and resume.startswith("bb:lineup:"):
+        if ":w" in resume:
+            lineup_week = resume.rsplit(":w", 1)[-1].strip()
+    if lineup_week:
+        st.session_state["_suite_resume_lineup_week"] = lineup_week
+    waiver_tx = _qp_get(st, "suite_waiver_tx")
+    if not waiver_tx and resume.startswith("bb:waiver:"):
+        waiver_tx = resume.split(":", 2)[-1].strip()
+    if waiver_tx:
+        st.session_state["_suite_resume_waiver_tx"] = waiver_tx
+    if not target_page and resume.startswith("bb:trade_center"):
+        target_page = "Trade Center"
+    if not target_page and resume.startswith("bb:waiver"):
+        target_page = "Waiver Wire / Add-Drop Center"
+    if not target_page and resume.startswith("bb:lineup"):
+        target_page = "Fantasy Lineup Assistant"
+    if not target_page and (
+        resume.startswith("bb:library")
+        or resume.startswith("bb:invite:")
+        or resume.startswith("bb:saved_draft:")
+    ):
+        target_page = "Saved Draft Library"
     trend_player = _qp_get(st, "suite_trend_player")
     if not trend_player and resume.startswith("trend:"):
         trend_player = resume.split(":", 1)[-1].strip()
