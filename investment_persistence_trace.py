@@ -1642,7 +1642,7 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
         )
 
 
-AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-prepare-branches"
+AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-diag-panel-live"
 
 
 def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:
@@ -1691,16 +1691,102 @@ def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
 
     import json
 
+    ss = st.session_state
     snapshot = collect_ami_insight_lifecycle_runtime_snapshot(st)
+    snapshot_json = json.dumps(snapshot, indent=2, default=str)
+    copy_key = "_ami_insight_lifecycle_runtime_diag_copy"
+    module_build = AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD
+    snap_build = snapshot.get("diag_build")
+
     with st.sidebar.expander("AMI insight lifecycle (temp debug)", expanded=True):
         st.caption(
-            f"Build `{AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD}` — admin + dev mode only. "
+            f"Build `{module_build}` — admin + dev mode only. "
             "Reproduce slider bug, then copy the block below."
         )
+
+        st.markdown("**Panel pre-widget trace (temp)**")
+        st.text(f"AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD (module): {module_build!r}")
+        st.text(f'snapshot["diag_build"]: {snap_build!r}')
+        st.caption(f"constant module: {__name__!r} · file: {__file__!s}")
+
+        builds_match = module_build == snap_build
+        if not builds_match:
+            st.error(
+                "Pre-widget mismatch: module constant and snapshot diag_build differ. "
+                'snapshot["diag_build"] is assigned only in '
+                "collect_ami_insight_lifecycle_runtime_snapshot() from this module's "
+                "AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD (see investment_persistence_trace.py). "
+                "If values differ, suspect duplicate/stale import of investment_persistence_trace "
+                "or snapshot mutation after collect()."
+            )
+            st.code(
+                "\n".join(
+                    [
+                        f"module_build={module_build!r}",
+                        f"snap_build={snap_build!r}",
+                        f"snapshot keys={list(snapshot.keys())!r}",
+                    ]
+                ),
+                language=None,
+            )
+
+        ss[copy_key] = snapshot_json
+        session_copy_raw = ss.get(copy_key)
+        session_copy_build: Any = None
+        if isinstance(session_copy_raw, str):
+            try:
+                session_copy_build = json.loads(session_copy_raw).get("diag_build")
+            except json.JSONDecodeError:
+                session_copy_build = "(invalid JSON in session copy key)"
+
+        st.text(
+            f"session_state[{copy_key!r}] diag_build (parsed JSON): {session_copy_build!r}"
+        )
+
+        session_matches_module = session_copy_build == module_build
+        session_matches_snapshot = session_copy_build == snap_build
+        all_three_match = builds_match and session_matches_module and session_matches_snapshot
+
+        if all_three_match:
+            st.success(
+                "Pre-widget: module constant, snapshot diag_build, and session JSON diag_build all match."
+            )
+        else:
+            st.error("Diagnostics build mismatch — values at each stage:")
+            st.code(
+                "\n".join(
+                    [
+                        f"module constant: {module_build!r}",
+                        f'snapshot["diag_build"]: {snap_build!r}',
+                        f"session_state JSON diag_build: {session_copy_build!r}",
+                        f"module == snapshot: {builds_match}",
+                        f"session == module: {session_matches_module}",
+                        f"session == snapshot: {session_matches_snapshot}",
+                    ]
+                ),
+                language=None,
+            )
+            if session_copy_build == "temp-2026-07-28-ami-slider":
+                st.warning(
+                    'Stale "temp-2026-07-28-ami-slider" first appears in session_state copy JSON '
+                    "(not in live module constant / snapshot dict)."
+                )
+            elif snap_build == "temp-2026-07-28-ami-slider":
+                st.warning('Stale ami-slider first appears in snapshot["diag_build"].')
+            elif module_build == "temp-2026-07-28-ami-slider":
+                st.warning("Stale ami-slider first appears in module constant (unexpected on this deploy).")
+
+        dump_preview = (
+            session_copy_raw
+            if isinstance(session_copy_raw, str)
+            else repr(session_copy_raw)
+        )
+        st.caption("session_state dump (_ami_insight_lifecycle_runtime_diag_copy)")
+        st.code(dump_preview[:12000], language="json")
+
         st.text_area(
             "Copy AMI runtime snapshot",
-            value=json.dumps(snapshot, indent=2, default=str),
             height=420,
             label_visibility="collapsed",
-            key="_ami_insight_lifecycle_runtime_diag_copy",
+            key=copy_key,
         )
