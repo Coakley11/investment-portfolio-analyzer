@@ -13,6 +13,29 @@ from investment_ami_answer_format import build_analyst_sections
 from investment_ami_instant_solver import InvestmentSolverResult, _weight_rows
 
 
+def _with_macro_intelligence(
+    result: InvestmentSolverResult,
+    ctx: dict[str, Any],
+    *,
+    macro_intent: str,
+    beginner: bool,
+    question: str,
+) -> InvestmentSolverResult:
+    from investment_ami.engines.support.macro_intelligence import (
+        build_macro_intelligence_brief,
+        enrich_macro_solver_result,
+    )
+
+    brief = build_macro_intelligence_brief(ctx, macro_intent=macro_intent, question=question)
+    return enrich_macro_solver_result(
+        result,
+        brief,
+        beginner=beginner,
+        macro_intent=macro_intent,
+        question=question,
+    )
+
+
 def parse_rate_rise_pct(question: str, *, default: float = 2.0, scenario_params: dict[str, Any] | None = None) -> float:
     """Parse explicit rate rise magnitude from scenario params or question text (percentage points)."""
     params = dict(scenario_params or {})
@@ -150,12 +173,18 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
             risk_notes=_default_risk_notes(beginner),
             beginner=beginner,
         )
-        return InvestmentSolverResult(
+        return _with_macro_intelligence(
+            InvestmentSolverResult(
             short_answer=direct,
             analyst_sections=sections,
             problem_type="macro_rates",
             model_name="Interest rate scenario analyst",
             confidence_pct=55,
+            ),
+            ctx,
+            macro_intent="macro_rates",
+            beginner=beginner,
+            question=question,
         )
 
     if beginner:
@@ -249,7 +278,8 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
         beginner=beginner,
     )
     conf = 80 if prof["bonds"] + prof["reit"] + prof["equity"] > 0 else 60
-    return InvestmentSolverResult(
+    return _with_macro_intelligence(
+        InvestmentSolverResult(
         short_answer=direct,
         analyst_sections=sections,
         problem_type="macro_rates",
@@ -262,6 +292,11 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
             **{k: v for k, v in comps.items()},
             **prof,
         },
+        ),
+        ctx,
+        macro_intent="macro_rates",
+        beginner=beginner,
+        question=question,
     )
 
 
@@ -383,12 +418,18 @@ def _macro_recession_solve(ctx: dict[str, Any], *, beginner: bool, question: str
             risk_notes=_recession_risk_notes(beginner),
             beginner=beginner,
         )
-        return InvestmentSolverResult(
+        return _with_macro_intelligence(
+            InvestmentSolverResult(
             short_answer=direct,
             analyst_sections=sections,
             problem_type="macro_recession",
             model_name="Recession scenario analyst",
             confidence_pct=55,
+            ),
+            ctx,
+            macro_intent="macro_recession",
+            beginner=beginner,
+            question=question,
         )
 
     defensive = float(impacts["defensive_sleeve_pct"])
@@ -487,7 +528,8 @@ def _macro_recession_solve(ctx: dict[str, Any], *, beginner: bool, question: str
         beginner=beginner,
     )
     conf = 82 if prof["equity"] + defensive > 0 else 60
-    return InvestmentSolverResult(
+    return _with_macro_intelligence(
+        InvestmentSolverResult(
         short_answer=direct,
         analyst_sections=sections,
         problem_type="macro_recession",
@@ -502,6 +544,11 @@ def _macro_recession_solve(ctx: dict[str, Any], *, beginner: bool, question: str
             **prof,
             **({"recession_probability_pct": round(recession_prob * 100, 1)} if recession_prob is not None else {}),
         },
+        ),
+        ctx,
+        macro_intent="macro_recession",
+        beginner=beginner,
+        question=question,
     )
 
 
@@ -606,12 +653,18 @@ def _macro_inflation_solve(ctx: dict[str, Any], *, beginner: bool, question: str
             risk_notes=_inflation_risk_notes(beginner),
             beginner=beginner,
         )
-        return InvestmentSolverResult(
+        return _with_macro_intelligence(
+            InvestmentSolverResult(
             short_answer=direct,
             analyst_sections=sections,
             problem_type="macro_inflation",
             model_name="Inflation scenario analyst",
             confidence_pct=55,
+            ),
+            ctx,
+            macro_intent="macro_inflation",
+            beginner=beginner,
+            question=question,
         )
 
     if inflation_pct >= 8:
@@ -689,7 +742,8 @@ def _macro_inflation_solve(ctx: dict[str, Any], *, beginner: bool, question: str
         risk_notes=_inflation_risk_notes(beginner),
         beginner=beginner,
     )
-    return InvestmentSolverResult(
+    return _with_macro_intelligence(
+        InvestmentSolverResult(
         short_answer=direct,
         analyst_sections=sections,
         problem_type="macro_inflation",
@@ -703,6 +757,11 @@ def _macro_inflation_solve(ctx: dict[str, Any], *, beginner: bool, question: str
             **comps,
             **prof,
         },
+        ),
+        ctx,
+        macro_intent="macro_inflation",
+        beginner=beginner,
+        question=question,
     )
 
 

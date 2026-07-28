@@ -67,3 +67,8 @@ solve_instant_insight()
 | ``investment_ami_phase2_solvers.diversification_answer`` | Thin backward-compatible wrapper |
 
 Additional engines should follow the same pattern: implement engine → register → phase-2 wrapper delegates.
+
+## Phase 3 — Macroeconomic intelligence (in progress)
+
+- Design: ``docs/INVESTMENT_AMI_MACRO_INTELLIGENCE_PHASE3.md`` (approved)
+- Phase 3.1 spec: ``docs/INVESTMENT_AMI_MACRO_INTELLIGENCE_PHASE3_1_SPEC.md`` — ``MacroIntelligenceBrief``, compact Macro Outlook header on all macro intents, Reasoning Trace in ``computed``

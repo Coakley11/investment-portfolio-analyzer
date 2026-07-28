@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from investment_ami.engines.support.macro_intelligence import MacroIntelligenceBrief
 
 
 @dataclass(frozen=True)
@@ -59,4 +62,20 @@ def resolve_macro_scenario_context(context: dict[str, Any] | None) -> MacroScena
         economic_regime=regime,
         recession_probability=recession_prob,
         valuation_environment=valuation_env,
+    )
+
+
+def resolve_macro_intelligence(
+    context: dict[str, Any] | None,
+    *,
+    macro_intent: str,
+    question: str = "",
+) -> MacroIntelligenceBrief:
+    """Build canonical macro intelligence brief for instant macro engines."""
+    from investment_ami.engines.support.macro_intelligence import build_macro_intelligence_brief
+
+    return build_macro_intelligence_brief(
+        context,
+        macro_intent=macro_intent,
+        question=question,
     )
