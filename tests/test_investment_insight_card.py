@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
+from unittest.mock import MagicMock
 
 from applied_math_return_insight import (
     INVESTMENT_INSIGHT_PANEL_TITLE,
@@ -37,6 +38,31 @@ class _FakeSt:
     def __init__(self) -> None:
         self.session_state = _FakeSessionState()
         self.query_params: dict[str, str] = {}
+
+    def container(self, **kwargs: Any):  # noqa: ANN003
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            yield self
+
+        return _cm()
+
+    def markdown(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def caption(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def columns(self, spec: Any) -> list:
+        n = max(int(spec), 1)
+        return [MagicMock() for _ in range(n)]
+
+    def link_button(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def button(self, *args: Any, **kwargs: Any) -> bool:
+        return False
 
 
 class TestInvestmentInsightCard(unittest.TestCase):
@@ -106,6 +132,62 @@ class TestInvestmentInsightCard(unittest.TestCase):
         self.assertEqual(st.session_state[SESSION_PENDING_KEY]["conclusion"], "Cloud insight")
         self.assertEqual(st.session_state["insight_source_tab"], "Portfolio Health")
         self.assertEqual(st.session_state["_ami_insight_hydrate_source"], "cloud_saved_items")
+
+    def test_post_submit_rerun_gate_ignores_stale_inline_success(self) -> None:
+        from applied_math_return_insight import investment_insight_main_render_needed
+
+        ss: dict[str, Any] = {
+            SESSION_PENDING_KEY: {
+                "source_app": "investment",
+                "source_page": "Overview",
+                "conclusion": "Instant answer.",
+                "question": "What happens if rates rise?",
+            },
+            "_ami_submit_render_insight_this_run": True,
+            "_ami_insight_render_success": True,
+            "_ami_last_submit_source_page": "Overview",
+        }
+        self.assertTrue(investment_insight_main_render_needed(ss))
+        self.assertNotIn("_ami_submit_render_insight_this_run", ss)
+        self.assertIsNone(ss.get("_ami_insight_render_success"))
+
+    def test_post_submit_rerun_renders_card_on_overview(self) -> None:
+        from applied_math_return_insight import (
+            investment_insight_main_render_needed,
+            render_suite_applied_math_insight_for_page,
+        )
+
+        st = _FakeSt()
+        st.session_state.update(
+            {
+                SESSION_PENDING_KEY: {
+                    "source_app": "investment",
+                    "source_page": "Overview",
+                    "conclusion": "Top holding is 45% of the portfolio.",
+                    "question": "Is my portfolio too concentrated?",
+                    "problem_type": "portfolio_concentration",
+                },
+                "_ami_submit_render_insight_this_run": True,
+                "_ami_insight_render_success": True,
+                "_ami_last_submit_source_page": "Overview",
+            }
+        )
+
+        self.assertTrue(investment_insight_main_render_needed(st.session_state))
+
+        import applied_math_return_insight as ami
+
+        with unittest.mock.patch.object(ami, "load_latest_applied_math_insight_for_app", return_value=None), unittest.mock.patch.object(
+            ami, "sync_dismissed_insights_from_cloud"
+        ):
+            rendered = render_suite_applied_math_insight_for_page(
+                st,
+                source_app="investment",
+                source_page="Overview",
+            )
+        self.assertTrue(rendered)
+        self.assertTrue(st.session_state.get("_ami_insight_render_success"))
+        self.assertIsNone(st.session_state.get("_ami_insight_render_skipped_reason"))
 
 
 if __name__ == "__main__":

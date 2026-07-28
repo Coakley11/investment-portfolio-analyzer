@@ -1981,14 +1981,18 @@ _active_tab = st.session_state["investment_active_tab"]
 from suite_analytical_question import render_suite_applied_math_insight
 
 try:
-    from applied_math_return_insight import hydrate_applied_math_insight_for_session
+    from applied_math_return_insight import (
+        hydrate_applied_math_insight_for_session,
+        investment_insight_main_render_needed,
+    )
 
     hydrate_applied_math_insight_for_session(st, "investment")
 except Exception:
-    pass
+    investment_insight_main_render_needed = None  # type: ignore[misc, assignment]
 
-_submit_insight_run = st.session_state.pop("_ami_submit_render_insight_this_run", None)
-if not _submit_insight_run or not st.session_state.get("_ami_insight_render_success"):
+if investment_insight_main_render_needed and investment_insight_main_render_needed(st.session_state):
+    render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+elif investment_insight_main_render_needed is None:
     render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
 
 if active_main_tab(_active_tab, "getting_started", beginner=beginner_mode):

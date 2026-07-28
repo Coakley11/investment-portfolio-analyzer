@@ -621,6 +621,24 @@ def should_render_insight_on_page(source_app: str, current_page: str, insight: d
     )
 
 
+def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool:
+    """
+    Streamlit main-area gate after ``hydrate_applied_math_insight_for_session``.
+
+    Post-submit rerun must paint the card from ``_ami_pending_insight`` even when
+    pre-rerun inline render set ``_ami_insight_render_success``.
+    """
+    ss = session_state
+    submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
+    pending = ss.get(SESSION_PENDING_KEY)
+    has_pending = isinstance(pending, dict) and bool(pending.get("conclusion") or pending.get("question"))
+    if submit_flag and has_pending:
+        ss.pop("_ami_insight_render_success", None)
+        ss["_ami_force_insight_render"] = True
+        return True
+    return not bool(ss.get("_ami_insight_render_success"))
+
+
 def _insight_panel_title(source_app: str, insight: dict[str, Any] | None = None) -> str:
     app = str(source_app or (insight or {}).get("source_app") or "").strip().lower()
     if app == "investment":

@@ -1065,17 +1065,6 @@ def render_analyze_with_applied_math_sidebar(
                 session_state=ss,
                 pre_payload=pre_payload if is_investment else None,
             )
-            if is_investment and not result.get("duplicate"):
-                try:
-                    from applied_math_return_insight import render_suite_applied_math_insight_for_page
-
-                    render_suite_applied_math_insight_for_page(
-                        st,
-                        source_app=source_app,
-                        source_page=source_page,
-                    )
-                except Exception:
-                    log.exception("inline Investment insight render failed")
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
             if result.get("duplicate"):
