@@ -8,7 +8,10 @@ from __future__ import annotations
 import datetime as dt
 import importlib
 import io
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -109,14 +112,31 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# TEMP: unconditional deploy probe — remove after runtime verification (see Cloud logs + UI ``?slider_debug=1``).
+logger.warning("SLIDER DEBUG ACTIVE")
+print("SLIDER DEBUG ACTIVE", flush=True)
+
 # TEMP: ``?slider_debug=1`` — remove after runtime verification (proves this streamlit_app.py is loaded).
+_slider_debug_q: Any = None
 try:
     _slider_debug_q = st.query_params.get("slider_debug")
     _slider_debug_on = str(
         _slider_debug_q[0] if isinstance(_slider_debug_q, list) else (_slider_debug_q or "")
     ).strip().lower() in ("1", "true", "yes", "on")
-except Exception:
+except Exception as _slider_debug_exc:
     _slider_debug_on = False
+    logger.warning(
+        "slider_debug query_params probe failed: %s: %s",
+        type(_slider_debug_exc).__name__,
+        _slider_debug_exc,
+    )
+else:
+    logger.warning(
+        "slider_debug query_params probe: raw=%r parsed_on=%s all_keys=%s",
+        _slider_debug_q,
+        _slider_debug_on,
+        list(st.query_params.keys()),
+    )
 if _slider_debug_on:
     st.markdown("## SLIDER DEBUG ACTIVE")
 
