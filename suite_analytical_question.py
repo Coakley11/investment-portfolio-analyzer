@@ -56,7 +56,7 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 AMI_SIDEBAR_DEPLOY_LABEL = "Applied Math question sender live"
-AMI_SIDEBAR_DEPLOY_VERSION = "2026-06-08-return-insight-restore-v12"
+AMI_SIDEBAR_DEPLOY_VERSION = "2026-07-28-rerun-gate-6a3aa00"
 _CTX_JSON_SUBTITLE_LIMIT = 8000
 _CONTEXT_ITEM_TYPE = "analytical_question_context"
 ANALYTICAL_QUESTION_CONTINUE_PRIORITY = 64
