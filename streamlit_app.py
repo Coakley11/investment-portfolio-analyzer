@@ -1998,11 +1998,13 @@ from suite_analytical_question import render_suite_applied_math_insight
 
 try:
     from applied_math_return_insight import (
+        clear_stale_insight_render_success_when_pending,
         hydrate_applied_math_insight_for_session,
         investment_insight_main_render_needed,
     )
 
     hydrate_applied_math_insight_for_session(st, "investment")
+    clear_stale_insight_render_success_when_pending(st)
 except Exception:
     investment_insight_main_render_needed = None  # type: ignore[misc, assignment]
 

@@ -114,6 +114,9 @@ class TestMacroRateSubmitRerunSync(unittest.TestCase):
 
         ss["investment_active_tab"] = "Macro Outlook"
         hydrate_applied_math_insight_for_session(st, "investment")
+        from applied_math_return_insight import clear_stale_insight_render_success_when_pending
+
+        clear_stale_insight_render_success_when_pending(st)
         self.assertTrue(investment_insight_main_render_needed(ss))
 
         with patch.object(ami, "load_latest_applied_math_insight_for_app", return_value=None), patch.object(

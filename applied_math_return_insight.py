@@ -23,28 +23,31 @@ def _ami_insight_lifecycle_log_enabled() -> bool:
 
 def record_ami_insight_lifecycle(session_state: dict[str, Any], step: str, **details: Any) -> None:
     """Trace main render gate / pending insight (session ring buffer; INFO if INVESTMENT_AMI_SLIDER_TRACE=1)."""
-    ss = session_state
-    pending = ss.get(SESSION_PENDING_KEY)
-    entry: dict[str, Any] = {
-        "step": step,
-        "pending_id": (str(pending.get("insight_id") or "")[:20] if isinstance(pending, dict) else None),
-        "pending_present": bool(
-            isinstance(pending, dict) and (pending.get("conclusion") or pending.get("question"))
-        ),
-        "render_success": ss.get("_ami_insight_render_success"),
-        "slider_refresh_pending": ss.get("_ami_slider_refresh_pending"),
-        "force_insight_render": ss.get("_ami_force_insight_render"),
-        **details,
-    }
-    if _ami_insight_lifecycle_log_enabled():
-        log.info("AMI insight lifecycle: %s", entry)
-    buf = ss.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY)
-    if not isinstance(buf, list):
-        buf = []
-    buf.append(entry)
-    if len(buf) > AMI_INSIGHT_LIFECYCLE_MAX:
-        buf = buf[-AMI_INSIGHT_LIFECYCLE_MAX :]
-    ss[AMI_INSIGHT_LIFECYCLE_LOG_KEY] = buf
+    try:
+        ss = session_state
+        pending = ss.get(SESSION_PENDING_KEY)
+        entry: dict[str, Any] = {
+            "step": step,
+            "pending_id": (str(pending.get("insight_id") or "")[:20] if isinstance(pending, dict) else None),
+            "pending_present": bool(
+                isinstance(pending, dict) and (pending.get("conclusion") or pending.get("question"))
+            ),
+            "render_success": ss.get("_ami_insight_render_success"),
+            "slider_refresh_pending": ss.get("_ami_slider_refresh_pending"),
+            "force_insight_render": ss.get("_ami_force_insight_render"),
+            **details,
+        }
+        if _ami_insight_lifecycle_log_enabled():
+            log.info("AMI insight lifecycle: %s", entry)
+        buf = ss.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY)
+        if not isinstance(buf, list):
+            buf = []
+        buf.append(entry)
+        if len(buf) > AMI_INSIGHT_LIFECYCLE_MAX:
+            buf = buf[-AMI_INSIGHT_LIFECYCLE_MAX :]
+        ss[AMI_INSIGHT_LIFECYCLE_LOG_KEY] = buf
+    except Exception as exc:
+        log.debug("record_ami_insight_lifecycle skipped: %s", exc)
 
 
 INSIGHT_ITEM_TYPE = "applied_math_insight"
@@ -658,39 +661,47 @@ def should_render_insight_on_page(source_app: str, current_page: str, insight: d
     )
 
 
+def clear_stale_insight_render_success_when_pending(st: Any) -> bool:
+    """
+    Widget reruns keep ``_ami_insight_render_success`` while sliders live inside the panel.
+
+    Call after hydrate and before ``investment_insight_main_render_needed`` so the gate
+    can reopen without treating every pending insight as a special repaint branch.
+    """
+    if not _pending_insight_valid(st):
+        return False
+    ss = st.session_state
+    ss.pop("_ami_insight_render_success", None)
+    record_ami_insight_lifecycle(ss, "clear_stale_render_success", reason="valid_pending")
+    return True
+
+
 def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool:
     """
     Streamlit main-area gate after ``hydrate_applied_math_insight_for_session``.
 
     Post-submit rerun must paint the card from ``_ami_pending_insight`` even when
     pre-rerun inline render set ``_ami_insight_render_success``.
-
-    Any Streamlit widget rerun (e.g. Rate shock slider) must repaint while pending
-    exists — sliders live inside ``render_applied_math_insight_panel``, which only
-    runs when this gate is True.
     """
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
     slider_refresh = bool(ss.pop("_ami_slider_refresh_pending", None))
     pending = ss.get(SESSION_PENDING_KEY)
     has_pending = isinstance(pending, dict) and bool(pending.get("conclusion") or pending.get("question"))
-    if submit_flag and has_pending:
+    if submit_flag:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
-        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="submit_flag")
-        return True
-    if slider_refresh and has_pending:
-        ss.pop("_ami_insight_render_success", None)
-        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="slider_refresh")
-        return True
-    if has_pending:
-        ss.pop("_ami_insight_render_success", None)
         record_ami_insight_lifecycle(
             ss,
             "investment_insight_main_render_needed",
             needed=True,
-            reason="pending_repaint",
+            reason="submit_flag",
+            has_pending=has_pending,
         )
+        return True
+    if slider_refresh and has_pending:
+        ss.pop("_ami_insight_render_success", None)
+        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="slider_refresh")
         return True
     needed = not bool(ss.get("_ami_insight_render_success"))
     record_ami_insight_lifecycle(
@@ -698,6 +709,7 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
         "investment_insight_main_render_needed",
         needed=needed,
         reason="no_pending",
+        has_pending=has_pending,
     )
     return needed
 
