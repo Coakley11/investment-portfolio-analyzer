@@ -237,9 +237,6 @@ def simulate_slider_widget_rerun(*, active_tab: str = "Macro Outlook") -> list[d
     _log(steps, "slider_rerun_start", pending=True, render_success=True)
 
     hydrate_applied_math_insight_for_session(st, "investment")
-    from applied_math_return_insight import clear_stale_insight_render_success_when_pending
-
-    clear_stale_insight_render_success_when_pending(st)
     _log(steps, "after_hydrate", pending=bool(ss.get(SESSION_PENDING_KEY)))
 
     gate = investment_insight_main_render_needed(ss)

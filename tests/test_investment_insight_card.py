@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from applied_math_return_insight import (
     INVESTMENT_INSIGHT_PANEL_TITLE,
@@ -189,56 +189,18 @@ class TestInvestmentInsightCard(unittest.TestCase):
         self.assertTrue(st.session_state.get("_ami_insight_render_success"))
         self.assertIsNone(st.session_state.get("_ami_insight_render_skipped_reason"))
 
-    def test_slider_refresh_rerun_gate_ignores_stale_inline_success(self) -> None:
-        from applied_math_return_insight import investment_insight_main_render_needed
-
-        ss: dict[str, Any] = {
-            SESSION_PENDING_KEY: {
-                "source_app": "investment",
-                "source_page": "Macro Outlook",
-                "conclusion": "Falling Rates scenario.",
-                "question": "What if the Fed cuts rates?",
-                "scenario_refreshed_at": "2026-07-28T12:00:00+00:00",
-            },
-            "_ami_slider_refresh_pending": True,
-            "_ami_insight_render_success": True,
-        }
-        self.assertTrue(investment_insight_main_render_needed(ss))
-        self.assertIsNone(ss.get("_ami_slider_refresh_pending"))
-        self.assertIsNone(ss.get("_ami_insight_render_success"))
-
-    def test_widget_rerun_gate_repaints_when_pending_and_stale_success(self) -> None:
-        from applied_math_return_insight import (
-            clear_stale_insight_render_success_when_pending,
-            investment_insight_main_render_needed,
-        )
+    def test_hydrate_submit_rerun_skips_cloud_when_pending_missing(self) -> None:
+        import applied_math_return_insight as ami
 
         st = _FakeSt()
-        st.session_state.update(
-            {
-                SESSION_PENDING_KEY: {
-                    "source_app": "investment",
-                    "source_page": "Macro Outlook",
-                    "conclusion": "Falling Rates scenario.",
-                    "question": "How would rate cuts affect my portfolio?",
-                    "problem_type": "macro_rates",
-                },
-                "_ami_insight_render_success": True,
-            }
-        )
-        self.assertTrue(clear_stale_insight_render_success_when_pending(st))
-        self.assertTrue(investment_insight_main_render_needed(st.session_state))
-        self.assertIsNone(st.session_state.get("_ami_insight_render_success"))
-
-    def test_submit_rerun_gate_true_even_if_pending_missing(self) -> None:
-        from applied_math_return_insight import investment_insight_main_render_needed
-
-        ss: dict[str, Any] = {
-            "_ami_submit_render_insight_this_run": True,
-            "_ami_insight_render_success": True,
-        }
-        self.assertTrue(investment_insight_main_render_needed(ss))
-        self.assertTrue(ss.get("_ami_force_insight_render"))
+        st.session_state["_ami_submit_render_insight_this_run"] = True
+        with patch.object(ami, "load_latest_applied_math_insight_for_app") as mock_load, patch.object(
+            ami, "sync_dismissed_insights_from_cloud"
+        ):
+            ok = hydrate_applied_math_insight_for_session(st, "investment")
+        self.assertTrue(ok)
+        self.assertEqual(st.session_state.get("_ami_insight_hydrate_source"), "submit_staged_missing_pending")
+        mock_load.assert_not_called()
 
 
 if __name__ == "__main__":

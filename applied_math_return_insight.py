@@ -661,21 +661,6 @@ def should_render_insight_on_page(source_app: str, current_page: str, insight: d
     )
 
 
-def clear_stale_insight_render_success_when_pending(st: Any) -> bool:
-    """
-    Widget reruns keep ``_ami_insight_render_success`` while sliders live inside the panel.
-
-    Call after hydrate and before ``investment_insight_main_render_needed`` so the gate
-    can reopen without treating every pending insight as a special repaint branch.
-    """
-    if not _pending_insight_valid(st):
-        return False
-    ss = st.session_state
-    ss.pop("_ami_insight_render_success", None)
-    record_ami_insight_lifecycle(ss, "clear_stale_render_success", reason="valid_pending")
-    return True
-
-
 def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool:
     """
     Streamlit main-area gate after ``hydrate_applied_math_insight_for_session``.
@@ -685,10 +670,9 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
     """
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
-    slider_refresh = bool(ss.pop("_ami_slider_refresh_pending", None))
     pending = ss.get(SESSION_PENDING_KEY)
     has_pending = isinstance(pending, dict) and bool(pending.get("conclusion") or pending.get("question"))
-    if submit_flag:
+    if submit_flag and has_pending:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
         record_ami_insight_lifecycle(
@@ -696,20 +680,16 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
             "investment_insight_main_render_needed",
             needed=True,
             reason="submit_flag",
-            has_pending=has_pending,
         )
-        return True
-    if slider_refresh and has_pending:
-        ss.pop("_ami_insight_render_success", None)
-        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="slider_refresh")
         return True
     needed = not bool(ss.get("_ami_insight_render_success"))
     record_ami_insight_lifecycle(
         ss,
         "investment_insight_main_render_needed",
         needed=needed,
-        reason="no_pending",
+        reason="default_gate",
         has_pending=has_pending,
+        submit_flag_consumed=submit_flag,
     )
     return needed
 
@@ -911,7 +891,22 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
             ss["_ami_insight_hydrate_source"] = "submit_staged"
             if key == "investment":
                 _sync_investment_insight_tab_keys(st, key, insight=pending)
+            record_ami_insight_lifecycle(
+                ss,
+                "hydrate_applied_math_insight_for_session",
+                branch="submit_staged",
+                pending_present=True,
+            )
             return True
+        record_ami_insight_lifecycle(
+            ss,
+            "hydrate_applied_math_insight_for_session",
+            branch="submit_staged_missing_pending",
+            pending_present=False,
+        )
+        ss["_ami_insight_hydrate_success"] = False
+        ss["_ami_insight_hydrate_source"] = "submit_staged_missing_pending"
+        return True
 
     sync_dismissed_insights_from_cloud(st, key)
 
@@ -1946,13 +1941,14 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
 def stage_pending_insight(st: Any, insight: AppliedMathInsight | dict[str, Any], *, return_context: dict[str, Any] | None = None) -> None:
     """Write insight into Streamlit session for AMI return button."""
     data = insight.to_dict() if isinstance(insight, AppliedMathInsight) else dict(insight)
+    st.session_state[SESSION_PENDING_KEY] = data
     record_ami_insight_lifecycle(
         st.session_state,
         "stage_pending_insight",
         insight_id=str(data.get("insight_id") or "")[:20],
         source_page=str(data.get("source_page") or ""),
+        has_conclusion=bool(data.get("conclusion")),
     )
-    st.session_state[SESSION_PENDING_KEY] = data
     source_page = _resolve_insight_source_page(data) or str(data.get("source_page") or "").strip()
     st.session_state[SESSION_RETURN_PAGE_KEY] = source_page
     if return_context:
