@@ -116,6 +116,28 @@ try:
 except Exception:
     pass
 
+# Query ``?ami_gate_check=1`` — temporary deploy verification for Investment Insight rerun gate.
+try:
+    _ami_gate_q = st.query_params.get("ami_gate_check")
+    _ami_gate_on = str(
+        _ami_gate_q[0] if isinstance(_ami_gate_q, list) else (_ami_gate_q or "")
+    ).strip().lower() in ("1", "true", "yes", "on")
+except Exception:
+    _ami_gate_on = False
+if _ami_gate_on:
+    try:
+        from applied_math_return_insight import investment_insight_main_render_needed as _ami_gate_fn
+
+        with open(__file__, encoding="utf-8") as _gate_f:
+            _gate_src = _gate_f.read()
+        _gate_old = "_submit_insight_run" in _gate_src
+        st.markdown(
+            f"**AMI rerun gate probe:** {'OLD' if _gate_old else 'NEW'} · "
+            f"helper=`{_ami_gate_fn.__name__}` · deploy=`2026-07-28-rerun-gate-6a3aa00`"
+        )
+    except Exception as _gate_exc:
+        st.markdown(f"**AMI rerun gate probe:** error `{type(_gate_exc).__name__}: {_gate_exc}`")
+
 try:
     from suite_cloud_state import purge_stale_investment_ami_restore_blockers
 
