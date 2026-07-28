@@ -307,6 +307,37 @@ class TestInvestmentPersistenceTrace(unittest.TestCase):
         self.assertTrue(trace.get("cloud_write_ok"))
         self.assertEqual(trace.get("saved_tab"), "My Goal")
 
+    def test_ami_lifecycle_runtime_snapshot_fields(self) -> None:
+        from applied_math_return_insight import AMI_INSIGHT_LIFECYCLE_LOG_KEY, SESSION_PENDING_KEY
+        from investment_persistence_trace import collect_ami_insight_lifecycle_runtime_snapshot
+
+        st = self._st(
+            {
+                SESSION_PENDING_KEY: {
+                    "insight_id": "abc",
+                    "conclusion": "Answer.",
+                    "question": "Q?",
+                },
+                AMI_INSIGHT_LIFECYCLE_LOG_KEY: [{"step": "gate", "needed": True}],
+                "_ami_insight_render_success": True,
+                "_ami_insight_hydrate_source": "session",
+                "_ami_last_submit_source_page": "Portfolio Health",
+                "investment_active_tab": "Portfolio Health",
+            }
+        )
+        snap = collect_ami_insight_lifecycle_runtime_snapshot(st)
+        self.assertTrue(snap["pending_insight_complete"])
+        self.assertEqual(len(snap["_ami_insight_lifecycle_log"]), 1)
+        self.assertEqual(snap["_ami_insight_render_success"], True)
+
+    def test_ami_lifecycle_runtime_diagnostics_hidden_for_non_admin(self) -> None:
+        from investment_persistence_trace import render_ami_insight_lifecycle_runtime_diagnostics
+
+        st = self._st()
+        with patch("suite_workspace.is_admin_session", return_value=False):
+            render_ami_insight_lifecycle_runtime_diagnostics(st)
+        st.sidebar.expander.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

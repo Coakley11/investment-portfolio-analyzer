@@ -2013,6 +2013,13 @@ if investment_insight_main_render_needed and investment_insight_main_render_need
 elif investment_insight_main_render_needed is None:
     render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
 
+try:
+    from investment_persistence_trace import render_ami_insight_lifecycle_runtime_diagnostics
+
+    render_ami_insight_lifecycle_runtime_diagnostics(st)
+except Exception:
+    pass
+
 if active_main_tab(_active_tab, "getting_started", beginner=beginner_mode):
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"

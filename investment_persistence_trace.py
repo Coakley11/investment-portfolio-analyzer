@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import subprocess
 from datetime import datetime, timezone
 from typing import Any
@@ -1638,4 +1639,68 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
             value=format_test_e_compare_trace(test_e),
             height=200,
             label_visibility="collapsed",
+        )
+
+
+AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-ami-slider"
+
+
+def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:
+    """Session snapshot for Cloud slider-rerun debugging (copy/paste)."""
+    from applied_math_return_insight import AMI_INSIGHT_LIFECYCLE_LOG_KEY, SESSION_PENDING_KEY
+
+    ss = st.session_state
+    pending = ss.get(SESSION_PENDING_KEY)
+    pending_dict = pending if isinstance(pending, dict) else None
+    log_buf = ss.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY)
+    if not isinstance(log_buf, list):
+        log_buf = []
+    return {
+        "diag_build": AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD,
+        "render_pass": ss.get("_pr1_render_pass"),
+        "_ami_insight_lifecycle_log": copy.deepcopy(log_buf[-15:]),
+        SESSION_PENDING_KEY: copy.deepcopy(pending_dict) if pending_dict else pending,
+        "pending_insight_complete": bool(
+            isinstance(pending_dict, dict) and bool(pending_dict.get("conclusion"))
+        ),
+        "_ami_insight_render_success": ss.get("_ami_insight_render_success"),
+        "_ami_insight_hydrate_source": ss.get("_ami_insight_hydrate_source"),
+        "_ami_insight_render_skipped_reason": ss.get("_ami_insight_render_skipped_reason"),
+        "_ami_last_submit_source_page": ss.get("_ami_last_submit_source_page"),
+        "investment_active_tab": ss.get("investment_active_tab"),
+        "_ami_force_insight_render": ss.get("_ami_force_insight_render"),
+        "_ami_submit_render_insight_this_run": ss.get("_ami_submit_render_insight_this_run"),
+    }
+
+
+def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
+    """Temporary admin-only AMI lifecycle dump (remove after slider bug is diagnosed)."""
+    try:
+        from suite_workspace import is_admin_session
+    except ImportError:
+        return
+    if not is_admin_session(st=st):
+        return
+    try:
+        from suite_workspace import can_show_developer_tools
+
+        if not can_show_developer_tools(st=st):
+            return
+    except ImportError:
+        return
+
+    import json
+
+    snapshot = collect_ami_insight_lifecycle_runtime_snapshot(st)
+    with st.sidebar.expander("AMI insight lifecycle (temp debug)", expanded=True):
+        st.caption(
+            f"Build `{AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD}` — admin + dev mode only. "
+            "Reproduce slider bug, then copy the block below."
+        )
+        st.text_area(
+            "Copy AMI runtime snapshot",
+            value=json.dumps(snapshot, indent=2, default=str),
+            height=420,
+            label_visibility="collapsed",
+            key="_ami_insight_lifecycle_runtime_diag_copy",
         )
