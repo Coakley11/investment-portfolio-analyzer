@@ -868,6 +868,26 @@ def _pending_insight_valid(st: Any) -> dict[str, Any]:
     return {}
 
 
+def prepare_insight_card_widget_rerun(st: Any) -> bool:
+    """
+    Streamlit widget reruns (e.g. Rate shock slider) set ``_ami_insight_render_success`` on the
+    prior paint. Clear that flag when valid pending exists so ``investment_insight_main_render_needed``
+    reuses the same main render path as submit—without changing submit gate rules.
+    """
+    if not _pending_insight_valid(st):
+        return False
+    ss = st.session_state
+    if not ss.get("_ami_insight_render_success"):
+        return False
+    ss.pop("_ami_insight_render_success", None)
+    record_ami_insight_lifecycle(
+        ss,
+        "prepare_insight_card_widget_rerun",
+        reason="stale_success_with_pending",
+    )
+    return True
+
+
 def insight_exists_in_cloud(source_app: str) -> bool:
     return bool(load_latest_applied_math_insight_for_app(source_app))
 

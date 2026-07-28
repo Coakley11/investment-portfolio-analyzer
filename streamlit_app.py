@@ -2000,9 +2000,11 @@ try:
     from applied_math_return_insight import (
         hydrate_applied_math_insight_for_session,
         investment_insight_main_render_needed,
+        prepare_insight_card_widget_rerun,
     )
 
     hydrate_applied_math_insight_for_session(st, "investment")
+    prepare_insight_card_widget_rerun(st)
 except Exception:
     investment_insight_main_render_needed = None  # type: ignore[misc, assignment]
 

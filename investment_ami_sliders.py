@@ -556,7 +556,6 @@ def _stage_refreshed_insight(
     ss["_ami_scenario_params"] = dict(params)
     ss["_ami_force_insight_render"] = True
     ss.pop("_ami_insight_render_success", None)
-    ss["_ami_slider_refresh_pending"] = True
     try:
         from applied_math_return_insight import record_ami_insight_lifecycle
 
@@ -564,7 +563,6 @@ def _stage_refreshed_insight(
             ss,
             "_stage_refreshed_insight_after",
             insight_id=str(payload.get("insight_id") or "")[:20],
-            slider_refresh_pending=True,
             has_conclusion=bool(payload.get("conclusion")),
         )
     except ImportError:
@@ -958,6 +956,17 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
         }
         return False
     if merged != prev:
+        try:
+            from applied_math_return_insight import record_ami_insight_lifecycle
+
+            record_ami_insight_lifecycle(
+                st.session_state,
+                "render_ami_assumption_controls",
+                action="slider_params_changed",
+                rate_shock_pp=merged.get("rate_shock_pp"),
+            )
+        except ImportError:
+            pass
         if refresh_investment_insight_from_params(st, insight_data, merged):
             st.session_state[applied_key] = dict(merged)
             return True

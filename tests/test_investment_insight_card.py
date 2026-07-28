@@ -202,6 +202,30 @@ class TestInvestmentInsightCard(unittest.TestCase):
         self.assertEqual(st.session_state.get("_ami_insight_hydrate_source"), "submit_staged_missing_pending")
         mock_load.assert_not_called()
 
+    def test_slider_widget_rerun_opens_default_gate_via_prepare(self) -> None:
+        from applied_math_return_insight import (
+            investment_insight_main_render_needed,
+            prepare_insight_card_widget_rerun,
+        )
+
+        st = _FakeSt()
+        st.session_state.update(
+            {
+                SESSION_PENDING_KEY: {
+                    "source_app": "investment",
+                    "source_page": "Forward Macro Analysis",
+                    "conclusion": "Falling Rates scenario.",
+                    "question": "Rate cut impact?",
+                    "problem_type": "macro_rates",
+                },
+                "_ami_insight_render_success": True,
+            }
+        )
+        self.assertFalse(investment_insight_main_render_needed(st.session_state))
+        st.session_state["_ami_insight_render_success"] = True
+        self.assertTrue(prepare_insight_card_widget_rerun(st))
+        self.assertTrue(investment_insight_main_render_needed(st.session_state))
+
 
 if __name__ == "__main__":
     unittest.main()
