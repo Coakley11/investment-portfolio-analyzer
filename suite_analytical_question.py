@@ -801,16 +801,21 @@ def submit_analytical_question(
     quant_area: str = "",
     source_state: dict[str, Any] | None = None,
     session_state: dict[str, Any] | None = None,
+    pre_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Log event on source app and upsert Applied Intelligence resume item."""
-    payload = build_question_payload(
-        source_app=source_app,
-        source_page=source_page,
-        question=question,
-        context=context,
-        context_summary=context_summary,
-        quant_area=quant_area,
-        source_state=source_state,
+    payload = (
+        dict(pre_payload)
+        if isinstance(pre_payload, dict) and pre_payload.get("question_id")
+        else build_question_payload(
+            source_app=source_app,
+            source_page=source_page,
+            question=question,
+            context=context,
+            context_summary=context_summary,
+            quant_area=quant_area,
+            source_state=source_state,
+        )
     )
     action_url = build_applied_math_resume_url(payload)
     duplicate = _recent_duplicate_send(session_state, payload["question_id"])
@@ -1011,6 +1016,45 @@ def render_analyze_with_applied_math_sidebar(
                     submit_source_state = source_state_builder()
                 except Exception:
                     log.exception("AMI source_state builder failed for %s (%s)", source_app, source_page)
+            pre_payload: dict[str, Any] | None = None
+            if is_investment:
+                pre_payload = build_question_payload(
+                    source_app=source_app,
+                    source_page=source_page,
+                    question=q,
+                    context=submit_ctx,
+                    context_summary=context_summary,
+                    source_state=submit_source_state,
+                )
+                action_url_pre = build_applied_math_resume_url(pre_payload)
+                _stage_investment_instant_insight(
+                    st,
+                    ss,
+                    question=q,
+                    source_app=source_app,
+                    source_page=source_page,
+                    submit_ctx=submit_ctx,
+                    submit_source_state=submit_source_state,
+                    pre_payload=pre_payload,
+                    action_url_pre=action_url_pre,
+                )
+                canonical = ss.get("_ami_investment_instant_canonical")
+                if isinstance(canonical, dict) and canonical.get("insight_id"):
+                    submit_ctx = dict(submit_ctx)
+                    instant_meta = {
+                        "insight_id": canonical.get("insight_id"),
+                        "conclusion": canonical.get("conclusion"),
+                        "canonical_instant": True,
+                        "question_id": canonical.get("question_id"),
+                    }
+                    submit_ctx["instant_insight"] = instant_meta
+                    pre_payload = dict(pre_payload)
+                    pre_payload["context"] = submit_ctx
+                    pre_payload["instant_insight"] = instant_meta
+                    action_url_pre = build_applied_math_resume_url(pre_payload)
+                    pending = ss.get("_ami_pending_insight")
+                    if isinstance(pending, dict):
+                        pending["full_analysis_url"] = action_url_pre
             result = submit_analytical_question(
                 source_app=source_app,
                 source_page=source_page,
@@ -1019,7 +1063,19 @@ def render_analyze_with_applied_math_sidebar(
                 context_summary=context_summary,
                 source_state=submit_source_state,
                 session_state=ss,
+                pre_payload=pre_payload if is_investment else None,
             )
+            if is_investment and not result.get("duplicate"):
+                try:
+                    from applied_math_return_insight import render_suite_applied_math_insight_for_page
+
+                    render_suite_applied_math_insight_for_page(
+                        st,
+                        source_app=source_app,
+                        source_page=source_page,
+                    )
+                except Exception:
+                    log.exception("inline Investment insight render failed")
             ss["_last_analytical_question"] = result
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
             if result.get("duplicate"):
@@ -1603,7 +1659,9 @@ def _stage_investment_instant_insight(
 
     stage_pending_insight(st, payload, return_context=dict(submit_source_state or {}))
     ss["_ami_investment_instant_canonical"] = dict(payload)
+    ss["_ami_force_insight_render"] = True
     ss["_ami_submit_render_insight_this_run"] = True
+    ss["_ami_insight_return_preserve"] = True
     ss["_ami_last_submit_source_page"] = str(source_page or page)
     scenario = dict(ctx.get("scenario_params") or {})
     if scenario:
