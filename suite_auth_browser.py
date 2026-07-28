@@ -37,7 +37,12 @@ def _set_session_id(st: Any, session_id: str) -> None:
     if not sid:
         return
     st.session_state[SESSION_STATE_SID_KEY] = sid
-    st.query_params[SESSION_QUERY_PARAM] = sid
+    try:
+        from suite_query_param_preservation import merge_query_params
+
+        merge_query_params(st, {SESSION_QUERY_PARAM: sid})
+    except ImportError:
+        st.query_params[SESSION_QUERY_PARAM] = sid
 
 
 def _clear_session_id(st: Any) -> None:

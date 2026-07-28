@@ -784,12 +784,21 @@ def _preview_portfolios(
 
 def _query_flag(st: Any, name: str) -> bool:
     try:
-        raw = st.query_params.get(name)
-        if isinstance(raw, list):
-            raw = raw[0] if raw else ""
-        return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
-    except Exception:
-        return False
+        from suite_query_param_preservation import query_flag as _suite_query_flag
+
+        if name == "slider_debug":
+            from suite_query_param_preservation import slider_debug_active
+
+            return slider_debug_active(st)
+        return _suite_query_flag(st, name)
+    except ImportError:
+        try:
+            raw = st.query_params.get(name)
+            if isinstance(raw, list):
+                raw = raw[0] if raw else ""
+            return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
+        except Exception:
+            return False
 
 
 def _resolve_deploy_marker() -> str:
