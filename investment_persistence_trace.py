@@ -1642,7 +1642,7 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
         )
 
 
-AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-ami-slider"
+AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-prepare-branches"
 
 
 def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:

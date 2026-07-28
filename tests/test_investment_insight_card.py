@@ -226,6 +226,64 @@ class TestInvestmentInsightCard(unittest.TestCase):
         self.assertTrue(prepare_insight_card_widget_rerun(st))
         self.assertTrue(investment_insight_main_render_needed(st.session_state))
 
+    def test_prepare_lifecycle_logs_cleared_stale_success(self) -> None:
+        from applied_math_return_insight import (
+            AMI_INSIGHT_LIFECYCLE_LOG_KEY,
+            prepare_insight_card_widget_rerun,
+        )
+
+        st = _FakeSt()
+        st.session_state.update(
+            {
+                SESSION_PENDING_KEY: {
+                    "insight_id": "id1",
+                    "conclusion": "Answer.",
+                    "question": "Q?",
+                },
+                "_ami_insight_render_success": True,
+            }
+        )
+        prepare_insight_card_widget_rerun(st)
+        buf = st.session_state.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY) or []
+        outcomes = [e.get("outcome") for e in buf if e.get("step") == "prepare_insight_card_widget_rerun"]
+        self.assertEqual(outcomes, ["entered", "cleared_stale_success"])
+        cleared = buf[-1]
+        self.assertTrue(cleared.get("pending_valid"))
+        self.assertTrue(cleared.get("pending_present"))
+        self.assertFalse(cleared.get("dismissed"))
+        self.assertTrue(cleared.get("render_success_before"))
+        self.assertIsNone(cleared.get("render_success_after"))
+
+    def test_prepare_lifecycle_logs_skipped_invalid_pending(self) -> None:
+        from applied_math_return_insight import (
+            AMI_INSIGHT_LIFECYCLE_LOG_KEY,
+            prepare_insight_card_widget_rerun,
+        )
+        import applied_math_return_insight as ami
+
+        st = _FakeSt()
+        st.session_state.update(
+            {
+                SESSION_PENDING_KEY: {
+                    "insight_id": "gone",
+                    "conclusion": "Answer.",
+                    "question": "Q?",
+                },
+                "_ami_insight_render_success": True,
+            }
+        )
+        with patch.object(ami, "_insight_is_dismissed", return_value=True):
+            prepare_insight_card_widget_rerun(st)
+        buf = st.session_state.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY) or []
+        outcomes = [e.get("outcome") for e in buf if e.get("step") == "prepare_insight_card_widget_rerun"]
+        self.assertEqual(outcomes, ["entered", "skipped_invalid_pending"])
+        skip = buf[-1]
+        self.assertTrue(skip.get("pending_present"))
+        self.assertFalse(skip.get("pending_valid"))
+        self.assertTrue(skip.get("dismissed"))
+        self.assertTrue(skip.get("render_success_before"))
+        self.assertTrue(skip.get("render_success_after"))
+
 
 if __name__ == "__main__":
     unittest.main()

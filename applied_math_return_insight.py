@@ -874,17 +874,44 @@ def prepare_insight_card_widget_rerun(st: Any) -> bool:
     prior paint. Clear that flag when valid pending exists so ``investment_insight_main_render_needed``
     reuses the same main render path as submit—without changing submit gate rules.
     """
-    if not _pending_insight_valid(st):
-        return False
     ss = st.session_state
+    pending = ss.get(SESSION_PENDING_KEY)
+    pending_present = bool(
+        isinstance(pending, dict)
+        and (pending.get("conclusion") or pending.get("question"))
+    )
+    iid = ""
+    dismissed = False
+    if isinstance(pending, dict):
+        iid = str(pending.get("insight_id") or "").strip()
+        dismissed = bool(iid and _insight_is_dismissed(st, iid))
+    valid_pending = _pending_insight_valid(st)
+    pending_valid = bool(valid_pending)
+    render_success_before = ss.get("_ami_insight_render_success")
+
+    def _emit_prepare_lifecycle(outcome: str) -> None:
+        record_ami_insight_lifecycle(
+            ss,
+            "prepare_insight_card_widget_rerun",
+            outcome=outcome,
+            pending_id=(iid[:20] if iid else None),
+            pending_present=pending_present,
+            pending_valid=pending_valid,
+            dismissed=dismissed,
+            render_success_before=render_success_before,
+            render_success_after=ss.get("_ami_insight_render_success"),
+        )
+
+    _emit_prepare_lifecycle("entered")
+
+    if not valid_pending:
+        _emit_prepare_lifecycle("skipped_invalid_pending")
+        return False
     if not ss.get("_ami_insight_render_success"):
+        _emit_prepare_lifecycle("skipped_render_success_already_false")
         return False
     ss.pop("_ami_insight_render_success", None)
-    record_ami_insight_lifecycle(
-        ss,
-        "prepare_insight_card_widget_rerun",
-        reason="stale_success_with_pending",
-    )
+    _emit_prepare_lifecycle("cleared_stale_success")
     return True
 
 
