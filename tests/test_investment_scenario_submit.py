@@ -28,7 +28,13 @@ class TestScenarioSubmitRegression(unittest.TestCase):
 
         with patch("applied_math_return_insight.store_applied_math_insight"), patch(
             "applied_math_return_insight.stage_pending_insight",
-            side_effect=lambda _st, insight, **kwargs: ss.update({"_ami_pending_insight": insight.to_dict()}),
+            side_effect=lambda _st, insight, **kwargs: ss.update(
+                {
+                    "_ami_pending_insight": (
+                        insight.to_dict() if hasattr(insight, "to_dict") else dict(insight)
+                    )
+                }
+            ),
         ):
             ok = _stage_investment_instant_insight(
                 st,

@@ -30,11 +30,11 @@ class TestInvestmentValuation(unittest.TestCase):
             "valuation",
         )
 
-    def test_scenario_not_valuation(self) -> None:
-        self.assertEqual(
-            detect_investment_send_intent("What happens if rates rise?", ""),
-            "scenario_stress",
-        )
+    def test_rate_rise_not_valuation(self) -> None:
+        """Rate-rise 'what if' routes to macro_rates (see test_investment_ami_macro), not valuation."""
+        intent = detect_investment_send_intent("What happens if rates rise?", "")
+        self.assertNotEqual(intent, "valuation")
+        self.assertEqual(intent, "macro_rates")
 
     def test_schd_not_expensive_vs_growth(self) -> None:
         data = lookup_ticker_valuation("SCHD")

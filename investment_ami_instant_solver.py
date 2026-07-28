@@ -332,62 +332,18 @@ def _tech_exposure_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentS
     )
 
 
-def _risk_reduction_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolverResult:
-    rows = _weight_rows(ctx)
-    if beginner:
-        lines = [
-            "**Ideas to reduce risk (tradeoffs, not advice):**",
-            "- **Add bonds or balanced funds** to cushion stock drops.",
-            "- **Trim your largest position** if one fund dominates the portfolio.",
-            "- **Reduce tech/growth overlap** if QQQ/VGT-style funds stack together.",
-            "- **Rebalance toward targets** instead of letting winners run unchecked.",
-        ]
-        if rows:
-            top_ticker, top_pct = rows[0]
-            if top_pct >= 25:
-                lines.append(f"- Start with **{top_ticker}** (**{top_pct:.1f}%**) — largest concentration lever.")
-    else:
-        lines = [
-            "**Risk-reduction levers:**",
-            "- Increase defensive allocation (IGSB/BND-style) to lower portfolio beta.",
-            "- Cut top-weight concentration and correlated growth ETFs.",
-            "- Tighten rebalance bands to prevent drift into higher-volatility weights.",
-        ]
-        vol = str(_ctx_value(ctx, "volatility", default="")).strip()
-        if vol:
-            lines.append(f"- Current historical vol **{vol}** — simulate impact of +10% bond sleeve in full AMI analysis.")
+def _risk_reduction_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    """Thin wrapper — behavioral finance logic lives in ``investment_ami.engines.behavioral_finance``."""
+    from investment_ami.pipeline.instant import run_instant_engine
 
-    return InvestmentSolverResult(
-        short_answer="\n".join(lines),
-        math_idea="Defensive allocation + de-concentration reduce portfolio variance.",
-        problem_type="risk_reduction",
-        model_name="Investment risk coach",
-        confidence_pct=79,
-    )
+    return run_instant_engine("behavioral_finance", ctx, beginner=beginner, question=question)
 
 
-def _coach_answer(ctx: dict[str, Any], *, beginner: bool) -> InvestmentSolverResult:
-    objective = str(_ctx_value(ctx, "objective", default="")).strip() or "your goal"
-    if beginner:
-        text = (
-            f"**Portfolio coaching snapshot** for **{objective}**:\n"
-            "- **Diversification** = not betting everything on one outcome.\n"
-            "- **Allocation** = how much goes to stocks, bonds, and other assets.\n"
-            "- **Rebalancing** = resetting mix when markets push weights off-plan.\n"
-            "Ask a specific question (concentration, tech exposure, rebalance) for a tailored read on your holdings."
-        )
-    else:
-        text = (
-            f"Objective **{objective}** — framework: expected return vs volatility vs concentration vs correlation. "
-            "Use Portfolio Health metrics, then stress single-factor tilts (tech, top weight, rate sensitivity)."
-        )
-    return InvestmentSolverResult(
-        short_answer=text,
-        math_idea="Educational portfolio construction framing.",
-        problem_type="investment_coach",
-        model_name="Investment coach",
-        confidence_pct=74,
-    )
+def _coach_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    """Thin wrapper — education logic lives in ``investment_ami.engines.education``."""
+    from investment_ami.pipeline.instant import run_instant_engine
+
+    return run_instant_engine("education", ctx, beginner=beginner, question=question)
 
 
 def _route_for_intent(intent: str) -> InvestmentSolverRoute:
@@ -415,7 +371,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
     )
 
 
-def solve_instant_investment_insight(
+def _solve_instant_investment_insight_core(
     question: str,
     context: dict[str, Any] | None,
 ) -> tuple[InvestmentSolverRoute, InvestmentSolverResult] | None:
@@ -445,6 +401,8 @@ def solve_instant_investment_insight(
         "macro_recession",
         "macro_inflation",
         "allocation_recommendation",
+        "investment_coach",
+        "risk_reduction",
     }
     if intent in phase2_intents:
         from investment_ami_phase2_solvers import solve_phase2_or_structured
@@ -462,11 +420,21 @@ def solve_instant_investment_insight(
     elif intent == "sector_exposure":
         result = _tech_exposure_answer(ctx, beginner=beginner)
     elif intent == "risk_reduction":
-        result = _risk_reduction_answer(ctx, beginner=beginner)
-    else:
-        result = _coach_answer(ctx, beginner=beginner)
+        result = _risk_reduction_answer(ctx, beginner=beginner, question=q)
+    elif intent == "investment_coach":
+        result = _coach_answer(ctx, beginner=beginner, question=q)
 
     route = _route_for_intent(intent)
     result.problem_type = route.problem_type
     result.model_name = route.model_name
     return route, result
+
+
+def solve_instant_investment_insight(
+    question: str,
+    context: dict[str, Any] | None,
+) -> tuple[InvestmentSolverRoute, InvestmentSolverResult] | None:
+    """Public entry — routes through ``investment_ami`` facade (P1), same results as legacy core."""
+    from investment_ami.integration.instant_solver_facade import solve_instant_insight
+
+    return solve_instant_insight(question, context)

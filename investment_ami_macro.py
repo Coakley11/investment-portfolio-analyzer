@@ -127,16 +127,19 @@ def _default_risk_notes(beginner: bool) -> str:
     )
 
 
-def macro_rates_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Analyze portfolio sensitivity to an interest-rate rise shock."""
-    params = dict(ctx.get("scenario_params") or {})
+    from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    macro = resolve_macro_scenario_context(ctx)
+    params = macro.scenario_params
+    profile = macro.allocation_profile
     rate_bump = parse_rate_rise_pct(question, scenario_params=params)
-    profile = allocation_profile_from_ctx(ctx)
     impacts = rate_rise_portfolio_impacts(profile, rate_bump)
     comps = impacts["components_pp"]
     prof = impacts["profile_pct"]
     net = float(impacts["net_return_shift_pp"])
-    rate_env = str(ctx.get("health_rate_env") or ctx.get("scenario_params", {}).get("rate_shock") or "").strip()
+    rate_env = macro.rate_environment
 
     if prof["equity"] + prof["bonds"] + prof["reit"] + prof["tbills"] <= 0:
         direct = "Add holdings with weights first — I need your portfolio mix to estimate rate sensitivity."
@@ -351,10 +354,13 @@ def _recession_risk_notes(beginner: bool) -> str:
     )
 
 
-def macro_recession_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+def _macro_recession_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Analyze portfolio vulnerability in a recession scenario."""
-    profile = allocation_profile_from_ctx(ctx)
-    params = dict(ctx.get("scenario_params") or {})
+    from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    macro = resolve_macro_scenario_context(ctx)
+    profile = macro.allocation_profile
+    params = macro.scenario_params
     try:
         from investment_ami_sliders import parse_recession_severity
 
@@ -365,8 +371,8 @@ def macro_recession_answer(ctx: dict[str, Any], *, beginner: bool, question: str
     comps = impacts["components_pp"]
     prof = impacts["profile_pct"]
     net = float(impacts["net_return_shift_pp"])
-    recession_prob = _recession_probability_from_ctx(ctx)
-    regime = str(ctx.get("health_regime") or ctx.get("scenario_params", {}).get("economic_regime") or "").strip()
+    recession_prob = macro.recession_probability
+    regime = macro.economic_regime
 
     if prof["equity"] + prof["bonds"] + prof["reit"] + prof["tbills"] <= 0:
         direct = "Add holdings with weights first — I need your portfolio mix to estimate recession vulnerability."
@@ -570,10 +576,13 @@ def _inflation_risk_notes(beginner: bool) -> str:
     )
 
 
-def macro_inflation_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+def _macro_inflation_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Portfolio-specific inflation / purchasing-power analysis."""
-    profile = allocation_profile_from_ctx(ctx)
-    params = dict(ctx.get("scenario_params") or {})
+    from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    macro = resolve_macro_scenario_context(ctx)
+    profile = macro.allocation_profile
+    params = macro.scenario_params
     inflation_pct = parse_inflation_pct(params)
     q = str(question or "").lower()
     m = re.search(r"(\d+(?:\.\d+)?)\s*%", q)
@@ -695,3 +704,21 @@ def macro_inflation_answer(ctx: dict[str, Any], *, beginner: bool, question: str
             **prof,
         },
     )
+
+
+def macro_rates_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    from investment_ami.pipeline.instant import run_instant_engine
+
+    return run_instant_engine("macro_rates", ctx, beginner=beginner, question=question)
+
+
+def macro_recession_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    from investment_ami.pipeline.instant import run_instant_engine
+
+    return run_instant_engine("macro_recession", ctx, beginner=beginner, question=question)
+
+
+def macro_inflation_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    from investment_ami.pipeline.instant import run_instant_engine
+
+    return run_instant_engine("macro_inflation", ctx, beginner=beginner, question=question)

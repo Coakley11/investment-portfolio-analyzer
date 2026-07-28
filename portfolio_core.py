@@ -10,7 +10,6 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from scipy.optimize import minimize
 
 TRADING_DAYS = 252
@@ -259,37 +258,10 @@ def fetch_price_history(
     start: str,
     end: str | None = None,
 ) -> pd.DataFrame:
-    """Download adjusted close prices via yfinance."""
-    clean = [t.strip().upper() for t in tickers if t and str(t).strip()]
-    if not clean:
-        raise ValueError("At least one ticker is required.")
+    """Download adjusted close prices via centralized market data provider."""
+    from investment_market_data import get_market_data_provider
 
-    raw = yf.download(
-        clean,
-        start=start,
-        end=end,
-        auto_adjust=True,
-        progress=False,
-        group_by="column",
-    )
-    if raw.empty:
-        raise ValueError("No price data returned. Check tickers and date range.")
-
-    if isinstance(raw.columns, pd.MultiIndex):
-        if "Close" in raw.columns.get_level_values(0):
-            prices = raw["Close"]
-        elif "Adj Close" in raw.columns.get_level_values(0):
-            prices = raw["Adj Close"]
-        else:
-            prices = raw.xs(raw.columns.levels[0][0], axis=1, level=0)
-    else:
-        col = "Close" if "Close" in raw.columns else raw.columns[0]
-        prices = raw[[col]].rename(columns={col: clean[0]})
-
-    prices = prices.dropna(how="all").ffill().dropna(how="any")
-    if prices.empty:
-        raise ValueError("Price history is empty after cleaning.")
-    return prices
+    return get_market_data_provider().get_price_history(tickers, start, end)
 
 
 def daily_returns(prices: pd.DataFrame) -> pd.DataFrame:

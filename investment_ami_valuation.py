@@ -47,19 +47,9 @@ def tickers_mentioned_in_question(question: str) -> list[str]:
 
 
 def _lookup_live_pe(ticker: str) -> float | None:
-    try:
-        import yfinance as yf
+    from investment_market_data import get_market_data_provider
 
-        info = yf.Ticker(ticker).info or {}
-        for key in ("trailingPE", "forwardPE"):
-            raw = info.get(key)
-            if raw is not None:
-                val = float(raw)
-                if 3.0 < val < 200.0:
-                    return round(val, 1)
-    except Exception:
-        pass
-    return None
+    return get_market_data_provider().get_trailing_pe(ticker)
 
 
 def lookup_ticker_valuation(ticker: str) -> dict[str, Any]:
@@ -261,11 +251,10 @@ def macro_valuation_effects(macro_env: str, equity_pct: float) -> dict[str, Any]
 
 def resolve_valuation_context(question: str, ctx: dict[str, Any]) -> dict[str, Any]:
     """Build valuation context for structured answers."""
-    macro_env = str(
-        ctx.get("health_valuation")
-        or (ctx.get("scenario_params") or {}).get("valuation_environment")
-        or "Fair Value"
-    ).strip()
+    from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    macro = resolve_macro_scenario_context(ctx)
+    macro_env = macro.valuation_environment
     target = resolve_valuation_target(question, ctx)
     ticker_data = lookup_ticker_valuation(target) if target else {}
     assessment = assess_valuation_richness(ticker_data, macro_env=macro_env) if ticker_data else {}

@@ -120,41 +120,14 @@ def fetch_latest_price(symbol: str) -> tuple[float | None, str]:
     Uses actual last-traded / closing prices (not split-back-adjusted history) so
     marks align with brokerage share counts and execution prices.
     """
+    from investment_market_data import get_market_data_provider
+
     sym = str(symbol or "").strip().upper()
     if not sym or sym in ("CASH", "US TREASURY", "MORTGAGE", "CORP BOND"):
         return None, ""
-    try:
-        import yfinance as yf
-
-        ticker = yf.Ticker(sym)
-        fast = getattr(ticker, "fast_info", None)
-        last = getattr(fast, "last_price", None) if fast is not None else None
-        if last is not None:
-            px = float(last)
-            if px > 0:
-                return px, "yfinance_last_price"
-        info = ticker.info or {}
-        for key in ("regularMarketPrice", "currentPrice", "previousClose"):
-            val = info.get(key)
-            if val is not None:
-                px = float(val)
-                if px > 0:
-                    return px, f"yfinance_{key}"
-        hist = ticker.history(period="10d", auto_adjust=False)
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            close = float(hist["Close"].iloc[-1])
-            if close > 0:
-                return close, "yfinance_close"
-        hist_adj = ticker.history(period="10d", auto_adjust=True)
-        if hist_adj is not None and not hist_adj.empty and "Close" in hist_adj.columns:
-            close = float(hist_adj["Close"].iloc[-1])
-            if close > 0:
-                return close, "yfinance_adj_close"
-    except Exception:
-        pass
-    px = eh._latest_price(sym)
+    px, src = get_market_data_provider().get_latest_quote(sym)
     if px is not None and px > 0:
-        return float(px), "etf_holdings_fallback"
+        return float(px), src or "market_data_provider"
     return None, ""
 
 
@@ -164,9 +137,9 @@ def _stock_splits_for_symbol(symbol: str) -> list[tuple[dt.date, float]]:
     if not sym:
         return []
     try:
-        import yfinance as yf
+        from investment_market_data import get_market_data_provider
 
-        splits = yf.Ticker(sym).splits
+        splits = get_market_data_provider().get_stock_splits(sym)
         if splits is None or len(splits) == 0:
             return []
         out: list[tuple[dt.date, float]] = []
@@ -377,11 +350,12 @@ def transactions_to_records(transactions: list[PortfolioTransaction]) -> list[di
 
 
 def _fetch_prices(tickers: list[str]) -> dict[str, float]:
+    from investment_market_data import get_market_data_provider
+
+    syms = [str(s).strip().upper() for s in tickers if s and str(s).strip().upper() != "CASH"]
+    quotes = get_market_data_provider().get_latest_quotes(syms)
     prices: dict[str, float] = {}
-    for sym in tickers:
-        if not sym or sym == "CASH":
-            continue
-        px, _src = fetch_latest_price(sym)
+    for sym, (px, _src) in quotes.items():
         if px is not None and px > 0:
             prices[sym] = float(px)
     return prices
@@ -389,11 +363,12 @@ def _fetch_prices(tickers: list[str]) -> dict[str, float]:
 
 def fetch_price_sources(tickers: list[str]) -> dict[str, str]:
     """Map ticker → quote source label (for UI diagnostics)."""
+    from investment_market_data import get_market_data_provider
+
+    syms = [str(s).strip().upper() for s in tickers if s and str(s).strip().upper() != "CASH"]
+    quotes = get_market_data_provider().get_latest_quotes(syms)
     out: dict[str, str] = {}
-    for sym in tickers:
-        if not sym or sym == "CASH":
-            continue
-        _px, src = fetch_latest_price(sym)
+    for sym, (_px, src) in quotes.items():
         if src:
             out[sym] = src
     return out

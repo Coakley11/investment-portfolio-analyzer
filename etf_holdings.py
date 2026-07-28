@@ -1,5 +1,5 @@
 """
-ETF metadata and holdings lookup — live yfinance with static fallback.
+ETF metadata and holdings lookup — centralized market data provider with static fallback.
 
 Calculation-only module; UI in components/etf_holdings_explorer.py.
 """
@@ -94,106 +94,15 @@ def _normalize_ticker(ticker: str) -> str:
 
 
 def _holdings_from_yfinance(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any], str]:
-    import yfinance as yf
+    from investment_market_data import get_market_data_provider
 
-    t = yf.Ticker(ticker)
-    info = t.info or {}
-    fd = getattr(t, "funds_data", None)
-    meta: dict[str, Any] = {
-        "name": str(info.get("longName") or info.get("shortName") or ticker),
-        "issuer": "",
-        "asset_class": "Equity",
-        "category": str(info.get("category") or ""),
-        "expense_ratio_pct": None,
-    }
-    exp = info.get("netExpenseRatio")
-    if exp is not None:
-        try:
-            meta["expense_ratio_pct"] = float(exp)
-        except (TypeError, ValueError):
-            pass
-
-    if fd is not None:
-        overview = getattr(fd, "fund_overview", None) or {}
-        if isinstance(overview, dict):
-            meta["issuer"] = str(overview.get("family") or meta["issuer"])
-            meta["category"] = str(overview.get("categoryName") or meta["category"])
-            legal = str(overview.get("legalType") or "")
-            if "bond" in legal.lower() or "bond" in meta["category"].lower():
-                meta["asset_class"] = "Bonds"
-        desc = str(getattr(fd, "description", "") or "")
-        if "bond" in desc.lower() and meta["asset_class"] == "Equity":
-            meta["asset_class"] = "Bonds"
-
-        top = getattr(fd, "top_holdings", None)
-        if top is not None and isinstance(top, pd.DataFrame) and not top.empty:
-            rows = []
-            for sym, row in top.iterrows():
-                sym_s = str(sym).strip().upper()
-                name = str(row.get("Name") or sym_s)
-                wt = row.get("Holding Percent")
-                try:
-                    weight = float(wt)
-                except (TypeError, ValueError):
-                    weight = 0.0
-                rows.append(
-                    {
-                        "symbol": sym_s,
-                        "name": name,
-                        "weight": weight,
-                        "sector": "",
-                        "price": _latest_price(sym_s),
-                    }
-                )
-            holdings_df = pd.DataFrame(rows)
-            sectors = _sector_df_from_funds(fd)
-            return holdings_df, sectors, meta, "live"
-
-    static = _STATIC_HOLDINGS.get(ticker)
-    if static:
-        meta.update(_STATIC_META.get(ticker, {}))
-        return pd.DataFrame(static), pd.DataFrame(), meta, "sample"
-
-    return pd.DataFrame(), pd.DataFrame(), meta, "unavailable"
-
-
-def _sector_df_from_funds(fd: Any) -> pd.DataFrame:
-    sw = getattr(fd, "sector_weightings", None)
-    if sw is None:
-        return pd.DataFrame()
-    if isinstance(sw, dict) and sw:
-        rows = [
-            {"Sector": str(k).replace("_", " ").title(), "Weight": float(v)}
-            for k, v in sw.items()
-            if v is not None
-        ]
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame(rows).sort_values("Weight", ascending=False).reset_index(drop=True)
-        df["Weight %"] = df["Weight"].map(lambda x: f"{float(x) * 100:.1f}%")
-        return df[["Sector", "Weight %"]]
-    if isinstance(sw, pd.DataFrame) and not sw.empty:
-        out = sw.copy()
-        out.columns = [str(c) for c in out.columns]
-        return out
-    return pd.DataFrame()
-
+    bundle = get_market_data_provider().get_etf_bundle(ticker)
+    return bundle.holdings, bundle.sectors, bundle.meta, bundle.source
 
 def _latest_price(symbol: str) -> float | None:
-    if not symbol or symbol in ("US TREASURY", "MORTGAGE", "CORP BOND"):
-        return None
-    try:
-        import yfinance as yf
+    from investment_market_data import get_market_data_provider
 
-        info = yf.Ticker(symbol).info or {}
-        for key in ("regularMarketPrice", "currentPrice", "previousClose"):
-            val = info.get(key)
-            if val is not None:
-                return float(val)
-    except Exception:
-        pass
-    return None
-
+    return get_market_data_provider().get_spot_price(symbol)
 
 # Portfolio editor: fast asset-type classification (no network required).
 _TICKER_PORTFOLIO_ASSET_TYPE: dict[str, str] = {
@@ -378,6 +287,34 @@ def lookup_etf(ticker: str) -> EtfLookupResult:
         holdings=holdings,
         sectors=sectors,
     )
+
+
+def lookup_etfs(tickers: list[str]) -> dict[str, EtfLookupResult]:
+    """Batch ETF lookup with shared provider caching and in-run deduplication."""
+    from investment_market_data import get_market_data_provider
+
+    syms = [_normalize_ticker(t) for t in tickers if str(t).strip()]
+    syms = list(dict.fromkeys(s for s in syms if s))
+    bundles = get_market_data_provider().get_etf_bundles(syms)
+    out: dict[str, EtfLookupResult] = {}
+    for sym in syms:
+        bundle = bundles.get(sym)
+        if bundle is None:
+            continue
+        static_meta = _STATIC_META.get(sym, {})
+        meta = bundle.meta
+        out[sym] = EtfLookupResult(
+            ticker=sym,
+            name=str(meta.get("name") or static_meta.get("name") or sym),
+            issuer=str(meta.get("issuer") or static_meta.get("issuer") or "—"),
+            asset_class=str(meta.get("asset_class") or static_meta.get("asset_class") or "—"),
+            category=str(meta.get("category") or static_meta.get("category") or "—"),
+            expense_ratio_pct=meta.get("expense_ratio_pct"),
+            data_source=bundle.source,
+            holdings=bundle.holdings,
+            sectors=bundle.sectors,
+        )
+    return out
 
 
 def portfolio_etf_tickers(holdings_df: pd.DataFrame) -> list[tuple[str, float]]:

@@ -1497,6 +1497,63 @@ def load_applied_math_insight(insight_id: str, *, source_app: str = "") -> dict[
     return best
 
 
+def _canonical_instant_freshness(blob: dict[str, Any]) -> tuple[int, str, int]:
+    """Sort key: prefer scenario refresh, then solver build id, then analyst sections."""
+    if not isinstance(blob, dict) or not blob:
+        return (0, "", 0)
+    refreshed = 1 if str(blob.get("scenario_refreshed_at") or "").strip() else 0
+    build = str(blob.get("solver_build_id") or "")
+    sections = blob.get("analyst_sections")
+    section_count = len(sections) if isinstance(sections, dict) else 0
+    return (refreshed, build, section_count)
+
+
+def _sync_scenario_params_from_insight(ss: dict[str, Any], insight: dict[str, Any]) -> None:
+    params = insight.get("scenario_params")
+    if isinstance(params, dict) and params:
+        ss["_ami_scenario_params"] = dict(params)
+
+
+def resolve_canonical_instant_insight(
+    st: Any,
+    context: dict[str, Any] | None,
+    *,
+    source_app: str = "",
+) -> dict[str, Any]:
+    """
+    Pick the freshest canonical instant insight among session pending, cloud load, and resume context.
+    """
+    ctx = dict(context or {})
+    url_iid = insight_return_query_id(st)
+    pending = _pending_insight_valid(st)
+
+    loaded: dict[str, Any] = {}
+    if url_iid:
+        loaded = load_applied_math_insight(url_iid, source_app=source_app)
+
+    ctx_instant = ctx.get("instant_insight")
+    if not isinstance(ctx_instant, dict):
+        ctx_instant = {}
+
+    def _matches_url(blob: dict[str, Any]) -> bool:
+        if not url_iid:
+            return bool(blob.get("insight_id"))
+        return str(blob.get("insight_id") or "").strip() == url_iid
+
+    candidates: list[dict[str, Any]] = []
+    for blob in (pending, loaded, ctx_instant):
+        if isinstance(blob, dict) and blob.get("insight_id") and _matches_url(blob):
+            candidates.append(blob)
+
+    if not candidates:
+        return {}
+
+    chosen = max(candidates, key=_canonical_instant_freshness)
+    ss = st.session_state
+    _sync_scenario_params_from_insight(ss, chosen)
+    return dict(chosen)
+
+
 def load_applied_math_insight_for_question(question_id: str, *, source_app: str = "") -> dict[str, Any]:
     """Load the stored insight tied to a question_id (instant / canonical answer)."""
     qid = str(question_id or "").strip()

@@ -131,14 +131,15 @@ def render_etf_holdings_explorer(
         st.markdown("---")
         st.markdown("#### Your portfolio — underlying exposure")
         st.caption("Combines overlapping holdings across ETFs you own.")
-        holdings_map: dict[str, pd.DataFrame] = {ticker: result.holdings}
+        etf_syms = [t for t, _ in portfolio_etfs]
+        batch = eh.lookup_etfs(list(dict.fromkeys([ticker] + etf_syms)))
+        primary = batch.get(ticker)
+        holdings_map: dict[str, pd.DataFrame] = {ticker: primary.holdings if primary else pd.DataFrame()}
         for etf, _w in portfolio_etfs:
             if etf == ticker:
                 continue
-            try:
-                holdings_map[etf] = eh.lookup_etf(etf).holdings
-            except Exception:
-                holdings_map[etf] = pd.DataFrame()
+            bundled = batch.get(etf)
+            holdings_map[etf] = bundled.holdings if bundled is not None else pd.DataFrame()
         exposure = eh.aggregate_underlying_exposure(portfolio_etfs, holdings_by_etf=holdings_map)
         if not exposure.empty:
             top = exposure.head(15).copy()

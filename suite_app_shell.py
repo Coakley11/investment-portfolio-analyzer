@@ -131,3 +131,9 @@ def render_suite_sidebar_account_shell(
         render_egress_sidebar_panel(st)
     except ImportError:
         pass
+    try:
+        from investment_market_data.diagnostics import render_market_data_diagnostics_panel
+
+        render_market_data_diagnostics_panel(st)
+    except ImportError:
+        pass

@@ -321,6 +321,8 @@ def question_dedupe_fingerprint(
         "players",
         "holdings",
         "health_score",
+        "experience_mode",
+        "experience",
     ):
         val = ctx.get(key)
         if val is None or val == "":
@@ -650,6 +652,11 @@ def metrics_for_applied_math_resume(payload: dict[str, Any]) -> dict[str, Any]:
         metrics["workspace_id"] = get_active_workspace_id()
     except ImportError:
         pass
+    instant = payload.get("instant_insight")
+    if isinstance(instant, dict):
+        ami_iid = str(instant.get("insight_id") or "").strip()
+        if ami_iid:
+            metrics["ami_insight"] = ami_iid
     return metrics
 
 
@@ -1499,5 +1506,127 @@ def sync_analytical_question_instant_insight(
     ctx["instant_insight"] = merged
     payload["context"] = ctx
     persist_question_context_blob(payload)
+    return True
+
+
+def _stage_investment_instant_insight(
+    st: Any,
+    ss: dict[str, Any],
+    *,
+    question: str,
+    source_app: str,
+    source_page: str,
+    submit_ctx: dict[str, Any] | None,
+    submit_source_state: dict[str, Any] | None,
+    pre_payload: dict[str, Any] | None,
+    action_url_pre: str = "",
+) -> bool:
+    """
+    Run the local Investment instant solver and stage canonical insight on the page.
+
+    Mirrors slider refresh staging; used on sidebar submit (Phase 1 milestone).
+    """
+    diag: dict[str, Any] = {}
+    ss["_ami_investment_submit_diagnostics"] = diag
+    app = str(source_app or "").strip().lower()
+    if app != "investment":
+        diag["skip_reason"] = "not_investment"
+        return False
+
+    q = str(question or "").strip()
+    if not q:
+        diag["skip_reason"] = "empty_question"
+        return False
+
+    ctx = dict(submit_ctx or {})
+    page = str(ctx.get("page") or source_page or "").strip()
+
+    try:
+        from investment_ami_context import detect_investment_send_intent
+
+        from investment_ami_instant_solver import (
+            INVESTMENT_AMI_BUILD_ID,
+            solve_instant_investment_insight,
+        )
+        from applied_math_return_insight import (
+            build_return_insight_payload,
+            stage_pending_insight,
+            store_applied_math_insight,
+        )
+    except ImportError as exc:
+        diag["solver_error"] = str(exc)
+        return False
+
+    intent = detect_investment_send_intent(q, page)
+    diag["detected_intent"] = intent
+
+    try:
+        solved = solve_instant_investment_insight(q, ctx)
+    except Exception as exc:
+        diag["solver_error"] = str(exc)
+        diag["instant_solved"] = False
+        return False
+
+    if not solved:
+        diag["instant_solved"] = False
+        diag["solver_error"] = diag.get("solver_error") or False
+        return False
+
+    route, result = solved
+    diag["instant_solved"] = True
+    diag["solver_error"] = False
+
+    pre = dict(pre_payload or {})
+    try:
+        insight = build_return_insight_payload(
+            question=q,
+            source_app=app,
+            source_page=str(source_page or page),
+            question_id=str(pre.get("question_id") or ""),
+            route=route,
+            result=result,
+            resume_key=str(pre.get("resume_key") or ""),
+            full_analysis_url=str(action_url_pre or ""),
+            context=ctx,
+        )
+        payload = insight.to_dict()
+    except Exception as exc:
+        diag["solver_error"] = str(exc)
+        diag["instant_solved"] = False
+        return False
+
+    payload["canonical_instant"] = True
+    payload["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
+    payload["problem_type"] = str(
+        getattr(route, "problem_type", "") or getattr(result, "problem_type", "") or intent
+    )
+
+    stage_pending_insight(st, payload, return_context=dict(submit_source_state or {}))
+    ss["_ami_investment_instant_canonical"] = dict(payload)
+    ss["_ami_submit_render_insight_this_run"] = True
+    ss["_ami_last_submit_source_page"] = str(source_page or page)
+    scenario = dict(ctx.get("scenario_params") or {})
+    if scenario:
+        ss["_ami_scenario_params"] = scenario
+        payload.setdefault("scenario_params", scenario)
+
+    try:
+        store_applied_math_insight(
+            payload,
+            st=st,
+            source_state=dict(submit_source_state or {}),
+        )
+    except Exception as exc:
+        diag["store_error"] = str(exc)
+        return False
+
+    instant_meta = {
+        "insight_id": payload.get("insight_id"),
+        "conclusion": payload.get("conclusion"),
+        "canonical_instant": True,
+        "question_id": payload.get("question_id"),
+    }
+    if pre:
+        pre["instant_insight"] = instant_meta
     return True
 

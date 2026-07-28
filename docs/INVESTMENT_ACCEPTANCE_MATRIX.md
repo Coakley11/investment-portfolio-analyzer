@@ -1,7 +1,7 @@
 # Investment Portfolio Analyzer — Acceptance Matrix
 
 **Last updated:** 2026-06-11  
-**Status:** Deploy marker `investment-durable-restore-v5` · Tests A–C **PASS** (frozen) · Test **D** **PASS** (frozen on v4) · Test **E** **IN PROGRESS** (v5 AMI apply fix)  
+**Status:** Deploy marker `investment-durable-restore-v13` · Tests **A–E PASS / FROZEN** · Persistence + AMI return architecture **complete** · Next: maintenance + UX polish only  
 **Audit:** [INVESTMENT_PERSISTENCE_AUDIT.md](./INVESTMENT_PERSISTENCE_AUDIT.md)  
 **Plan:** [../cursor-prompts/plans/investment-sync-architecture-plan.md](../cursor-prompts/plans/investment-sync-architecture-plan.md)
 
@@ -18,8 +18,8 @@ Music Tests A–E are **frozen**. Investment defines a parallel A–E protocol s
 | **A** | Page / tab sync | `investment_active_tab`, `health_active_tab` | Set non-default tab (e.g. ③ Build Portfolio) → wait for `tab_change` save → hard refresh other device | **PASS** — frozen 2026-06-11 (PR2 scope A `c4bb94b`); re-open only on trace regression |
 | **B** | Global sidebar settings sync | `experience`, `_suite_persisted_experience`, `sidebar_portfolio_value`, `analysis_start`/`analysis_end`, `risk_free_pct`, `portfolio_preset` | Change global sidebar settings on Dell → save trace → hard refresh phone → compare Test B block | **PASS** — frozen 2026-06-11 (PR2 scope B `7dc3595`); re-open only on trace regression |
 | **C** | Page-specific filters sync | `overview_subtab`, `mc_assumption_mode`, `health_run_optimizer`, `health_bond_min`, `frontier_points`, macro keys | Set non-default filters on Dell → wait 8–10s → Test C block → phone hard refresh → compare | **PASS** — frozen 2026-06-11; re-open only on trace regression |
-| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Set 50% VYM / 50% BND → confirm save/readback fingerprints + row count → **reboot/hard refresh** Dell + phone | **PASS** — frozen 2026-06-11 on v4 `089e8be` (Dell reboot + phone refresh: BND 50 / VYM 50, `restore_decision=cloud`) |
-| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → insight on source tab → phone hard refresh hydrates same card | **IN PROGRESS** — unblocked after Test D frozen |
+| **D** | Portfolio / ticker / analysis restore | `holdings_df`, `holdings_fingerprint`, `preset_applied`, `health_objective`, `workflow_state`, `health_summary` | Set 50% VYM / 50% BND → confirm save/readback fingerprints + row count → **reboot/hard refresh** Dell + phone | **PASS / FROZEN** — v11–v13 (`47b9502`–`e5d14da`); Dell reboot + phone refresh: BND 50 / VYM 50, `restore_decision=cloud` |
+| **E** | AMI return restores investment state | `applied_math_context` source_state → session, insight card hydrate | Dell AMI from Portfolio Health → return via insight link → phone cloud restore BND/VYM | **PASS / FROZEN** — v13 (`e5d14da` IPA + `e144060` AMI); `holdings_df` in source_state + insight blob; `apply_source_state_success=True` |
 
 ---
 
@@ -314,7 +314,7 @@ Underlying blob keys (not all in copy block): `holdings_df` records, `workflow_s
 
 ## Test E — AMI return restores investment state
 
-**Status: IN PROGRESS (2026-06-11)** — Test D frozen on v4. v5 (`investment-durable-restore-v5`) fixes AMI return detect-without-apply: hydrate source_state from insight/question blob, apply holdings, or fall back to cloud restore when missing.
+**Status: PASS / FROZEN (2026-06-11)** — Verified on `investment-durable-restore-v13`. AMI return detected; `source_state` and insight blob include `holdings_df`; `apply_source_state_success=True`; holdings BND 50 / VYM 50 before/after apply and on phone; `page_overwrite_source` empty; no default portfolio reset. Re-open only on trace regression.
 
 ### Baseline failure (observed)
 - `ami_return_detected` = False, `return_context_keys` = empty
@@ -481,15 +481,22 @@ See plan § Trace — required fields per test:
 - [ ] `investment_nav_state.py` (Test A)
 - [ ] Global settings module (Test B)
 - [ ] `portfolio_state.py` (Test D)
-- [x] AMI return wiring (Test E) — launch + return paths wired; baseline run in progress
+- [x] AMI return wiring (Test E) — launch + return + `holdings_df` in source_state/insight blob (v13)
 
 ### Phase 4 — Manual sign-off
-- [x] Test A PASS (frozen 2026-06-11 — PR2 scope A `c4bb94b`)
-- [x] Test B PASS (frozen 2026-06-11 — PR2 scope B `7dc3595`)
-- [x] Test C PASS (frozen 2026-06-11 — baseline passed without scoped PR2)
-- [ ] Test D PASS (re-verify after `portfolio_change` autosave)
-- [ ] Test E PASS (in progress — Portfolio Health AMI round-trip)
-- [ ] Freeze Investment persistence baseline
+- [x] Test A PASS / FROZEN (2026-06-11 — PR2 scope A `c4bb94b`)
+- [x] Test B PASS / FROZEN (2026-06-11 — PR2 scope B `7dc3595`)
+- [x] Test C PASS / FROZEN (2026-06-11)
+- [x] Test D PASS / FROZEN (v11–v13; durable reboot + phone cloud restore)
+- [x] Test E PASS / FROZEN (v13; AMI round-trip with portfolio payload)
+- [x] Freeze Investment persistence + AMI return baseline
+
+### Phase 5 — Maintenance + UX polish (active)
+- Portfolio editor instructions (percentages, add/remove holdings, ticker help)
+- Common ETF presets (VTI, BND, VYM, SCHD, VXUS, VNQ)
+- Clearer **Run Portfolio Analysis** affordance
+- Goal / Portfolio / Analysis / Health workflow indicators (green on first click, persist after refresh)
+- Re-open Tests A–E **only** on trace regression — do not change portfolio math or frozen restore paths without explicit sign-off
 
 ---
 

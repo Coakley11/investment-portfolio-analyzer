@@ -280,11 +280,17 @@ def _enrich_investment_ami_analytics(
         etf_list = [t for t, _ in eh.portfolio_etf_tickers(holdings_df)]
         if len(etf_list) >= 2:
             holdings_map: dict[str, pd.DataFrame] = {}
-            for t in etf_list[:6]:
-                try:
-                    holdings_map[t] = eh.lookup_etf(t).holdings
-                except Exception:
-                    holdings_map[t] = pd.DataFrame()
+            try:
+                batch = eh.lookup_etfs(etf_list[:6])
+                for t in etf_list[:6]:
+                    result = batch.get(t.upper())
+                    holdings_map[t] = result.holdings if result is not None else pd.DataFrame()
+            except Exception:
+                for t in etf_list[:6]:
+                    try:
+                        holdings_map[t] = eh.lookup_etf(t).holdings
+                    except Exception:
+                        holdings_map[t] = pd.DataFrame()
             pairs: list[dict[str, Any]] = []
             for i, t1 in enumerate(etf_list[:6]):
                 for t2 in etf_list[i + 1 : 6]:
