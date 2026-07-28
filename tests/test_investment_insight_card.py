@@ -189,6 +189,24 @@ class TestInvestmentInsightCard(unittest.TestCase):
         self.assertTrue(st.session_state.get("_ami_insight_render_success"))
         self.assertIsNone(st.session_state.get("_ami_insight_render_skipped_reason"))
 
+    def test_slider_refresh_rerun_gate_ignores_stale_inline_success(self) -> None:
+        from applied_math_return_insight import investment_insight_main_render_needed
+
+        ss: dict[str, Any] = {
+            SESSION_PENDING_KEY: {
+                "source_app": "investment",
+                "source_page": "Macro Outlook",
+                "conclusion": "Falling Rates scenario.",
+                "question": "What if the Fed cuts rates?",
+                "scenario_refreshed_at": "2026-07-28T12:00:00+00:00",
+            },
+            "_ami_slider_refresh_pending": True,
+            "_ami_insight_render_success": True,
+        }
+        self.assertTrue(investment_insight_main_render_needed(ss))
+        self.assertIsNone(ss.get("_ami_slider_refresh_pending"))
+        self.assertIsNone(ss.get("_ami_insight_render_success"))
+
 
 if __name__ == "__main__":
     unittest.main()

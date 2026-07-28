@@ -154,10 +154,9 @@ try:
 except Exception:
     pass
 try:
-    from applied_math_return_insight import hydrate_investment_ami_return_state, insight_return_query_id
+    from suite_resume_launch import hydrate_applied_intelligence_from_url
 
-    if insight_return_query_id(st) or str(st.query_params.get("suite_ai_question_id") or "").strip():
-        hydrate_investment_ami_return_state(st, "investment")
+    hydrate_applied_intelligence_from_url(st, "investment")
 except Exception:
     pass
 

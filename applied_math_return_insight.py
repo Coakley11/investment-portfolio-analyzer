@@ -630,11 +630,15 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
     """
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
+    slider_refresh = bool(ss.pop("_ami_slider_refresh_pending", None))
     pending = ss.get(SESSION_PENDING_KEY)
     has_pending = isinstance(pending, dict) and bool(pending.get("conclusion") or pending.get("question"))
     if submit_flag and has_pending:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
+        return True
+    if slider_refresh and has_pending:
+        ss.pop("_ami_insight_render_success", None)
         return True
     return not bool(ss.get("_ami_insight_render_success"))
 

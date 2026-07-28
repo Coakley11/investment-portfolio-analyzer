@@ -544,6 +544,8 @@ def _stage_refreshed_insight(
     stage_pending_insight(st, payload)
     ss["_ami_scenario_params"] = dict(params)
     ss["_ami_force_insight_render"] = True
+    ss.pop("_ami_insight_render_success", None)
+    ss["_ami_slider_refresh_pending"] = True
     ss["_ami_investment_instant_canonical"] = {
         **dict(ss.get("_ami_investment_instant_canonical") or {}),
         **payload,
