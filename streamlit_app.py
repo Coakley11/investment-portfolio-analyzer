@@ -8,10 +8,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib
 import io
-import logging
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -115,61 +112,10 @@ st.set_page_config(
 try:
     from suite_query_param_preservation import (
         capture_incoming_query_params,
-        query_param_raw,
         restore_preserved_query_params,
-        slider_debug_active,
-        temp_slider_debug_forced,
     )
 
     capture_incoming_query_params(st)
-except Exception:
-    def query_param_raw(_st: Any, name: str) -> str:  # type: ignore[misc]
-        return ""
-
-    def slider_debug_active(_st: Any) -> bool:  # type: ignore[misc]
-        return False
-
-    def temp_slider_debug_forced(_st: Any) -> bool:  # type: ignore[misc]
-        return False
-
-    def restore_preserved_query_params(_st: Any) -> bool:  # type: ignore[misc]
-        return False
-
-# TEMP: unconditional deploy probe — remove after runtime verification (see Cloud logs + UI ``?slider_debug=1``).
-logger.warning("SLIDER DEBUG ACTIVE")
-print("SLIDER DEBUG ACTIVE", flush=True)
-
-# TEMP: ``?slider_debug=1`` — remove after runtime verification (proves this streamlit_app.py is loaded).
-try:
-    _slider_debug_on = slider_debug_active(st)
-    _slider_debug_q = query_param_raw(st, "slider_debug")
-    _slider_debug_forced = temp_slider_debug_forced(st)
-except Exception as _slider_debug_exc:
-    _slider_debug_on = False
-    _slider_debug_q = None
-    _slider_debug_forced = False
-    logger.warning(
-        "slider_debug query_params probe failed: %s: %s",
-        type(_slider_debug_exc).__name__,
-        _slider_debug_exc,
-    )
-else:
-    logger.warning(
-        "slider_debug query_params probe: live_raw=%r preserved=%r forced=%s parsed_on=%s all_keys=%s",
-        st.query_params.get("slider_debug"),
-        _slider_debug_q,
-        _slider_debug_forced,
-        _slider_debug_on,
-        list(st.query_params.keys()),
-    )
-if _slider_debug_on:
-    logger.warning("slider_debug UI: immediately BEFORE st.markdown heading (parsed_on=True)")
-    st.markdown("## SLIDER DEBUG ACTIVE")
-    logger.warning("slider_debug UI: immediately AFTER st.markdown heading")
-else:
-    logger.warning("slider_debug UI: skipped st.markdown (parsed_on=False)")
-
-try:
     restore_preserved_query_params(st)
 except Exception:
     pass
@@ -180,28 +126,6 @@ try:
     init_developer_mode_from_query(st)
 except Exception:
     pass
-
-# Query ``?ami_gate_check=1`` — temporary deploy verification for Investment Insight rerun gate.
-try:
-    _ami_gate_q = st.query_params.get("ami_gate_check")
-    _ami_gate_on = str(
-        _ami_gate_q[0] if isinstance(_ami_gate_q, list) else (_ami_gate_q or "")
-    ).strip().lower() in ("1", "true", "yes", "on")
-except Exception:
-    _ami_gate_on = False
-if _ami_gate_on:
-    try:
-        from applied_math_return_insight import investment_insight_main_render_needed as _ami_gate_fn
-
-        with open(__file__, encoding="utf-8") as _gate_f:
-            _gate_src = _gate_f.read()
-        _gate_new = "investment_insight_main_render_needed(st.session_state)" in _gate_src
-        st.markdown(
-            f"**AMI rerun gate probe:** {'NEW' if _gate_new else 'OLD'} · "
-            f"helper=`{_ami_gate_fn.__name__}` · deploy=`2026-07-28-rerun-gate-6a3aa00`"
-        )
-    except Exception as _gate_exc:
-        st.markdown(f"**AMI rerun gate probe:** error `{type(_gate_exc).__name__}: {_gate_exc}`")
 
 try:
     from suite_cloud_state import purge_stale_investment_ami_restore_blockers

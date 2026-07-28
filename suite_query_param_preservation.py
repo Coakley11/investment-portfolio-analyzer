@@ -156,23 +156,3 @@ def query_param_raw(st: Any, name: str) -> str:
 
 def query_flag(st: Any, name: str) -> bool:
     return query_param_raw(st, name).lower() in _TRUTHY
-
-
-def temp_slider_debug_forced(st: Any) -> bool:
-    """TEMP: set ``temp_slider_debug = true`` in Streamlit secrets to bypass URL flags."""
-    try:
-        block = st.secrets.get("debug")
-        if isinstance(block, dict) and block.get("temp_slider_debug"):
-            return True
-    except Exception:
-        pass
-    try:
-        if st.secrets.get("temp_slider_debug"):
-            return True
-    except Exception:
-        pass
-    return False
-
-
-def slider_debug_active(st: Any) -> bool:
-    return query_flag(st, "slider_debug") or temp_slider_debug_forced(st)
