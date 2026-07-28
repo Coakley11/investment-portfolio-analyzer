@@ -130,9 +130,9 @@ if _ami_gate_on:
 
         with open(__file__, encoding="utf-8") as _gate_f:
             _gate_src = _gate_f.read()
-        _gate_old = "_submit_insight_run" in _gate_src
+        _gate_new = "investment_insight_main_render_needed(st.session_state)" in _gate_src
         st.markdown(
-            f"**AMI rerun gate probe:** {'OLD' if _gate_old else 'NEW'} · "
+            f"**AMI rerun gate probe:** {'NEW' if _gate_new else 'OLD'} · "
             f"helper=`{_ami_gate_fn.__name__}` · deploy=`2026-07-28-rerun-gate-6a3aa00`"
         )
     except Exception as _gate_exc:
