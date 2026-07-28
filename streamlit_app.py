@@ -122,7 +122,6 @@ try:
     )
 
     capture_incoming_query_params(st)
-    restore_preserved_query_params(st)
 except Exception:
     def query_param_raw(_st: Any, name: str) -> str:  # type: ignore[misc]
         return ""
@@ -131,6 +130,9 @@ except Exception:
         return False
 
     def temp_slider_debug_forced(_st: Any) -> bool:  # type: ignore[misc]
+        return False
+
+    def restore_preserved_query_params(_st: Any) -> bool:  # type: ignore[misc]
         return False
 
 # TEMP: unconditional deploy probe — remove after runtime verification (see Cloud logs + UI ``?slider_debug=1``).
@@ -161,7 +163,16 @@ else:
         list(st.query_params.keys()),
     )
 if _slider_debug_on:
+    logger.warning("slider_debug UI: immediately BEFORE st.markdown heading (parsed_on=True)")
     st.markdown("## SLIDER DEBUG ACTIVE")
+    logger.warning("slider_debug UI: immediately AFTER st.markdown heading")
+else:
+    logger.warning("slider_debug UI: skipped st.markdown (parsed_on=False)")
+
+try:
+    restore_preserved_query_params(st)
+except Exception:
+    pass
 
 try:
     from investment_persistence_trace import init_developer_mode_from_query
