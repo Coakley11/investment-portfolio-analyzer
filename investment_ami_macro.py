@@ -119,14 +119,10 @@ def parse_rate_shock_pp(
     """
     Signed rate shock in percentage points (+ hike / − cut).
 
-    Question direction wins over legacy positive ``rate_rise_pct`` session defaults.
+    Explicit ``rate_shock_pp`` in scenario params (slider / staged submit) wins.
+    Otherwise question direction wins over legacy positive ``rate_rise_pct`` defaults.
     """
     params = dict(scenario_params or {})
-    q_dir = infer_rate_shock_direction(question)
-    mag = _parse_rate_magnitude_unsigned(question, params, default=default)
-
-    if q_dir != 0:
-        return -abs(mag) if q_dir < 0 else abs(mag)
 
     raw_pp = params.get("rate_shock_pp")
     if raw_pp not in (None, ""):
@@ -136,6 +132,12 @@ def parse_rate_shock_pp(
                 return val
         except (TypeError, ValueError):
             pass
+
+    q_dir = infer_rate_shock_direction(question)
+    mag = _parse_rate_magnitude_unsigned(question, params, default=default)
+
+    if q_dir != 0:
+        return -abs(mag) if q_dir < 0 else abs(mag)
 
     raw_rise = params.get("rate_rise_pct")
     if raw_rise not in (None, ""):

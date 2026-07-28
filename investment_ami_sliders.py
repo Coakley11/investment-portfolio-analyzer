@@ -321,8 +321,66 @@ def build_scenario_params_from_sliders(
     return params
 
 
-def _read_slider_value(st: Any, spec: SliderSpec, current: Any) -> Any:
-    key = f"ami_slider_{spec.key}"
+def _slider_widget_key(spec: SliderSpec, scope_id: str) -> str:
+    sid = str(scope_id or "").strip() or "default"
+    return f"ami_slider_{sid}_{spec.key}"
+
+
+def _scenario_params_from_insight_payload(insight_data: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    raw = insight_data.get("scenario_params")
+    if isinstance(raw, dict):
+        out.update(raw)
+    kn = insight_data.get("key_numbers")
+    if isinstance(kn, dict):
+        nested = kn.get("scenario_params")
+        if isinstance(nested, dict):
+            out.update(nested)
+    return out
+
+
+def _seed_macro_rate_shock_params(
+    insight_data: dict[str, Any],
+    params: dict[str, Any],
+    *,
+    scope_id: str,
+    st: Any,
+    first_bind: bool,
+) -> dict[str, Any]:
+    """Align ``rate_shock_pp`` and slider widget state with the signed solver value."""
+    merged = dict(params)
+    payload = _scenario_params_from_insight_payload(insight_data)
+
+    from investment_ami_macro import parse_rate_shock_pp
+
+    question = str(insight_data.get("question") or "")
+
+    def _resolve_signed() -> float:
+        base = {**payload, **merged}
+        return parse_rate_shock_pp(question, scenario_params=base)
+
+    if first_bind:
+        for key, val in payload.items():
+            if key not in merged or merged.get(key) in (None, ""):
+                merged[key] = val
+        signed = _resolve_signed()
+        merged["rate_shock_pp"] = signed
+        spec = next(
+            (s for s in slider_specs_for("macro_rates", insight_data) if s.key == "rate_shock_pp"),
+            None,
+        )
+        if spec is not None:
+            wkey = _slider_widget_key(spec, scope_id)
+            st.session_state[wkey] = float(signed)
+    elif merged.get("rate_shock_pp") in (None, ""):
+        signed = _resolve_signed()
+        merged["rate_shock_pp"] = signed
+
+    return merged
+
+
+def _read_slider_value(st: Any, spec: SliderSpec, current: Any, *, scope_id: str = "") -> Any:
+    key = _slider_widget_key(spec, scope_id)
     if spec.kind == "select_slider":
         opts = list(spec.options) or [str(spec.default)]
         idx = opts.index(current) if current in opts else (opts.index(spec.default) if spec.default in opts else 0)
@@ -797,6 +855,16 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     slider_scope_id = _stable_slider_scope_id(insight_data)
     params: dict[str, Any] = dict(st.session_state.get("_ami_scenario_params") or {})
     applied_key = f"_ami_slider_applied_{slider_scope_id}"
+    first_bind = st.session_state.get(applied_key) is None
+
+    if problem_type == "macro_rates":
+        params = _seed_macro_rate_shock_params(
+            insight_data,
+            params,
+            scope_id=slider_scope_id,
+            st=st,
+            first_bind=first_bind,
+        )
 
     st.markdown("**Explore assumptions**")
     exp = str(insight_data.get("experience_mode") or "").lower()
@@ -807,7 +875,12 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     cols = st.columns(min(len(specs), 2))
     for idx, spec in enumerate(specs):
         with cols[idx % len(cols)]:
-            new_values[spec.key] = _read_slider_value(st, spec, params.get(spec.key, spec.default))
+            new_values[spec.key] = _read_slider_value(
+                st,
+                spec,
+                params.get(spec.key, spec.default),
+                scope_id=slider_scope_id,
+            )
 
     weight_baseline = {t: w for t, w in _holdings_from_insight(insight_data)}
     alloc_specs = [s for s in specs if s.key.startswith("alloc_")]
@@ -854,7 +927,10 @@ def render_ami_assumption_controls(st: Any, insight_data: dict[str, Any]) -> boo
     prev = st.session_state.get(applied_key)
     if prev is None:
         st.session_state[applied_key] = dict(merged)
-        st.session_state["_ami_scenario_params"] = {**dict(st.session_state.get("_ami_scenario_params") or {}), **merged}
+        st.session_state["_ami_scenario_params"] = {
+            **dict(st.session_state.get("_ami_scenario_params") or {}),
+            **merged,
+        }
         return False
     if merged != prev:
         if refresh_investment_insight_from_params(st, insight_data, merged):

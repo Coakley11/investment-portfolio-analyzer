@@ -64,6 +64,17 @@ class TestMacroRates(unittest.TestCase):
             -2.0,
         )
 
+    def test_explicit_rate_shock_pp_overrides_question_direction(self) -> None:
+        q = "What happens if the Federal Reserve cuts interest rates?"
+        self.assertEqual(
+            parse_rate_shock_pp(q, scenario_params={"rate_shock_pp": 2.0}),
+            2.0,
+        )
+        self.assertEqual(
+            parse_rate_shock_pp(q, scenario_params={"rate_shock_pp": -2.5}),
+            -2.5,
+        )
+
     def test_parse_rate_hike_positive_shock(self) -> None:
         self.assertEqual(
             parse_rate_shock_pp("What if the Fed hikes rates by 2%?"),
