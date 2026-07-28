@@ -1642,7 +1642,7 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
         )
 
 
-AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-diag-panel-live"
+AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-diag-module-id"
 
 
 def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:
@@ -1690,6 +1690,9 @@ def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
         return
 
     import json
+    import sys
+
+    import investment_persistence_trace as _ipt_runtime
 
     ss = st.session_state
     snapshot = collect_ami_insight_lifecycle_runtime_snapshot(st)
@@ -1707,7 +1710,19 @@ def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
         st.markdown("**Panel pre-widget trace (temp)**")
         st.text(f"AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD (module): {module_build!r}")
         st.text(f'snapshot["diag_build"]: {snap_build!r}')
-        st.caption(f"constant module: {__name__!r} · file: {__file__!s}")
+        st.caption(f"render fn scope: {__name__!r} · file: {__file__!s}")
+        st.text(f"import investment_persistence_trace.__file__: {_ipt_runtime.__file__!s}")
+        st.text(f"import investment_persistence_trace id: {id(_ipt_runtime)!r}")
+        st.text(
+            "imported AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD: "
+            f"{_ipt_runtime.AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD!r}"
+        )
+        st.text(
+            f"render vs imported constant match: "
+            f"{module_build == _ipt_runtime.AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD}"
+        )
+        _ipt_mods = [k for k in sys.modules if k == "investment_persistence_trace" or k.endswith(".investment_persistence_trace")]
+        st.text(f"sys.modules investment_persistence_trace keys: {_ipt_mods!r}")
 
         builds_match = module_build == snap_build
         if not builds_match:
