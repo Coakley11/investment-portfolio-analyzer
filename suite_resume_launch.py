@@ -371,50 +371,7 @@ def _apply_ami_insight(st: Any, app_key: str) -> None:
         pass
 
 
-def hydrate_applied_intelligence_from_url(st: Any, app_key: str = "investment") -> bool:
-    """
-    Hydrate AMI / analytical-question state from URL query params on app startup.
-
-    Stable export for suite app entry files (investment, applied intelligence, etc.).
-    """
-    key = str(app_key or "investment").strip()
-    if key == "math":
-        key = "applied_intelligence"
-
-    if key == "applied_intelligence":
-        page = _qp_get(st, "suite_page")
-        _apply_applied_intelligence(st, page)
-        try:
-            from applied_math_return_insight import apply_ami_insight_from_query
-
-            return bool(apply_ami_insight_from_query(st, "applied_intelligence"))
-        except ImportError:
-            return bool(_qp_get(st, "suite_ami_insight"))
-
-    if key == "investment":
-        try:
-            from applied_math_return_insight import (
-                hydrate_investment_ami_return_state,
-                insight_return_query_id,
-            )
-
-            if insight_return_query_id(st) or _qp_get(st, "suite_ai_question_id"):
-                return hydrate_investment_ami_return_state(st, "investment")
-        except ImportError:
-            pass
-        try:
-            from applied_math_return_insight import apply_ami_insight_from_query
-
-            return bool(apply_ami_insight_from_query(st, "investment"))
-        except ImportError:
-            return False
-
-    try:
-        from applied_math_return_insight import apply_ami_insight_from_query
-
-        return bool(apply_ami_insight_from_query(st, key))
-    except ImportError:
-        return False
+from suite_ami_startup_hydrate import hydrate_applied_intelligence_from_url
 
 
 def finalize_ami_return_restore(st: Any, app_key: str) -> bool:
@@ -454,3 +411,11 @@ def _apply_applied_intelligence(st: Any, page: str) -> None:
             val = _qp_get(st, qp)
             if val:
                 st.session_state[key] = val
+
+
+__all__ = (
+    "apply_suite_resume_launch",
+    "finalize_suite_resume_launch",
+    "finalize_ami_return_restore",
+    "hydrate_applied_intelligence_from_url",
+)

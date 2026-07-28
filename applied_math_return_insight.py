@@ -11,6 +11,42 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+AMI_INSIGHT_LIFECYCLE_LOG_KEY = "_ami_insight_lifecycle_log"
+AMI_INSIGHT_LIFECYCLE_MAX = 48
+
+
+def _ami_insight_lifecycle_log_enabled() -> bool:
+    import os
+
+    return os.environ.get("INVESTMENT_AMI_SLIDER_TRACE", "").strip().lower() in ("1", "true", "yes")
+
+
+def record_ami_insight_lifecycle(session_state: dict[str, Any], step: str, **details: Any) -> None:
+    """Trace main render gate / pending insight (session ring buffer; INFO if INVESTMENT_AMI_SLIDER_TRACE=1)."""
+    ss = session_state
+    pending = ss.get(SESSION_PENDING_KEY)
+    entry: dict[str, Any] = {
+        "step": step,
+        "pending_id": (str(pending.get("insight_id") or "")[:20] if isinstance(pending, dict) else None),
+        "pending_present": bool(
+            isinstance(pending, dict) and (pending.get("conclusion") or pending.get("question"))
+        ),
+        "render_success": ss.get("_ami_insight_render_success"),
+        "slider_refresh_pending": ss.get("_ami_slider_refresh_pending"),
+        "force_insight_render": ss.get("_ami_force_insight_render"),
+        **details,
+    }
+    if _ami_insight_lifecycle_log_enabled():
+        log.info("AMI insight lifecycle: %s", entry)
+    buf = ss.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY)
+    if not isinstance(buf, list):
+        buf = []
+    buf.append(entry)
+    if len(buf) > AMI_INSIGHT_LIFECYCLE_MAX:
+        buf = buf[-AMI_INSIGHT_LIFECYCLE_MAX :]
+    ss[AMI_INSIGHT_LIFECYCLE_LOG_KEY] = buf
+
+
 INSIGHT_ITEM_TYPE = "applied_math_insight"
 AMI_INSIGHT_STORE_VERSION = "insight-store-v10"
 SESSION_PENDING_KEY = "_ami_pending_insight"
@@ -164,6 +200,7 @@ def _clear_stale_return_insight_cache(st: Any, query_iid: str) -> dict[str, Any]
     pending_before = _pending_insight_id(st) or None
     stale_ignored = bool(query_iid and pending_before and pending_before != query_iid)
     if stale_ignored:
+        record_ami_insight_lifecycle(ss, "clear_pending", reason="stale_return_query_mismatch", query_iid=query_iid)
         ss.pop(SESSION_PENDING_KEY, None)
         ss.pop(SESSION_RETURN_CONTEXT_KEY, None)
         prev_hydrated = str(ss.get("_ami_hydrated_insight_id") or "").strip()
@@ -627,6 +664,10 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
 
     Post-submit rerun must paint the card from ``_ami_pending_insight`` even when
     pre-rerun inline render set ``_ami_insight_render_success``.
+
+    Any Streamlit widget rerun (e.g. Rate shock slider) must repaint while pending
+    exists — sliders live inside ``render_applied_math_insight_panel``, which only
+    runs when this gate is True.
     """
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
@@ -636,11 +677,29 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
     if submit_flag and has_pending:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
+        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="submit_flag")
         return True
     if slider_refresh and has_pending:
         ss.pop("_ami_insight_render_success", None)
+        record_ami_insight_lifecycle(ss, "investment_insight_main_render_needed", needed=True, reason="slider_refresh")
         return True
-    return not bool(ss.get("_ami_insight_render_success"))
+    if has_pending:
+        ss.pop("_ami_insight_render_success", None)
+        record_ami_insight_lifecycle(
+            ss,
+            "investment_insight_main_render_needed",
+            needed=True,
+            reason="pending_repaint",
+        )
+        return True
+    needed = not bool(ss.get("_ami_insight_render_success"))
+    record_ami_insight_lifecycle(
+        ss,
+        "investment_insight_main_render_needed",
+        needed=needed,
+        reason="no_pending",
+    )
+    return needed
 
 
 def _insight_panel_title(source_app: str, insight: dict[str, Any] | None = None) -> str:
@@ -871,6 +930,12 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
     dismissed = _get_dismissed_insight_ids(st)
     latest = load_latest_applied_math_insight_for_app(key, exclude_ids=dismissed)
     if latest:
+        record_ami_insight_lifecycle(
+            ss,
+            "hydrate_set_pending",
+            source="cloud_saved_items",
+            insight_id=str(latest.get("insight_id") or "")[:20],
+        )
         ss[SESSION_PENDING_KEY] = latest
         source_page = _resolve_insight_source_page(latest)
         if source_page:
@@ -1869,6 +1934,12 @@ def commit_ami_return_page_restore(st: Any, app_key: str) -> bool:
 def stage_pending_insight(st: Any, insight: AppliedMathInsight | dict[str, Any], *, return_context: dict[str, Any] | None = None) -> None:
     """Write insight into Streamlit session for AMI return button."""
     data = insight.to_dict() if isinstance(insight, AppliedMathInsight) else dict(insight)
+    record_ami_insight_lifecycle(
+        st.session_state,
+        "stage_pending_insight",
+        insight_id=str(data.get("insight_id") or "")[:20],
+        source_page=str(data.get("source_page") or ""),
+    )
     st.session_state[SESSION_PENDING_KEY] = data
     source_page = _resolve_insight_source_page(data) or str(data.get("source_page") or "").strip()
     st.session_state[SESSION_RETURN_PAGE_KEY] = source_page
@@ -1994,6 +2065,7 @@ def dismiss_applied_math_insight(st: Any, *, app_key: str = "") -> None:
 
 
 def clear_pending_insight(st: Any) -> None:
+    record_ami_insight_lifecycle(st.session_state, "clear_pending_insight")
     st.session_state.pop(SESSION_PENDING_KEY, None)
     st.session_state.pop(SESSION_RETURN_PAGE_KEY, None)
     st.session_state.pop(SESSION_RETURN_CONTEXT_KEY, None)
@@ -2083,6 +2155,12 @@ def render_suite_applied_math_insight_for_page(
     if app == "investment":
         hydrate_applied_math_insight_for_session(st, app)
 
+    record_ami_insight_lifecycle(
+        st.session_state,
+        "render_suite_applied_math_insight_for_page_enter",
+        source_app=app,
+        source_page=str(source_page or ""),
+    )
     insight = st.session_state.get(SESSION_PENDING_KEY)
     pending_exists = isinstance(insight, dict) and bool(insight.get("conclusion") or insight.get("question"))
     cloud_exists = insight_exists_in_cloud(app) if app == "investment" else False
@@ -2147,6 +2225,12 @@ def render_suite_applied_math_insight_for_page(
             return False
     rendered = render_applied_math_insight_panel(st, source_app=app, insight=insight)
     st.session_state["_ami_insight_render_success"] = bool(rendered)
+    record_ami_insight_lifecycle(
+        st.session_state,
+        "render_suite_applied_math_insight_for_page_exit",
+        rendered=bool(rendered),
+        skip_reason=st.session_state.get("_ami_insight_render_skipped_reason"),
+    )
     if rendered and app == "investment":
         st.session_state["_ami_insight_card_rendered"] = True
         try:

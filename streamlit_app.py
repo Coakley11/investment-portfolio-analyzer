@@ -154,11 +154,17 @@ try:
 except Exception:
     pass
 try:
-    from suite_resume_launch import hydrate_applied_intelligence_from_url
+    from suite_ami_startup_hydrate import (
+        hydrate_applied_intelligence_from_url,
+        probe_suite_resume_launch_compat,
+    )
 
+    if not st.session_state.get("_suite_resume_launch_probe_done"):
+        st.session_state["_suite_resume_launch_probe"] = probe_suite_resume_launch_compat()
+        st.session_state["_suite_resume_launch_probe_done"] = True
     hydrate_applied_intelligence_from_url(st, "investment")
-except Exception:
-    pass
+except Exception as _ami_startup_hydrate_exc:
+    st.session_state["_ami_startup_hydrate_error"] = repr(_ami_startup_hydrate_exc)
 
 try:
     from suite_resume_launch import apply_suite_resume_launch

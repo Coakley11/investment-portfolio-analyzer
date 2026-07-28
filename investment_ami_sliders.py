@@ -541,11 +541,34 @@ def _stage_refreshed_insight(
             pass
 
     ss = st.session_state
+    try:
+        from applied_math_return_insight import record_ami_insight_lifecycle
+
+        record_ami_insight_lifecycle(
+            ss,
+            "_stage_refreshed_insight_before",
+            insight_id=str(insight_data.get("insight_id") or "")[:20],
+            rate_shock_pp=params.get("rate_shock_pp"),
+        )
+    except ImportError:
+        pass
     stage_pending_insight(st, payload)
     ss["_ami_scenario_params"] = dict(params)
     ss["_ami_force_insight_render"] = True
     ss.pop("_ami_insight_render_success", None)
     ss["_ami_slider_refresh_pending"] = True
+    try:
+        from applied_math_return_insight import record_ami_insight_lifecycle
+
+        record_ami_insight_lifecycle(
+            ss,
+            "_stage_refreshed_insight_after",
+            insight_id=str(payload.get("insight_id") or "")[:20],
+            slider_refresh_pending=True,
+            has_conclusion=bool(payload.get("conclusion")),
+        )
+    except ImportError:
+        pass
     ss["_ami_investment_instant_canonical"] = {
         **dict(ss.get("_ami_investment_instant_canonical") or {}),
         **payload,
