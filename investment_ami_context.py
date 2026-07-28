@@ -165,19 +165,39 @@ _DIVERSIFICATION_PHRASES = (
     "how balanced",
 )
 
+_RATE_CUT_PHRASES = (
+    "rate cut",
+    "rate cuts",
+    "cutting rates",
+    "rates cut",
+    "lower interest rates",
+    "lower rates",
+    "fed easing",
+    "monetary easing",
+    "rates fall",
+    "rates falling",
+    "rate decrease",
+    "rates go down",
+    "rates decline",
+    "declining rates",
+    "dovish fed",
+    "ease rates",
+)
+
 _RATE_RISE_PHRASES = (
-    "interest rate",
-    "interest rates",
     "rates rise",
     "rates rising",
     "rate rise",
-    "rate shock",
     "rising rates",
     "fed hike",
-    "fed rate",
+    "fed hikes",
+    "rate hike",
+    "rate hikes",
     "higher rates",
     "rates go up",
     "rates increase",
+    "tightening",
+    "monetary tightening",
 )
 
 _VALUATION_PHRASES = (
@@ -256,7 +276,7 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "etf_overlap"
     if any(p in q for p in _VALUATION_PHRASES) and not any(p in q for p in _SCENARIO_PHRASES):
         return "valuation"
-    if _is_rate_rise_question(q):
+    if _is_macro_rates_question(q):
         return "macro_rates"
     if _is_inflation_question(q):
         return "macro_inflation"
@@ -299,12 +319,48 @@ def _normalize_question(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
+def _is_rate_cut_question(q: str) -> bool:
+    if any(p in q for p in _RATE_CUT_PHRASES):
+        return True
+    if "rate" in q and any(
+        w in q
+        for w in (
+            "cut",
+            "cuts",
+            "cutting",
+            "lower",
+            "fall",
+            "falling",
+            "decline",
+            "declining",
+            "drop",
+            "dropping",
+            "ease",
+            "easing",
+            "dovish",
+        )
+    ):
+        return True
+    return False
+
+
 def _is_rate_rise_question(q: str) -> bool:
+    if _is_rate_cut_question(q):
+        return False
     if any(p in q for p in _RATE_RISE_PHRASES):
         return True
     if "rate" in q and any(w in q for w in ("rise", "rising", "increase", "hike", "higher", "go up")):
         return True
     if re.search(r"duration", q) and any(w in q for w in ("rate", "bond", "rise", "rising")):
+        return True
+    return False
+
+
+def _is_macro_rates_question(q: str) -> bool:
+    """Interest-rate scenario questions (hikes, cuts, or explicit rate/duration stress)."""
+    if _is_rate_cut_question(q) or _is_rate_rise_question(q):
+        return True
+    if any(p in q for p in ("interest rate", "interest rates", "rate shock", "fed rate", "federal reserve")):
         return True
     return False
 

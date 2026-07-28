@@ -99,14 +99,14 @@ def slider_specs_for(problem_type: str, insight_data: dict[str, Any]) -> list[Sl
     if pt == "macro_rates":
         return [
             SliderSpec(
-                key="rate_rise_pct",
-                label="Rate increase (pp)",
+                key="rate_shock_pp",
+                label="Rate shock (pp)",
                 kind="float_slider",
                 default=2.0,
-                minimum=0.0,
+                minimum=-5.0,
                 maximum=5.0,
                 step=0.5,
-                help_text="Illustrative parallel rate rise in percentage points.",
+                help_text="Negative = cut/easing; positive = hike/tightening (percentage points).",
             ),
         ]
     if pt == "macro_recession":

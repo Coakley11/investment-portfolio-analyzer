@@ -13,6 +13,7 @@ from investment_ami_macro import (
     macro_recession_answer,
     parse_inflation_pct,
     parse_rate_rise_pct,
+    parse_rate_shock_pp,
     rate_rise_portfolio_impacts,
     recession_portfolio_impacts,
 )
@@ -45,6 +46,61 @@ class TestMacroRates(unittest.TestCase):
     def test_parse_rate_rise_pct(self) -> None:
         self.assertEqual(parse_rate_rise_pct("What happens if interest rates rise 2%?"), 2.0)
         self.assertEqual(parse_rate_rise_pct("Rates rise 1.5%"), 1.5)
+
+    def test_parse_rate_cut_defaults_negative_shock(self) -> None:
+        q = "What happens if the Federal Reserve cuts interest rates?"
+        self.assertEqual(parse_rate_shock_pp(q), -2.0)
+        self.assertEqual(
+            parse_rate_shock_pp(
+                "How would Fed easing and lower interest rates affect my portfolio?",
+            ),
+            -2.0,
+        )
+        self.assertEqual(
+            parse_rate_shock_pp(
+                q,
+                scenario_params={"rate_rise_pct": 2.0, "rate_shock": "Rising"},
+            ),
+            -2.0,
+        )
+
+    def test_parse_rate_hike_positive_shock(self) -> None:
+        self.assertEqual(
+            parse_rate_shock_pp("What if the Fed hikes rates by 2%?"),
+            2.0,
+        )
+        self.assertEqual(
+            parse_rate_shock_pp("What happens if interest rates rise 2%?"),
+            2.0,
+        )
+
+    def test_intent_rate_cut_question(self) -> None:
+        self.assertEqual(
+            detect_investment_send_intent(
+                "What happens if the Federal Reserve announces rate cuts?",
+                "",
+            ),
+            "macro_rates",
+        )
+
+    def test_macro_rates_answer_rate_cuts_negative_shock(self) -> None:
+        result = macro_rates_answer(
+            self._CTX,
+            beginner=False,
+            question="What if the Fed cuts interest rates?",
+        )
+        self.assertEqual(result.computed.get("rate_shock_pp"), -2.0)
+        self.assertIn("-2.0", result.analyst_sections.get("key_variables", ""))
+        self.assertIn("fall", result.short_answer.lower())
+
+    def test_macro_rates_answer_rate_hikes_positive_shock(self) -> None:
+        result = macro_rates_answer(
+            self._CTX,
+            beginner=False,
+            question="What if the Fed hikes interest rates by 2%?",
+        )
+        self.assertEqual(result.computed.get("rate_shock_pp"), 2.0)
+        self.assertIn("+2.0", result.analyst_sections.get("key_variables", ""))
 
     def test_macro_rates_answer_sections(self) -> None:
         result = macro_rates_answer(

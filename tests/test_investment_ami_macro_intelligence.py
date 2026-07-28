@@ -90,7 +90,7 @@ class TestMacroIntelligenceBrief(unittest.TestCase):
         )
         pov = (result.analyst_sections or {}).get("portfolio_analyst_view", "")
         self.assertNotIn("Overall macro view is", pov)
-        self.assertIn("Bond duration drag", pov)
+        self.assertIn("Bond duration", pov)
 
     def test_full_render_includes_recommendation_drivers(self) -> None:
         brief = build_macro_intelligence_brief(self._CTX, macro_intent="macro_recession")

@@ -36,25 +36,47 @@ def _with_macro_intelligence(
     )
 
 
-def parse_rate_rise_pct(question: str, *, default: float = 2.0, scenario_params: dict[str, Any] | None = None) -> float:
-    """Parse explicit rate rise magnitude from scenario params or question text (percentage points)."""
-    params = dict(scenario_params or {})
-    raw_param = params.get("rate_rise_pct")
-    if raw_param not in (None, ""):
-        try:
-            val = float(raw_param)
-            if 0 <= val <= 10:
-                return val
-        except (TypeError, ValueError):
-            pass
+def infer_rate_shock_direction(question: str) -> int:
+    """
+    Return ``-1`` for easing/cuts, ``+1`` for hikes/tightening, ``0`` if unclear.
+    """
     q = str(question or "").strip().lower()
-    patterns = (
+    if not q:
+        return 0
+    try:
+        from investment_ami_context import _is_rate_cut_question, _is_rate_rise_question
+
+        if _is_rate_cut_question(q):
+            return -1
+        if _is_rate_rise_question(q):
+            return 1
+    except ImportError:
+        pass
+    return 0
+
+
+def _parse_rate_magnitude_unsigned(
+    question: str,
+    scenario_params: dict[str, Any] | None,
+    *,
+    default: float,
+) -> float:
+    """Magnitude in percentage points (always non-negative)."""
+    params = dict(scenario_params or {})
+    q = str(question or "").strip().lower()
+    rise_patterns = (
         r"interest rates?\s+(?:rise|rising|increase|go up|hike|jump)[^\d%]{0,30}(\d+(?:\.\d+)?)\s*%?",
         r"rates?\s+(?:rise|rising|increase|go up|hike|jump)[^\d%]{0,30}(\d+(?:\.\d+)?)\s*%?",
         r"(\d+(?:\.\d+)?)\s*%\s*(?:rate|interest rate)",
         r"(?:rise|rising|increase|hike|up)\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*%?",
     )
-    for pattern in patterns:
+    cut_patterns = (
+        r"interest rates?\s+(?:cut|cuts|cutting|fall|falling|drop|decline|decrease|lower)[^\d%]{0,30}(\d+(?:\.\d+)?)\s*%?",
+        r"rates?\s+(?:cut|cuts|cutting|fall|falling|drop|decline|decrease|lower)[^\d%]{0,30}(\d+(?:\.\d+)?)\s*%?",
+        r"(?:cut|cuts|fall|drop|decline|decrease|lower)\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*%?",
+        r"(\d+(?:\.\d+)?)\s*%\s*(?:rate cut|rate cuts|rate decline)",
+    )
+    for pattern in rise_patterns + cut_patterns:
         match = re.search(pattern, q, flags=re.IGNORECASE)
         if match:
             try:
@@ -63,9 +85,77 @@ def parse_rate_rise_pct(question: str, *, default: float = 2.0, scenario_params:
                     return val
             except (TypeError, ValueError):
                 continue
+    raw_param = params.get("rate_rise_pct")
+    if raw_param not in (None, ""):
+        try:
+            val = abs(float(raw_param))
+            if 0 <= val <= 10:
+                return val
+        except (TypeError, ValueError):
+            pass
+    raw_pp = params.get("rate_shock_pp")
+    if raw_pp not in (None, ""):
+        try:
+            val = abs(float(raw_pp))
+            if 0 <= val <= 10:
+                return val
+        except (TypeError, ValueError):
+            pass
     if "rate" in q and any(w in q for w in ("rise", "rising", "increase", "hike", "higher")):
         return default
+    if "rate" in q and any(
+        w in q for w in ("cut", "cuts", "fall", "falling", "lower", "ease", "easing", "decline")
+    ):
+        return default
     return default
+
+
+def parse_rate_shock_pp(
+    question: str,
+    *,
+    default: float = 2.0,
+    scenario_params: dict[str, Any] | None = None,
+) -> float:
+    """
+    Signed rate shock in percentage points (+ hike / − cut).
+
+    Question direction wins over legacy positive ``rate_rise_pct`` session defaults.
+    """
+    params = dict(scenario_params or {})
+    q_dir = infer_rate_shock_direction(question)
+    mag = _parse_rate_magnitude_unsigned(question, params, default=default)
+
+    if q_dir != 0:
+        return -abs(mag) if q_dir < 0 else abs(mag)
+
+    raw_pp = params.get("rate_shock_pp")
+    if raw_pp not in (None, ""):
+        try:
+            val = float(raw_pp)
+            if -10 <= val <= 10 and val != 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+
+    raw_rise = params.get("rate_rise_pct")
+    if raw_rise not in (None, ""):
+        try:
+            val = float(raw_rise)
+            if 0 < val <= 10:
+                return val
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def parse_rate_rise_pct(
+    question: str,
+    *,
+    default: float = 2.0,
+    scenario_params: dict[str, Any] | None = None,
+) -> float:
+    """Backward-compatible alias — returns signed ``parse_rate_shock_pp``."""
+    return parse_rate_shock_pp(question, default=default, scenario_params=scenario_params)
 
 
 def allocation_profile_from_ctx(ctx: dict[str, Any]) -> dict[str, float | int | str]:
@@ -94,12 +184,14 @@ def allocation_profile_from_ctx(ctx: dict[str, Any]) -> dict[str, float | int | 
 
 def rate_rise_portfolio_impacts(profile: dict[str, float | int | str], rate_bump_pct: float) -> dict[str, Any]:
     """
-    Educational portfolio impact model for a rate rise shock.
+    Educational portfolio impact model for a signed rate shock.
 
-    Scales portfolio_core Rising Rates coefficients to the requested bump (default 2pp).
-    Returns component drags/lifts in illustrative annual return percentage points.
+    Positive ``rate_bump_pct`` uses Rising Rates coefficients; negative uses Falling Rates
+    coefficients from ``portfolio_core`` (scaled to |bump| / 2pp).
     """
-    scale = float(rate_bump_pct) / 2.0
+    bump = float(rate_bump_pct)
+    scale = abs(bump) / 2.0
+    rising = bump >= 0
     eq = float(profile.get("equity") or 0)
     bonds = float(profile.get("bonds") or 0)
     tbills = float(profile.get("tbills") or 0)
@@ -107,12 +199,18 @@ def rate_rise_portfolio_impacts(profile: dict[str, float | int | str], rate_bump
     long_bonds = float(profile.get("long_duration_bonds") or 0)
     growth = float(profile.get("qqq_spy") or 0) + float(profile.get("tech") or 0) * 0.35
 
-    # Coefficients mirror portfolio_core._rate_environment_effects (Rising Rates), scaled to bump size.
-    bond_duration_drag = (-0.060 * bonds - 0.040 * long_bonds) * scale * 100
-    reit_drag = (-0.030 * reit) * scale * 100
-    equity_valuation_drag = (-0.020 * eq) * scale * 100
-    growth_compression = (-0.012 * growth) * scale * 100
-    tbill_lift = (0.020 * tbills) * scale * 100
+    if rising:
+        bond_duration_drag = (-0.060 * bonds - 0.040 * long_bonds) * scale * 100
+        reit_drag = (-0.030 * reit) * scale * 100
+        equity_valuation_drag = (-0.020 * eq) * scale * 100
+        growth_compression = (-0.012 * growth) * scale * 100
+        tbill_lift = (0.020 * tbills) * scale * 100
+    else:
+        bond_duration_drag = (0.045 * bonds + 0.020 * long_bonds) * scale * 100
+        reit_drag = (0.020 * reit) * scale * 100
+        equity_valuation_drag = (0.025 * eq) * scale * 100
+        growth_compression = (0.012 * growth) * scale * 100
+        tbill_lift = (-0.005 * tbills) * scale * 100
 
     components = {
         "bond_duration_drag_pp": round(bond_duration_drag, 2),
@@ -150,19 +248,35 @@ def _default_risk_notes(beginner: bool) -> str:
     )
 
 
+def apply_macro_rate_shock_to_context(ctx: dict[str, Any], question: str) -> float:
+    """Resolve signed rate shock from question + scenario params and write back to ``ctx``."""
+    params = dict(ctx.get("scenario_params") or {})
+    shock = parse_rate_shock_pp(question, scenario_params=params)
+    params["rate_shock_pp"] = shock
+    params["rate_rise_pct"] = abs(shock)
+    if shock < 0:
+        params["rate_shock"] = "Falling"
+    elif shock > 0:
+        params["rate_shock"] = "Rising"
+    ctx["scenario_params"] = params
+    return shock
+
+
 def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
-    """Analyze portfolio sensitivity to an interest-rate rise shock."""
+    """Analyze portfolio sensitivity to a signed interest-rate shock."""
     from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
 
+    rate_bump = apply_macro_rate_shock_to_context(ctx, question)
     macro = resolve_macro_scenario_context(ctx)
-    params = macro.scenario_params
     profile = macro.allocation_profile
-    rate_bump = parse_rate_rise_pct(question, scenario_params=params)
     impacts = rate_rise_portfolio_impacts(profile, rate_bump)
     comps = impacts["components_pp"]
     prof = impacts["profile_pct"]
     net = float(impacts["net_return_shift_pp"])
     rate_env = macro.rate_environment
+    rising = rate_bump >= 0
+    bump_abs = abs(rate_bump)
+    shock_display = f"{rate_bump:+.1f}%"
 
     if prof["equity"] + prof["bonds"] + prof["reit"] + prof["tbills"] <= 0:
         direct = "Add holdings with weights first — I need your portfolio mix to estimate rate sensitivity."
@@ -188,39 +302,55 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
         )
 
     if beginner:
-        direct = (
-            f"If interest rates rise **{rate_bump:.1f}%**, your portfolio could face a rough "
-            f"**{abs(net):.1f} percentage-point** headwind on forward returns (simple model)."
-        )
-        if prof["bonds"] >= 20 or prof["long_duration_bonds"] >= 5:
-            direct += f" Your **{prof['bonds']:.0f}%** bond sleeve is the main duration risk."
-        elif prof["reit"] >= 10:
-            direct += f" Your **{prof['reit']:.0f}%** REIT exposure is sensitive to higher rates."
-        elif prof["growth_proxy"] >= 15:
-            direct += " Growth-heavy holdings may see valuation pressure as discount rates rise."
-        analyst = (
-            "Higher rates usually hurt **long-duration bonds** first, then **REITs** and **growth stocks** "
-            "(higher discount rates compress valuations). **Cash / T-Bills** often hold up better."
-        )
+        if rising:
+            direct = (
+                f"If interest rates rise **{bump_abs:.1f}%**, your portfolio could face a rough "
+                f"**{abs(net):.1f} percentage-point** headwind on forward returns (simple model)."
+            )
+            if prof["bonds"] >= 20 or prof["long_duration_bonds"] >= 5:
+                direct += f" Your **{prof['bonds']:.0f}%** bond sleeve is the main duration risk."
+            elif prof["reit"] >= 10:
+                direct += f" Your **{prof['reit']:.0f}%** REIT exposure is sensitive to higher rates."
+            elif prof["growth_proxy"] >= 15:
+                direct += " Growth-heavy holdings may see valuation pressure as discount rates rise."
+            analyst = (
+                "Higher rates usually hurt **long-duration bonds** first, then **REITs** and **growth stocks** "
+                "(higher discount rates compress valuations). **Cash / T-Bills** often hold up better."
+            )
+        else:
+            direct = (
+                f"If interest rates fall **{bump_abs:.1f}%** (Fed easing), your portfolio could see an illustrative "
+                f"**{net:+.1f} percentage-point** shift on forward returns (simple model)."
+            )
+            if prof["bonds"] >= 20 or prof["long_duration_bonds"] >= 5:
+                direct += f" Your **{prof['bonds']:.0f}%** bond sleeve may benefit from duration tailwinds."
+            elif prof["growth_proxy"] >= 15:
+                direct += " Growth holdings may get a valuation tailwind as discount rates fall."
+            analyst = (
+                "Lower rates often help **long-duration bonds** and **growth equities**, while **cash / T-Bills** "
+                "may lag as yield advantage fades."
+            )
     else:
+        model_label = "Rising Rates" if rising else "Falling Rates"
         direct = (
-            f"A **+{rate_bump:.1f}%** rate shock implies an illustrative portfolio return shift of "
-            f"**{net:+.1f} pp** (scaled Rising Rates model)."
+            f"A **{shock_display}** rate shock implies an illustrative portfolio return shift of "
+            f"**{net:+.1f} pp** (scaled {model_label} model)."
         )
+        bond_label = "duration effect" if rising else "duration tailwind"
         analyst = (
-            f"Bond duration drag ≈ **{comps['bond_duration_drag_pp']:+.1f} pp** "
+            f"Bond {bond_label} ≈ **{comps['bond_duration_drag_pp']:+.1f} pp** "
             f"({prof['bonds']:.0f}% bonds, {prof['long_duration_bonds']:.0f}% long-duration). "
-            f"REIT drag ≈ **{comps['reit_drag_pp']:+.1f} pp** ({prof['reit']:.0f}% REIT). "
-            f"Equity valuation drag ≈ **{comps['equity_valuation_drag_pp']:+.1f} pp**; "
-            f"growth compression ≈ **{comps['growth_compression_pp']:+.1f} pp** "
+            f"REIT effect ≈ **{comps['reit_drag_pp']:+.1f} pp** ({prof['reit']:.0f}% REIT). "
+            f"Equity rate sensitivity ≈ **{comps['equity_valuation_drag_pp']:+.1f} pp**; "
+            f"growth tilt effect ≈ **{comps['growth_compression_pp']:+.1f} pp** "
             f"({prof['growth_proxy']:.0f}% growth proxy). "
-            f"T-Bill lift ≈ **{comps['tbill_lift_pp']:+.1f} pp**."
+            f"T-Bill / cash effect ≈ **{comps['tbill_lift_pp']:+.1f} pp**."
         )
         if rate_env:
             analyst += f" Portfolio Health rate setting: **{rate_env}**."
 
     key_lines = [
-        f"- Rate shock assumption: **+{rate_bump:.1f}%**",
+        f"- Rate shock assumption: **{shock_display}**",
         f"- Equity sleeve: **{prof['equity']:.1f}%**",
         f"- Bonds: **{prof['bonds']:.1f}%** (long-duration **{prof['long_duration_bonds']:.1f}%**)",
         f"- REIT: **{prof['reit']:.1f}%**",
@@ -232,36 +362,62 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
         f"- Net illustrative shift: **{net:+.1f} pp**",
     ]
 
-    tradeoffs = (
-        "**More long-duration bonds / REITs** → larger downside if rates jump.\n"
-        "**More cash / short Treasuries** → better relative resilience, but lower long-run return potential.\n"
-        "**Growth-heavy equity** → valuation compression risk even if earnings hold."
-    )
-
-    what_if = (
-        f"- Rates **+{rate_bump:.1f}%** with current mix → **~{net:+.1f} pp** illustrative return shift\n"
-        f"- If long-duration bonds trimmed → duration drag eases\n"
-        f"- If REIT weight cut → rate sensitivity falls\n"
-        f"- If T-Bill sleeve added → partial offset via higher cash yields"
-    )
+    if rising:
+        tradeoffs = (
+            "**More long-duration bonds / REITs** → larger downside if rates jump.\n"
+            "**More cash / short Treasuries** → better relative resilience, but lower long-run return potential.\n"
+            "**Growth-heavy equity** → valuation compression risk even if earnings hold."
+        )
+        what_if = (
+            f"- Rates **{shock_display}** with current mix → **~{net:+.1f} pp** illustrative return shift\n"
+            f"- If long-duration bonds trimmed → duration drag eases\n"
+            f"- If REIT weight cut → rate sensitivity falls\n"
+            f"- If T-Bill sleeve added → partial offset via higher cash yields"
+        )
+    else:
+        tradeoffs = (
+            "**Long-duration bonds / growth equity** → more upside if rates fall further.\n"
+            "**Heavy cash / T-Bills** → may lag when yields compress.\n"
+            "**Rate-sensitive REITs** → can benefit alongside bonds in an easing path."
+        )
+        what_if = (
+            f"- Rates **{shock_display}** with current mix → **~{net:+.1f} pp** illustrative return shift\n"
+            f"- If bond duration is high → easing tailwind may be larger\n"
+            f"- If cash-heavy → relative drag vs risk assets may widen\n"
+            f"- If growth tilt is high → valuation support may improve"
+        )
 
     actions: list[str] = []
-    if prof["long_duration_bonds"] >= 5 or prof["bonds"] >= 25:
-        actions.append(
-            "Consider shortening bond duration (e.g. more aggregate/T-Bills, less long Treasury) if rate risk feels high."
-        )
-    if prof["reit"] >= 15:
-        actions.append(
-            f"REIT weight is **{prof['reit']:.0f}%** — monitor rate-sensitive real estate exposure in a rising-rate path."
-        )
-    if prof["growth_proxy"] >= 20:
-        actions.append(
-            "Growth tilt may face valuation compression — balance with value/dividend or defensive sleeves if uncomfortable."
-        )
-    if prof["tbills"] < 5 and net < -1.5:
-        actions.append(
-            "A modest cash or T-Bill sleeve can improve resilience when rates rise unexpectedly."
-        )
+    if rising:
+        if prof["long_duration_bonds"] >= 5 or prof["bonds"] >= 25:
+            actions.append(
+                "Consider shortening bond duration (e.g. more aggregate/T-Bills, less long Treasury) if rate risk feels high."
+            )
+        if prof["reit"] >= 15:
+            actions.append(
+                f"REIT weight is **{prof['reit']:.0f}%** — monitor rate-sensitive real estate exposure in a rising-rate path."
+            )
+        if prof["growth_proxy"] >= 20:
+            actions.append(
+                "Growth tilt may face valuation compression — balance with value/dividend or defensive sleeves if uncomfortable."
+            )
+        if prof["tbills"] < 5 and net < -1.5:
+            actions.append(
+                "A modest cash or T-Bill sleeve can improve resilience when rates rise unexpectedly."
+            )
+    else:
+        if prof["tbills"] >= 15 and net > 0:
+            actions.append(
+                "A large cash sleeve may lag in a falling-rate rally — consider whether excess cash matches your return goal."
+            )
+        if prof["long_duration_bonds"] >= 10:
+            actions.append(
+                "Long-duration bonds may benefit from easing — still watch reinvestment risk if rates stay low."
+            )
+        if prof["growth_proxy"] >= 20:
+            actions.append(
+                "Growth tilt may benefit from lower discount rates — balance against concentration risk."
+            )
     if not actions:
         actions.append(
             "Your mix is not heavily duration- or growth-concentrated — focus on whether the illustrative shock fits your risk tolerance."
@@ -284,10 +440,11 @@ def _macro_rates_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "
         analyst_sections=sections,
         problem_type="macro_rates",
         model_name="Interest rate scenario analyst",
-        math_idea="Scaled Rising Rates coefficients × portfolio sleeve weights × rate bump size.",
+        math_idea="Scaled Rising/Falling Rates coefficients × portfolio sleeve weights × signed rate shock size.",
         confidence_pct=conf,
         computed={
             "rate_bump_pct": rate_bump,
+            "rate_shock_pp": rate_bump,
             "net_return_shift_pp": net,
             **{k: v for k, v in comps.items()},
             **prof,

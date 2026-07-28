@@ -1621,6 +1621,18 @@ def _stage_investment_instant_insight(
     diag["instant_solved"] = True
     diag["solver_error"] = False
 
+    problem_type = str(
+        getattr(route, "problem_type", "") or getattr(result, "problem_type", "") or intent
+    )
+    if problem_type == "macro_rates":
+        try:
+            from investment_ami_macro import apply_macro_rate_shock_to_context
+
+            apply_macro_rate_shock_to_context(ctx, q)
+            diag["macro_rate_shock_pp"] = (ctx.get("scenario_params") or {}).get("rate_shock_pp")
+        except ImportError:
+            pass
+
     pre = dict(pre_payload or {})
     try:
         insight = build_return_insight_payload(
@@ -1642,9 +1654,16 @@ def _stage_investment_instant_insight(
 
     payload["canonical_instant"] = True
     payload["solver_build_id"] = INVESTMENT_AMI_BUILD_ID
-    payload["problem_type"] = str(
-        getattr(route, "problem_type", "") or getattr(result, "problem_type", "") or intent
-    )
+    payload["problem_type"] = problem_type
+
+    scenario = dict(ctx.get("scenario_params") or {})
+    if scenario:
+        payload["scenario_params"] = dict(scenario)
+        kn = payload.get("key_numbers")
+        if isinstance(kn, dict):
+            kn = dict(kn)
+            kn["scenario_params"] = dict(scenario)
+            payload["key_numbers"] = kn
 
     stage_pending_insight(st, payload, return_context=dict(submit_source_state or {}))
     ss["_ami_investment_instant_canonical"] = dict(payload)
@@ -1652,10 +1671,8 @@ def _stage_investment_instant_insight(
     ss["_ami_submit_render_insight_this_run"] = True
     ss["_ami_insight_return_preserve"] = True
     ss["_ami_last_submit_source_page"] = str(source_page or page)
-    scenario = dict(ctx.get("scenario_params") or {})
     if scenario:
-        ss["_ami_scenario_params"] = scenario
-        payload.setdefault("scenario_params", scenario)
+        ss["_ami_scenario_params"] = dict(scenario)
 
     try:
         store_applied_math_insight(
