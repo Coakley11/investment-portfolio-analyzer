@@ -109,6 +109,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# TEMP: ``?slider_debug=1`` — remove after runtime verification (proves this streamlit_app.py is loaded).
+try:
+    _slider_debug_q = st.query_params.get("slider_debug")
+    _slider_debug_on = str(
+        _slider_debug_q[0] if isinstance(_slider_debug_q, list) else (_slider_debug_q or "")
+    ).strip().lower() in ("1", "true", "yes", "on")
+except Exception:
+    _slider_debug_on = False
+if _slider_debug_on:
+    st.markdown("## SLIDER DEBUG ACTIVE")
+
 try:
     from investment_persistence_trace import init_developer_mode_from_query
 
