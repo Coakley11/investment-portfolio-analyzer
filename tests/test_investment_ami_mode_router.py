@@ -31,6 +31,12 @@ _ANALYTICAL_CASES: tuple[tuple[str, str], ...] = (
         "If inflation remains elevated for five years, what changes would you make?",
         "conditional_macro",
     ),
+    (
+        "Analyze how my portfolio would likely have performed during the 2008 Financial Crisis, "
+        "the COVID-19 crash of 2020, and the inflationary period of 2022. Which holdings would have "
+        "been the primary drivers of performance in each environment?",
+        "historical_scenario",
+    ),
 )
 
 _DETERMINISTIC_CASES: tuple[tuple[str, str], ...] = (

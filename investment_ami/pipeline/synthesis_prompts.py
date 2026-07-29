@@ -105,6 +105,13 @@ def _question_tag_rubric(question_tag: str, question: str) -> str:
             common
             + "Primary lens: answer the open question first in Executive Summary, then support with IC structure."
         ),
+        "historical_scenario": (
+            common
+            + "Primary lens: **historical crisis / regime analysis** (e.g. 2008, COVID-2020, 2022 inflation). "
+            "Scenario Analysis must compare regimes explicitly; name which **holdings** likely helped or hurt in each "
+            "using brief facts (qualitative — no invented backtest numbers). "
+            "Do not collapse into a single deterministic inflation snapshot."
+        ),
     }
     return rubrics.get(tag, rubrics["open_ended"])
 

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 ResponseMode = Literal["deterministic", "analytical_synthesis"]
 
-MODE_ROUTER_VERSION = "p4-phase1-v2"
+MODE_ROUTER_VERSION = "p4-phase1-v3"
 
 
 @dataclass(frozen=True)
@@ -225,6 +225,70 @@ def _match_deterministic_objective(q: str) -> tuple[str, str] | None:
     return None
 
 
+def _match_historical_scenario_analytical(q: str) -> tuple[str, str] | None:
+    """
+    Multi-period crisis / historical performance questions → analytical synthesis.
+
+    Prevents legacy ``macro_inflation`` (substring match on 'inflation' in 'inflationary')
+    from routing to the deterministic inflation engine.
+    """
+    historical_markers = (
+        "2008",
+        "financial crisis",
+        "global financial crisis",
+        "gfc",
+        "covid",
+        "covid-19",
+        "coronavirus",
+        "pandemic",
+        "march 2020",
+        "2020 crash",
+        "dot-com",
+        "dot com",
+        "1970s",
+        "stagflation",
+        "inflationary period",
+        "2022 inflation",
+        "historical",
+        "would have performed",
+        "would have done",
+        "how would my portfolio have",
+        "how my portfolio would",
+    )
+    portfolio_markers = (
+        "portfolio",
+        "holdings",
+        "allocation",
+        "each environment",
+        "primary drivers",
+        "performance in each",
+        "which holdings",
+        "analyze how",
+    )
+    if not any(h in q for h in historical_markers):
+        return None
+    if not any(p in q for p in portfolio_markers):
+        return None
+    period_hits = sum(
+        1
+        for token in (
+            "2008",
+            "2020",
+            "2022",
+            "covid",
+            "financial crisis",
+            "inflationary",
+            "gfc",
+        )
+        if token in q
+    )
+    if period_hits >= 2 or "each environment" in q or "primary drivers" in q:
+        return "historical_scenario", "analytical_phrase:historical_scenario"
+    if "would have performed" in q or "would have done" in q:
+        return "historical_scenario", "analytical_phrase:historical_scenario"
+    return None
+
+
 def _conditional_macro_analytical(q: str) -> tuple[str, str] | None:
     try:
         from investment_ami_context import _is_inflation_question, _is_recession_question  # noqa: SLF001
@@ -338,6 +402,23 @@ def route_investment_response_mode(
 
     matched: list[str] = []
     reasons: list[str] = []
+
+    historical = _match_historical_scenario_analytical(q)
+    if historical:
+        tag, rule = historical
+        matched.append(rule)
+        reasons.append(
+            "Historical / multi-crisis portfolio performance question → analytical synthesis "
+            "(not deterministic macro_inflation)."
+        )
+        return ModeRoutingDecision(
+            response_mode="analytical_synthesis",
+            question_tag=tag,
+            deterministic_intent=legacy or "scenario_stress",
+            legacy_intent_hint=legacy,
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+        )
 
     tag_match = _match_analytical_tag(q)
     if tag_match:
