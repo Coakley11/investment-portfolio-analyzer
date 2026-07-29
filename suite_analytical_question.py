@@ -1665,17 +1665,37 @@ def _stage_investment_instant_insight(
         diag["analytical_synthesis_grounding_ok"] = (synth_diag.get("grounding") or {}).get("ok")
 
     try:
+        from investment_ami.routing.routing_audit import record_investment_routing_audit
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
+
+        audit = record_investment_routing_audit(
+            st,
+            question=q,
+            routing_decision=mode,
+            computed=computed_result,
+            synthesis_diagnostics=synth_diag if isinstance(synth_diag, dict) else None,
+            solver_build_id=INVESTMENT_AMI_BUILD_ID,
+        )
+        diag["routing_audit"] = audit
+        ss["_ami_last_routing_audit"] = audit
+    except ImportError:
+        pass
+
+    try:
         from investment_ami.evaluation.benchmark_eval import build_reasoning_laboratory_snapshot
 
-        lab = build_reasoning_laboratory_snapshot(
-            question=q,
-            submit_diagnostics=dict(diag),
-            brief_dict=brief_payload if isinstance(brief_payload, dict) else None,
-            synthesis_diagnostics=synth_diag if isinstance(synth_diag, dict) else None,
-            final_answer=str(getattr(result, "short_answer", "") or ""),
-        )
-        ss["_ami_reasoning_laboratory_snapshot"] = lab
-        ss["_ami_reasoning_laboratory_json"] = json.dumps(lab, indent=2, default=str)
+        if isinstance(synth_diag, dict) and synth_diag:
+            import json
+
+            lab = build_reasoning_laboratory_snapshot(
+                question=q,
+                submit_diagnostics=dict(diag),
+                brief_dict=brief_payload if isinstance(brief_payload, dict) else None,
+                synthesis_diagnostics=synth_diag if isinstance(synth_diag, dict) else None,
+                final_answer=str(getattr(result, "short_answer", "") or ""),
+            )
+            ss["_ami_reasoning_laboratory_snapshot"] = lab
+            ss["_ami_reasoning_laboratory_json"] = json.dumps(lab, indent=2, default=str)
     except ImportError:
         pass
 

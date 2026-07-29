@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-INVESTMENT_AMI_BUILD_ID = "investment-ami-p4-v3-historical-route"
+INVESTMENT_AMI_BUILD_ID = "investment-ami-p5-intent-v1"
 ALLOCATION_SOLVER_VERSION = "phase2j-allocation-diag1"
 
 _TECH_TICKERS = frozenset(

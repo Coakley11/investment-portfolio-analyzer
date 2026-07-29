@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 ResponseMode = Literal["deterministic", "analytical_synthesis"]
 
-MODE_ROUTER_VERSION = "p4-phase1-v3"
+MODE_ROUTER_VERSION = "p5-intent-v1"
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class ModeRoutingDecision:
     matched_rules: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
     router_version: str = MODE_ROUTER_VERSION
+    intent_classification: dict[str, Any] = field(default_factory=dict)
 
     @property
     def effective_intent_id(self) -> str:
@@ -41,6 +42,7 @@ def mode_routing_diagnostics_dict(decision: ModeRoutingDecision) -> dict[str, An
         "legacy_intent_hint": decision.legacy_intent_hint,
         "matched_rules": list(decision.matched_rules),
         "reasons": list(decision.reasons),
+        "intent_classification": dict(decision.intent_classification or {}),
     }
 
 
@@ -380,6 +382,54 @@ def _strong_deterministic_legacy_intent(legacy: str, q: str, source_page: str) -
     return True
 
 
+def _is_starter_insight_question(question: str) -> bool:
+    try:
+        from investment_ami_context import INVESTMENT_AMI_STARTER_QUESTIONS
+    except ImportError:
+        return False
+    return str(question or "").strip() in INVESTMENT_AMI_STARTER_QUESTIONS
+
+
+def _resolve_analytical_tag(q: str, intent_suggested: str = "") -> tuple[str, str] | None:
+    """Phrase tags + macro conditional + intent-suggested tag."""
+    historical = _match_historical_scenario_analytical(q)
+    if historical:
+        return historical
+    tag_match = _match_analytical_tag(q)
+    if tag_match:
+        return tag_match
+    cond = _conditional_macro_analytical(q)
+    if cond:
+        return cond
+    if intent_suggested:
+        return intent_suggested, f"intent:suggested_tag:{intent_suggested}"
+    return None
+
+
+def _analytical_decision(
+    *,
+    tag: str,
+    rule: str,
+    reasons: list[str],
+    matched: list[str],
+    legacy: str,
+    deterministic_intent: str,
+    intent_dict: dict[str, Any],
+) -> ModeRoutingDecision:
+    matched = list(matched)
+    matched.append(rule)
+    matched.append(f"intent:classifier:{intent_dict.get('primary', 'unknown')}")
+    return ModeRoutingDecision(
+        response_mode="analytical_synthesis",
+        question_tag=tag,
+        deterministic_intent=deterministic_intent,
+        legacy_intent_hint=legacy,
+        matched_rules=tuple(matched),
+        reasons=tuple(reasons),
+        intent_classification=intent_dict,
+    )
+
+
 def route_investment_response_mode(
     question: str,
     context: dict[str, Any] | None = None,
@@ -387,7 +437,7 @@ def route_investment_response_mode(
     """
     Classify instant AMI questions into deterministic calculation vs analytical synthesis.
 
-    Phase 1: analytical mode avoids generic ``portfolio_risk`` / ``investment_coach`` templates.
+    Intent classifier (reasoning vs quantitative) runs first; phrase rules refine question_tag.
     """
     q = _normalize(question)
     ctx = dict(context or {})
@@ -400,69 +450,134 @@ def route_investment_response_mode(
     else:
         legacy = detect_investment_send_intent(question, page)
 
+    from investment_ami.routing.intent_classifier import classify_routing_intent
+
+    intent = classify_routing_intent(
+        question,
+        q_normalized=q,
+        legacy_intent_hint=legacy,
+        has_portfolio_context=_has_portfolio_context(ctx),
+    )
+    intent_dict = intent.to_dict()
+
     matched: list[str] = []
     reasons: list[str] = []
+
+    objective = _match_deterministic_objective(q)
+    if objective:
+        intent_id, rule = objective
+        matched.append(rule)
+        reasons.append(f"Objective portfolio metric question → deterministic `{intent_id}`.")
+        return ModeRoutingDecision(
+            response_mode="deterministic",
+            question_tag="",
+            deterministic_intent=intent_id,
+            legacy_intent_hint=legacy,
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+            intent_classification=intent_dict,
+        )
+
+    if _is_starter_insight_question(question):
+        matched.append("intent:starter_question_deterministic")
+        reasons.append("Known starter insight question → fast deterministic path.")
+        intent_id = legacy or "portfolio_risk"
+        return ModeRoutingDecision(
+            response_mode="deterministic",
+            question_tag="",
+            deterministic_intent=intent_id,
+            legacy_intent_hint=legacy,
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+            intent_classification=intent_dict,
+        )
+
+    if intent.prefer_synthesis:
+        resolved = _resolve_analytical_tag(q, intent.suggested_question_tag)
+        if resolved:
+            tag, rule = resolved
+            reasons.append(intent.rationale or "Intent classifier prefers analytical synthesis.")
+            reasons.append(f"Analytical tag `{tag}`.")
+            return _analytical_decision(
+                tag=tag,
+                rule=rule,
+                reasons=reasons,
+                matched=matched,
+                legacy=legacy,
+                deterministic_intent=legacy or "portfolio_risk",
+                intent_dict=intent_dict,
+            )
+        if _has_portfolio_context(ctx):
+            matched.append("intent:open_ended_synthesis")
+            reasons.append(intent.rationale or "Reasoning intent with portfolio context → synthesis.")
+            return _analytical_decision(
+                tag=intent.suggested_question_tag or "open_ended",
+                rule="intent:reasoning_judgment_default",
+                reasons=reasons,
+                matched=matched,
+                legacy=legacy,
+                deterministic_intent=legacy or "portfolio_risk",
+                intent_dict=intent_dict,
+            )
 
     historical = _match_historical_scenario_analytical(q)
     if historical:
         tag, rule = historical
-        matched.append(rule)
         reasons.append(
-            "Historical / multi-crisis portfolio performance question → analytical synthesis "
-            "(not deterministic macro_inflation)."
+            "Historical / multi-crisis portfolio performance question → analytical synthesis."
         )
-        return ModeRoutingDecision(
-            response_mode="analytical_synthesis",
-            question_tag=tag,
+        return _analytical_decision(
+            tag=tag,
+            rule=rule,
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
             deterministic_intent=legacy or "scenario_stress",
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
+            intent_dict=intent_dict,
         )
 
     tag_match = _match_analytical_tag(q)
     if tag_match:
         tag, rule = tag_match
-        matched.append(rule)
         reasons.append(f"Matched analytical phrase tag `{tag}`.")
-        return ModeRoutingDecision(
-            response_mode="analytical_synthesis",
-            question_tag=tag,
+        return _analytical_decision(
+            tag=tag,
+            rule=rule,
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
             deterministic_intent=legacy or "portfolio_risk",
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
+            intent_dict=intent_dict,
         )
 
     cond = _conditional_macro_analytical(q)
     if cond:
         tag, rule = cond
-        matched.append(rule)
         reasons.append("Conditional macro/portfolio-change question → analytical synthesis.")
-        return ModeRoutingDecision(
-            response_mode="analytical_synthesis",
-            question_tag=tag,
+        return _analytical_decision(
+            tag=tag,
+            rule=rule,
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
             deterministic_intent=legacy or "macro_inflation",
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
-        )
-
-    objective = _match_deterministic_objective(q)
-    if objective:
-        intent, rule = objective
-        matched.append(rule)
-        reasons.append(f"Objective portfolio metric question → deterministic `{intent}`.")
-        return ModeRoutingDecision(
-            response_mode="deterministic",
-            question_tag="",
-            deterministic_intent=intent,
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
+            intent_dict=intent_dict,
         )
 
     if legacy and _strong_deterministic_legacy_intent(legacy, q, page):
+        if intent.prefer_synthesis and _has_portfolio_context(ctx):
+            reasons.append(
+                f"Legacy `{legacy}` would be deterministic, but intent classifier overrides → synthesis."
+            )
+            return _analytical_decision(
+                tag=intent.suggested_question_tag or "open_ended",
+                rule="intent:override_legacy_deterministic",
+                reasons=reasons,
+                matched=matched + [f"deterministic_legacy_blocked:{legacy}"],
+                legacy=legacy,
+                deterministic_intent=legacy,
+                intent_dict=intent_dict,
+            )
         matched.append(f"deterministic_legacy:{legacy}")
         reasons.append(f"Legacy intent `{legacy}` is a strong deterministic match.")
         return ModeRoutingDecision(
@@ -472,30 +587,33 @@ def route_investment_response_mode(
             legacy_intent_hint=legacy,
             matched_rules=tuple(matched),
             reasons=tuple(reasons),
+            intent_classification=intent_dict,
         )
 
     if legacy == "investment_coach" and not _is_definitional_coach(q):
         matched.append("escalate:misclassified_coach")
         reasons.append("Question matched coach phrases but is not definitional → analytical.")
-        return ModeRoutingDecision(
-            response_mode="analytical_synthesis",
-            question_tag="open_ended",
+        return _analytical_decision(
+            tag="open_ended",
+            rule="escalate:misclassified_coach",
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
             deterministic_intent=legacy,
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
+            intent_dict=intent_dict,
         )
 
     if legacy == "allocation_recommendation" and _is_open_ended_allocation(q):
         matched.append("escalate:open_ended_allocation")
         reasons.append("Open-ended improvement/allocation question → analytical.")
-        return ModeRoutingDecision(
-            response_mode="analytical_synthesis",
-            question_tag="improvement",
+        return _analytical_decision(
+            tag="improvement",
+            rule="escalate:open_ended_allocation",
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
             deterministic_intent=legacy,
-            legacy_intent_hint=legacy,
-            matched_rules=tuple(matched),
-            reasons=tuple(reasons),
+            intent_dict=intent_dict,
         )
 
     if legacy == "portfolio_risk" or not legacy:
@@ -509,30 +627,30 @@ def route_investment_response_mode(
                 legacy_intent_hint=legacy or "portfolio_risk",
                 matched_rules=tuple(matched),
                 reasons=tuple(reasons),
+                intent_classification=intent_dict,
             )
         if _has_portfolio_context(ctx):
             matched.append("default:open_ended_with_portfolio")
-            reasons.append(
-                "Open-ended question with portfolio context; legacy would use generic "
-                "`portfolio_risk` fallback → analytical synthesis."
-            )
-            return ModeRoutingDecision(
-                response_mode="analytical_synthesis",
-                question_tag="open_ended",
+            reasons.append("Open-ended question with portfolio context → analytical synthesis.")
+            return _analytical_decision(
+                tag="open_ended",
+                rule="default:open_ended_with_portfolio",
+                reasons=reasons,
+                matched=matched,
+                legacy=legacy,
                 deterministic_intent="portfolio_risk",
-                legacy_intent_hint=legacy or "portfolio_risk",
-                matched_rules=tuple(matched),
-                reasons=tuple(reasons),
+                intent_dict=intent_dict,
             )
 
     matched.append(f"deterministic_fallback:{legacy or 'portfolio_risk'}")
     reasons.append("No portfolio context; using deterministic fallback.")
-    intent = legacy or "portfolio_risk"
+    intent_id = legacy or "portfolio_risk"
     return ModeRoutingDecision(
         response_mode="deterministic",
         question_tag="",
-        deterministic_intent=intent,
+        deterministic_intent=intent_id,
         legacy_intent_hint=legacy,
         matched_rules=tuple(matched),
         reasons=tuple(reasons),
+        intent_classification=intent_dict,
     )

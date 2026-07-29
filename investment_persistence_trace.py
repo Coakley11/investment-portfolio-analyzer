@@ -1956,6 +1956,23 @@ def render_ami_reasoning_laboratory(st: Any) -> None:
     with st.sidebar.expander("AMI reasoning laboratory", expanded=False):
         st.caption("Last Investment AMI submit — inspect the full reasoning chain.")
         st.markdown("**1. Routing**")
+        routing_audit = ss.get("_ami_last_routing_audit") or routing.get("routing_audit") or {}
+        intent = routing.get("intent_classification") if isinstance(routing.get("intent_classification"), dict) else {}
+        summary_bits = [
+            f"**Mode:** `{routing.get('response_mode') or '—'}`",
+            f"**Tag:** `{routing.get('question_tag') or '—'}`",
+            f"**Engine:** `{routing_audit.get('selected_engine') or routing.get('effective_intent_id') or '—'}`",
+            f"**Router:** `{routing.get('router_version') or '—'}`",
+        ]
+        if intent.get("primary"):
+            summary_bits.append(
+                f"**Intent:** `{intent.get('primary')}` "
+                f"(R={intent.get('reasoning_score')} / Q={intent.get('quantitative_score')})"
+            )
+        if routing_audit.get("synthesis_invoked") is not None:
+            summary_bits.append(f"**Synthesis invoked:** `{routing_audit.get('synthesis_invoked')}`")
+        st.markdown(" · ".join(summary_bits))
+        st.caption("Structured routing decision (submit diagnostics)")
         st.json(
             {
                 k: routing.get(k)
@@ -1966,10 +1983,19 @@ def render_ami_reasoning_laboratory(st: Any) -> None:
                     "matched_rules",
                     "reasons",
                     "legacy_intent_hint",
+                    "intent_classification",
+                    "router_version",
                 )
                 if routing.get(k) is not None
             }
         )
+        if isinstance(routing_audit, dict) and routing_audit:
+            with st.expander("Routing audit (last submit)", expanded=False):
+                st.json(routing_audit)
+        audit_log = ss.get("_ami_routing_audit_log_v1") or []
+        if isinstance(audit_log, list) and audit_log:
+            with st.expander(f"Routing audit log ({len(audit_log)} entries)", expanded=False):
+                st.json(audit_log[-10:])
         st.markdown("**2. PortfolioAnalysisBrief**")
         if isinstance(brief, dict):
             st.text(
