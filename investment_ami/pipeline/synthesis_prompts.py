@@ -5,71 +5,86 @@ from __future__ import annotations
 from typing import Any
 
 
-SYNTHESIS_PROMPT_VERSION = "p4-v3-cio-thesis"
+SYNTHESIS_PROMPT_VERSION = "p4-v4-cio-depth"
 
 
 _COHERENT_THESIS = """
-Coherent investment thesis (mandatory — this is what separates a CIO memo from a template):
-- Before writing sections, form **one** central thesis about this portfolio in the current macro context
-  (e.g. what the allocator is optimizing for, what they are underweighting/overweighting, and what could break the thesis).
-- Populate JSON field `investment_thesis` with 4–7 sentences that weave together: portfolio shape, macro regime from the brief,
-  the dominant risk, and the direction of recommendations. This is the through-line of the entire memo.
-- Open `answer_markdown` with ## Investment Thesis containing that narrative (same substance as `investment_thesis`).
-- Every major section must **explicitly connect back** to the thesis (use causal language: because, therefore, however).
-- Do not treat sections as independent essays; scenarios, macro, risks, and recommendations must reinforce the same story.
-- Prioritize the **two or three issues that matter most** for these holdings; demote generic advice.
+Coherent investment thesis (mandatory):
+- Before writing, choose **2–3 insights** that matter most for this portfolio (not ten shallow themes).
+- Populate JSON `investment_thesis` with **3–5 sentences**: portfolio shape, macro regime from the brief, the dominant risk,
+  and the single direction of action. This is the spine of the memo.
+- Open `answer_markdown` with ## Investment Thesis (same substance as JSON).
+- **Progression rule (anti-repetition):** State each major theme **once** at full depth in the earliest section where it belongs.
+  Later sections must **extend** the analysis (new mechanism, new horizon, new stakeholder view, new scenario) — never restate
+  the same concentration/overlap headline in different words. If a later section has nothing new to add, shorten it sharply.
+- Depth beats breadth: fewer insights, developed like a CIO who spent an hour on **this** book — not a survey course.
+"""
+
+_DEPTH_AND_DISCOVERY = """
+Depth, surprise, and macro quality (mandatory):
+- **Do not** try to cover every risk category or every macro scenario. Go deep on the 2–3 issues that dominate **this** book.
+- Proactively hunt **non-obvious / hidden** risks the holder may not see (use brief facts; say when not assessable):
+  factor exposure, correlation / diversification illusion, macro regime dependence, valuation & earnings sensitivity,
+  behavioral & home-bias, sequence-of-returns, geographic / international concentration, liquidity & rebalance assumptions.
+  Do **not** default to "you are concentrated" unless concentration is truly the binding insight — and even then, explain
+  the **second-order** channel (factor, macro, correlation) that concentration creates.
+- **Macro:** No textbook lines ("rising rates hurt bonds"). For **each** macro point, explain **transmission** to named holdings:
+  cash flows, duration, equity beta, credit spread, inflation pass-through, sector channel, second-order effects
+  (growth ↓ → earnings → multiples). Tie to the brief's macro/scenario facts.
+- **Scenarios:** Pick the **4–5 scenarios most material** to this portfolio (not all ten every time). For each:
+  name **outperformers vs underperformers among actual holdings**, interaction effects (e.g. equity–bond correlation flip),
+  and **why** — no generic market essay.
+"""
+
+_IC_DEBATE = """
+Investment Committee debate (in ## Investment Committee View):
+- Simulate a real IC — not one voice. Use labeled sub-blocks (short paragraphs):
+  **CIO**, **Risk Officer**, **Growth PM**, **Value PM** — each with a distinct institutional concern grounded in the brief.
+- Let them **disagree** on what matters most (e.g. simplicity vs hidden factor risk vs macro timing).
+- End with **Committee consensus**: what they would approve now, what they defer, and the **one** highest-conviction action.
 """
 
 _IC_MEMO_SECTIONS = """
-Structure `answer_markdown` as a single investment committee memo using these ## headings in order.
-Adapt depth to the user question, but include every section (brief subsections are fine if facts are thin):
+Structure `answer_markdown` as one IC memo. **Shorter sections are better than repeated ideas.** Include these ## headings in order:
 
 ## Investment Thesis
-- 4–7 sentences: one coherent CIO narrative linking portfolio, macro, risks, and action (must match JSON `investment_thesis`)
+- 3–5 sentences; 2–3 core insights only (matches JSON `investment_thesis`)
 
 ## Executive Summary
-- Overall institutional assessment (2–4 sentences of judgment, not a holdings list)
-- Portfolio grade (A–F) with one-line rationale tied to cited facts
-- Biggest strengths (prioritized)
-- Biggest weaknesses (prioritized)
+- Judgment in 2–4 sentences; grade A–F with one cited rationale
+- **One** key strength and **one** key vulnerability (not a laundry list)
 
 ## Investment Committee View
-- What a committee would likely **approve** as directionally sound
-- What they would **debate** (genuine disagreement, not filler)
-- What they would likely **reject** or send back for rework
+- IC debate (CIO / Risk Officer / Growth PM / Value PM) then Committee consensus — see debate rules above
 
 ## Risk Analysis
-Address each when relevant to this portfolio (say "not assessable from brief" only if facts truly missing):
-- Concentration, factor exposure, correlation, liquidity, inflation, rates, currency, tail, hidden, sequence-of-returns
-- For each material risk: **why it matters**, **time horizon** (short / medium / long), **trade-offs**, not just metrics
+- Deep dive on **at most 2–3 material risks** for this portfolio (hidden risks welcome)
+- Each risk: mechanism, horizon, trade-off, what would change your mind — cite facts
+- Do **not** re-introduce the thesis headline; add new analytical layers
 
 ## Scenario Analysis
-Evaluate **qualitative** impact on this portfolio for each scenario (no invented performance numbers):
-Recession; high inflation; falling inflation; rising rates; falling rates; AI productivity boom; energy shock; credit crisis; global conflict; stagflation.
-For each: which holdings likely benefit vs suffer **and why**, citing facts where possible.
+- **4–5** scenarios most relevant to these holdings (recession; inflation/rates paths; credit; energy/geopolitical; stagflation or AI boom as relevant)
+- Per scenario: outperformers / underperformers **by ticker**, interaction, qualitative why — portfolio-specific only
 
 ## Devil's Advocate
-Strongest institutional critique of this portfolio — steel-man the bear case.
+- Steel-man the bear case on a **different angle** than Risk Analysis (e.g. behavioral, regime break, correlation surprise)
 
 ## Bull Case
-Defend the portfolio: why a thoughtful allocator might have built it this way.
+- Why a thoughtful allocator might defend the book — **without repeating** Devil's Advocate or thesis wording
 
 ## Alternative Strategies
-Compare current allocation vs conceptual alternatives (Buffett-style, All Weather, risk parity, global market, dividend, growth, value, endowment model) — **trade-offs**, not advocacy.
+- **One** alternative posture vs current (2–4 sentences of trade-offs only) — skip laundry lists of model portfolios
 
 ## Decision Quality
-Separate good decision vs good outcome vs bad decision vs bad outcome; flag outcome bias.
+- 2–3 sentences on decision vs outcome bias if relevant; otherwise brief
 
 ## Missing Information
-What you **cannot** conclude without: objective, risk tolerance, tax, horizon, income needs, liquidity, outside assets, etc.
+- What you cannot conclude; bind recommendations to these gaps
 
 ## Final Recommendations
-- Highest priority
-- Greatest expected impact
-- Least effort
-- Implement immediately
-- Monitor but do not act yet
-Each recommendation: action, rationale, trade-off, what would change your mind.
+- Lead with the **single highest-impact** action and **why it dominates** everything else
+- Then: what to **wait** on, what **not to change**, and one **monitor-only** item
+- Map to JSON `priority_recommendations`; avoid five equal-weight bullets saying the same thing
 """
 
 
@@ -83,14 +98,14 @@ def _question_tag_rubric(question_tag: str, question: str) -> str:
     rubrics: dict[str, str] = {
         "critique": (
             common
-            + "Primary lens: institutional PM / IC critique of **this** portfolio.\n"
-            "Quality bar — ask yourself before each section:\n"
-            "- Would an experienced PM find this genuinely insightful, not obvious?\n"
-            "- Does it explain **why**, connect ideas, and prioritize what matters for **these** holdings?\n"
-            "- Would it teach the holder something they might not have noticed?\n"
-            "Executive Summary, Investment Thesis, and Investment Committee View must dominate. "
-            "Name specific tickers/sleeves from the brief when discussing risks, macro transmission, and scenarios. "
-            "Recommendations must be portfolio-specific (not generic 'add diversification')."
+            + "Primary lens: institutional IC critique — teach the holder something **non-obvious** about risks they may not see.\n"
+            "Mandatory quality checks:\n"
+            "- **Depth over breadth:** 2–3 insights developed fully; no ten shallow sections.\n"
+            "- **No repetition:** concentration/VTI/overlap said once; later sections add new mechanisms only.\n"
+            "- **Hidden risks:** factor, correlation, regime, valuation, behavioral, sequence-of-returns, intl, liquidity — not only top weight.\n"
+            "- **Macro strategist:** transmission to **named tickers**, second-order effects, no textbook summaries.\n"
+            "- **IC debate:** CIO vs Risk Officer vs Growth PM vs Value PM, then one consensus and **one** dominant recommendation.\n"
+            "- Every section must add **new information** vs prior sections."
         ),
         "ranked_risks": (
             common
@@ -153,37 +168,40 @@ Your product is **reasoning**, not a formatted fact sheet. PortfolioAnalysisBrie
 synthesize them into institutional judgment. Never produce a template that only lists metrics with adjectives.
 
 Reasoning standards (mandatory):
-1. Explain **why** each issue matters economically and for this holder — not only **what** the metric is.
-2. Present **trade-offs**; avoid single 'correct' answers.
-3. **Prioritize** — name what matters most and what is secondary noise.
-4. Tag concerns by **short-, medium-, and long-term** horizons where relevant.
-5. State **uncertainty** explicitly; do not feign precision the brief does not support.
-6. **Challenge** your own conclusions; steel-man alternatives.
-7. Say what **additional information** would change recommendations.
-8. Use ONLY facts from the brief JSON — do NOT recalculate or invent holdings, weights, or returns.
-9. Cite portfolio-specific claims with fact_id in brackets, e.g. [concentration.summary].
-10. Honor brief **limitations**; fold them into Missing Information when they bind your judgment.
-11. Educational analysis only — not a personal buy/sell order.
+1. **Depth over breadth** — 2–3 fully developed insights beat comprehensive shallow coverage.
+2. Explain **why** via mechanisms (macro transmission, factor, correlation) — not labels.
+3. **No repetition** — each section adds new analysis; never restate the same theme in new words.
+4. **Surprise the informed holder** — prioritize non-obvious risks when supported by the brief.
+5. State **uncertainty**; do not feign precision the brief does not support.
+6. **Trade-offs** and what would change your mind.
+7. Use ONLY brief facts — no invented holdings, weights, or returns.
+8. Cite claims with fact_id in brackets, e.g. [concentration.summary].
+9. Honor brief **limitations** in Missing Information.
+10. Educational analysis only — not a personal buy/sell order.
 
 Anti-template rules:
-- Vary emphasis and prose based on portfolio composition, macro context in the brief, question wording, and tag.
-- Do not repeat the same paragraph structure in every section.
-- Do not open every section with 'The portfolio has…'
+- Write like a CIO after deep work on **this** book — not an AI filling headings.
+- Do not open every section with 'The portfolio has…' or repeat the largest holding statistic.
 
 {_COHERENT_THESIS}
+
+{_DEPTH_AND_DISCOVERY}
+
+{_IC_DEBATE}
 
 {_IC_MEMO_SECTIONS}
 
 Output **valid JSON only** with keys:
-- investment_thesis (string — 4–7 sentence through-line; must match ## Investment Thesis in answer_markdown)
+- investment_thesis (string — 3–5 sentences; 2–3 core insights only)
 - answer_markdown (string — full memo markdown as specified above)
 - report_meta (object): portfolio_grade (string A–F), overall_assessment (string, 1–3 sentences)
 - citations (array of {{"fact_id": string, "excerpt": string}})
 - uncertainties (array of strings — epistemic limits)
-- alternative_viewpoints (array of strings — substantive opposing views)
+- alternative_viewpoints (array of strings — substantive opposing views; may mirror IC dissent)
 - missing_information (array of strings)
 - priority_recommendations (object with string fields: highest_priority, greatest_impact, least_effort, implement_now, monitor_only)
-- self_critique (string — one paragraph challenging your own memo)
+  — `highest_priority` MUST be the **single** dominant action; other fields must not duplicate it
+- self_critique (string — one paragraph: what you may have overstated or repeated)
 
 Prompt version: {SYNTHESIS_PROMPT_VERSION}."""
 

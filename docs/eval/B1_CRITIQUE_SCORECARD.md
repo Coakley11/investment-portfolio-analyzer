@@ -34,7 +34,23 @@ PM litmus tests (use in written evidence):
 | Iter | Prompt | Hypothesis | Human median | Structural score | Keep? |
 |------|--------|------------|--------------|------------------|-------|
 | 0 | `p4-v2-institutional` | Baseline | _(live run pending)_ | _(live run pending)_ | — |
-| 1 | `p4-v3-cio-thesis` | Mandatory `investment_thesis` + section linkage improves coherence & originality | _(fill after live run)_ | _(from JSON artifact)_ | TBD |
+| 1 | `p4-v3-cio-thesis` | Mandatory `investment_thesis` + section linkage | _(your live review)_ | — | Superseded by v4 |
+| 2 | `p4-v4-cio-depth` | Depth over breadth, anti-repetition, hidden risks, macro transmission, IC debate, one dominant rec | _(re-run B1 after deploy)_ | _(artifact)_ | TBD |
+
+## p4-v3 vs p4-v4 comparison (same B1 question, same scorecard)
+
+After deploy, score **both** memos (or v3 from your saved run vs new v4). For each, answer yes/partial/no with one line of evidence:
+
+1. **2–3 core insights** — not trying to cover everything?
+2. **Less repetition** — themes build forward instead of restating?
+3. **Hidden risks** — non-obvious and educational, not only concentration?
+4. **Macro transmission** — mechanisms to **your** holdings, not textbook lines?
+5. **Scenarios** — clearly tied to **actual** holdings (tickers)?
+6. **IC debate** — authentic disagreement (CIO / Risk / Growth / Value)?
+7. **One dominant recommendation** — clearly stands above the rest?
+8. **CIO authenticity** — would an experienced CIO actually write this?
+
+**Keep `p4-v4-cio-depth` as baseline** only if v4 is a clear winner on most of the above (especially 1, 2, 7, 8). Then pause prompt changes; further AMI work is benchmark-driven only.
 
 ### Iteration 1 (prompt lever)
 

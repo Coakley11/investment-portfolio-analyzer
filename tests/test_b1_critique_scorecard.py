@@ -42,10 +42,11 @@ class TestB1CritiqueScorecard(unittest.TestCase):
         self.assertIn("Central narrative", md)
 
     def test_prompt_version_includes_cio_thesis(self) -> None:
-        self.assertEqual(SYNTHESIS_PROMPT_VERSION, "p4-v3-cio-thesis")
+        self.assertEqual(SYNTHESIS_PROMPT_VERSION, "p4-v4-cio-depth")
         sys_prompt = build_system_prompt(beginner=False)
         self.assertIn("investment_thesis", sys_prompt)
-        self.assertIn("Coherent investment thesis", sys_prompt)
+        self.assertIn("Depth over breadth", sys_prompt)
+        self.assertIn("Risk Officer", sys_prompt)
 
 
 if __name__ == "__main__":
