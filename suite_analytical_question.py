@@ -1587,7 +1587,7 @@ def _stage_investment_instant_insight(
     page = str(ctx.get("page") or source_page or "").strip()
 
     try:
-        from investment_ami_context import detect_investment_send_intent
+        from investment_ami.routing.mode_router import mode_routing_diagnostics_dict, route_investment_response_mode
 
         from investment_ami_instant_solver import (
             INVESTMENT_AMI_BUILD_ID,
@@ -1602,8 +1602,25 @@ def _stage_investment_instant_insight(
         diag["solver_error"] = str(exc)
         return False
 
-    intent = detect_investment_send_intent(q, page)
-    diag["detected_intent"] = intent
+    mode = route_investment_response_mode(q, ctx)
+    diag.update(mode_routing_diagnostics_dict(mode))
+    diag["detected_intent"] = mode.effective_intent_id
+    diag["legacy_intent_hint"] = mode.legacy_intent_hint
+
+    try:
+        from investment_persistence_trace import record_ami_mode_routing_trace
+
+        record_ami_mode_routing_trace(
+            st,
+            ami_response_mode=mode.response_mode,
+            ami_question_tag=mode.question_tag or "",
+            ami_effective_intent=mode.effective_intent_id,
+            ami_legacy_intent_hint=mode.legacy_intent_hint or "",
+            ami_routing_matched_rules="|".join(mode.matched_rules),
+            ami_routing_reasons="; ".join(mode.reasons),
+        )
+    except ImportError:
+        pass
 
     try:
         solved = solve_instant_investment_insight(q, ctx)
@@ -1621,8 +1638,51 @@ def _stage_investment_instant_insight(
     diag["instant_solved"] = True
     diag["solver_error"] = False
 
+    computed_result = dict(getattr(result, "computed", None) or {})
+    brief_payload = computed_result.get("portfolio_analysis_brief")
+    if isinstance(brief_payload, dict):
+        import json
+
+        diag["portfolio_analysis_brief_version"] = brief_payload.get("brief_version")
+        diag["portfolio_analysis_brief_fact_count"] = len(brief_payload.get("facts") or {})
+        diag["portfolio_analysis_brief_limitations"] = list(brief_payload.get("limitations") or [])
+        ss["_ami_portfolio_analysis_brief_json"] = json.dumps(brief_payload, indent=2, default=str)
+        ss["_ami_portfolio_analysis_brief_summary"] = {
+            "brief_version": brief_payload.get("brief_version"),
+            "fact_count": len(brief_payload.get("facts") or {}),
+            "assembly_trace": brief_payload.get("assembly_trace"),
+        }
+
+    synth_diag = computed_result.get("analytical_synthesis_diagnostics")
+    if isinstance(synth_diag, dict) and synth_diag:
+        import json
+
+        ss["_ami_analytical_synthesis_diagnostics"] = dict(synth_diag)
+        ss["_ami_analytical_synthesis_diagnostics_json"] = json.dumps(synth_diag, indent=2, default=str)
+        diag["analytical_synthesis_enabled"] = synth_diag.get("synthesis_enabled")
+        diag["analytical_synthesis_model"] = synth_diag.get("model")
+        diag["analytical_synthesis_timing_ms"] = synth_diag.get("timing_ms")
+        diag["analytical_synthesis_grounding_ok"] = (synth_diag.get("grounding") or {}).get("ok")
+
+    try:
+        from investment_ami.evaluation.benchmark_eval import build_reasoning_laboratory_snapshot
+
+        lab = build_reasoning_laboratory_snapshot(
+            question=q,
+            submit_diagnostics=dict(diag),
+            brief_dict=brief_payload if isinstance(brief_payload, dict) else None,
+            synthesis_diagnostics=synth_diag if isinstance(synth_diag, dict) else None,
+            final_answer=str(getattr(result, "short_answer", "") or ""),
+        )
+        ss["_ami_reasoning_laboratory_snapshot"] = lab
+        ss["_ami_reasoning_laboratory_json"] = json.dumps(lab, indent=2, default=str)
+    except ImportError:
+        pass
+
     problem_type = str(
-        getattr(route, "problem_type", "") or getattr(result, "problem_type", "") or intent
+        getattr(route, "problem_type", "")
+        or getattr(result, "problem_type", "")
+        or mode.effective_intent_id
     )
     if problem_type == "macro_rates":
         try:

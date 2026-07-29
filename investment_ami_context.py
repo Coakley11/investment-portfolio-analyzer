@@ -76,6 +76,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "macro_recession",
         "macro_inflation",
         "allocation_recommendation",
+        "analytical_synthesis",
     }
 )
 

@@ -168,6 +168,12 @@ INSIGHT_CARD_TRACE_LABELS: tuple[str, ...] = (
     "insight_hydrate_attempted",
     "insight_hydrate_success",
     "insight_hydrate_source",
+    "ami_response_mode",
+    "ami_question_tag",
+    "ami_effective_intent",
+    "ami_legacy_intent_hint",
+    "ami_routing_matched_rules",
+    "ami_routing_reasons",
 )
 
 SAVE_TRACE_LABELS: tuple[str, ...] = (
@@ -1113,6 +1119,11 @@ def record_insight_card_trace(st: Any, **fields: Any) -> None:
     _persist_ami_trace_backup(ss, **fields)
 
 
+def record_ami_mode_routing_trace(st: Any, **fields: Any) -> None:
+    """Record AMI instant submit mode-router diagnostics (Phase 1 analytical pipeline)."""
+    record_insight_card_trace(st, **fields)
+
+
 def snapshot_insight_card_trace(st: Any) -> dict[str, Any]:
     ss = st.session_state
     trace = get_trace(st)
@@ -1805,3 +1816,212 @@ def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
             label_visibility="collapsed",
             key=copy_key,
         )
+
+
+def render_portfolio_analysis_brief_diagnostics(st: Any) -> None:
+    """Developer panel: full PortfolioAnalysisBrief JSON after instant AMI submit."""
+    try:
+        from suite_workspace import can_show_developer_tools
+
+        if not can_show_developer_tools(st=st):
+            return
+    except ImportError:
+        return
+
+    ss = st.session_state
+    raw = ss.get("_ami_portfolio_analysis_brief_json")
+    summary = ss.get("_ami_portfolio_analysis_brief_summary")
+    if not raw and not summary:
+        return
+
+    with st.sidebar.expander("Portfolio analysis brief (Phase 2)", expanded=False):
+        st.caption("Facts assembled for future analytical synthesis — full JSON from last submit.")
+        if isinstance(summary, dict):
+            st.text(f"brief_version: {summary.get('brief_version')}")
+            st.text(f"fact_count: {summary.get('fact_count')}")
+            trace = summary.get("assembly_trace")
+            if trace:
+                st.text(f"assembly_trace: {trace}")
+        submit_diag = ss.get("_ami_investment_submit_diagnostics") or {}
+        if isinstance(submit_diag, dict) and submit_diag.get("response_mode"):
+            st.text(f"last_submit response_mode: {submit_diag.get('response_mode')}")
+            st.text(f"question_tag: {submit_diag.get('question_tag')}")
+        if raw:
+            st.text_area(
+                "Copy portfolio analysis brief",
+                value=str(raw),
+                height=480,
+                label_visibility="collapsed",
+                key="_ami_portfolio_analysis_brief_dev_copy",
+            )
+
+
+def render_analytical_synthesis_diagnostics(st: Any) -> None:
+    """Developer panel: Phase 4 synthesis prompts, I/O, timing, grounding."""
+    try:
+        from suite_workspace import can_show_developer_tools
+
+        if not can_show_developer_tools(st=st):
+            return
+    except ImportError:
+        return
+
+    ss = st.session_state
+    raw = ss.get("_ami_analytical_synthesis_diagnostics_json")
+    diag = ss.get("_ami_analytical_synthesis_diagnostics")
+    if not raw and not diag:
+        return
+
+    import json
+
+    data = diag if isinstance(diag, dict) else {}
+    if not data and raw:
+        try:
+            data = json.loads(str(raw))
+        except json.JSONDecodeError:
+            data = {}
+
+    with st.sidebar.expander("Analytical synthesis (Phase 4 debug)", expanded=False):
+        st.caption("Last instant AMI analytical synthesis trace (prompt iteration).")
+        st.text(f"enabled: {data.get('synthesis_enabled')} ({data.get('flag_source')})")
+        st.text(f"model: {data.get('model')} mock={data.get('mock_mode')}")
+        if data.get("error"):
+            st.warning(str(data.get("error")))
+        timing = data.get("timing_ms") or {}
+        if timing:
+            st.text(f"timing_ms: {timing}")
+        tokens = data.get("token_usage") or {}
+        if tokens:
+            st.text(f"token_usage: {tokens}")
+        grounding = data.get("grounding") or {}
+        if grounding:
+            st.text(f"grounding ok: {grounding.get('ok')}")
+            if grounding.get("warnings"):
+                st.caption("warnings: " + "; ".join(grounding.get("warnings") or []))
+
+        tabs = st.tabs(["Prompts", "Inputs", "Raw", "Parsed", "Validated"])
+        with tabs[0]:
+            st.markdown("**System**")
+            st.code(str(data.get("system_prompt") or "(empty)")[:12000])
+            st.markdown("**User**")
+            st.code(str(data.get("user_prompt") or "(empty)")[:12000])
+        with tabs[1]:
+            st.json(data.get("structured_inputs") or {})
+        with tabs[2]:
+            st.code(str(data.get("raw_model_response") or "")[:12000])
+        with tabs[3]:
+            st.json(data.get("parsed_response") or {})
+        with tabs[4]:
+            st.markdown(str(data.get("validated_answer_markdown") or ""))
+
+        if raw:
+            st.text_area(
+                "Copy synthesis diagnostics JSON",
+                value=str(raw),
+                height=320,
+                label_visibility="collapsed",
+                key="_ami_analytical_synthesis_diag_copy",
+            )
+
+
+def render_ami_reasoning_laboratory(st: Any) -> None:
+    """Unified dev sidebar: routing → brief → synthesis → final answer."""
+    try:
+        from suite_workspace import can_show_developer_tools
+
+        if not can_show_developer_tools(st=st):
+            return
+    except ImportError:
+        return
+
+    import json
+
+    ss = st.session_state
+    lab = ss.get("_ami_reasoning_laboratory_snapshot")
+    lab_json = ss.get("_ami_reasoning_laboratory_json")
+    if not lab and not lab_json:
+        return
+
+    if not isinstance(lab, dict) and lab_json:
+        try:
+            lab = json.loads(str(lab_json))
+        except json.JSONDecodeError:
+            lab = {}
+
+    routing = (lab or {}).get("routing") or ss.get("_ami_investment_submit_diagnostics") or {}
+    brief = (lab or {}).get("portfolio_analysis_brief")
+    synth = (lab or {}).get("analytical_synthesis") or ss.get("_ami_analytical_synthesis_diagnostics") or {}
+    final_answer = (lab or {}).get("final_rendered_answer") or ""
+
+    with st.sidebar.expander("AMI reasoning laboratory", expanded=False):
+        st.caption("Last Investment AMI submit — inspect the full reasoning chain.")
+        st.markdown("**1. Routing**")
+        st.json(
+            {
+                k: routing.get(k)
+                for k in (
+                    "response_mode",
+                    "question_tag",
+                    "effective_intent_id",
+                    "matched_rules",
+                    "reasons",
+                    "legacy_intent_hint",
+                )
+                if routing.get(k) is not None
+            }
+        )
+        st.markdown("**2. PortfolioAnalysisBrief**")
+        if isinstance(brief, dict):
+            st.text(
+                f"v{brief.get('brief_version')} | facts={len(brief.get('facts') or {})} | "
+                f"limitations={len(brief.get('limitations') or [])}"
+            )
+            with st.expander("Brief facts + limitations", expanded=False):
+                st.json(
+                    {
+                        "limitations": brief.get("limitations"),
+                        "facts": brief.get("facts"),
+                        "fact_index_keys": sorted((brief.get("fact_index") or {}).keys()),
+                    }
+                )
+        else:
+            st.caption("(no brief on last submit)")
+
+        st.markdown("**3. Synthesis**")
+        if synth:
+            st.text(
+                f"enabled={synth.get('synthesis_enabled')} model={synth.get('model')} "
+                f"mock={synth.get('mock_mode')}"
+            )
+            st.text(f"timing_ms: {synth.get('timing_ms')}")
+            st.text(f"token_usage: {synth.get('token_usage')}")
+            g = synth.get("grounding") or {}
+            st.text(f"grounding ok: {g.get('ok')} | warnings: {g.get('warnings')}")
+            tabs = st.tabs(["Prompts", "Model input", "Raw", "Parsed", "Citations"])
+            with tabs[0]:
+                st.code(str(synth.get("system_prompt") or "")[:8000])
+                st.code(str(synth.get("user_prompt") or "")[:8000])
+            with tabs[1]:
+                st.json(synth.get("structured_inputs") or {})
+            with tabs[2]:
+                st.code(str(synth.get("raw_model_response") or "")[:8000])
+            with tabs[3]:
+                st.json(synth.get("parsed_response") or {})
+            with tabs[4]:
+                parsed = synth.get("parsed_response") if isinstance(synth.get("parsed_response"), dict) else {}
+                st.json(parsed.get("citations") or [])
+        else:
+            st.caption("(deterministic path or synthesis diagnostics missing)")
+
+        st.markdown("**4. Final rendered answer**")
+        st.markdown(final_answer or "—")
+
+        if lab_json:
+            st.text_area(
+                "Copy full reasoning laboratory JSON",
+                value=str(lab_json),
+                height=280,
+                label_visibility="collapsed",
+                key="_ami_reasoning_laboratory_copy",
+            )
+

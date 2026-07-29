@@ -6,6 +6,7 @@ from typing import Any
 
 from investment_ami.catalog.registry import question_for_intent
 from investment_ami.models.routing import RoutedQuestion
+from investment_ami.routing.mode_router import mode_routing_diagnostics_dict, route_investment_response_mode
 
 
 def route_instant_question(
@@ -17,20 +18,25 @@ def route_instant_question(
         return None
     ctx = dict(context or {})
     try:
-        from investment_ami_context import detect_investment_send_intent, intent_supported
+        from investment_ami_context import intent_supported
     except ImportError:
         return None
 
     page = str(ctx.get("page") or ctx.get("source_page") or "").strip()
-    intent = detect_investment_send_intent(q, page)
+    mode = route_investment_response_mode(q, ctx)
+    intent = mode.effective_intent_id
     if not intent_supported(intent):
         return None
     definition = question_for_intent(intent)
     if definition is None:
         return None
+    routing_diag = mode_routing_diagnostics_dict(mode)
     return RoutedQuestion(
         intent_id=intent,
         definition=definition,
         question_text=q,
         source_page=page,
+        response_mode=mode.response_mode,
+        question_tag=mode.question_tag,
+        mode_routing=routing_diag,
     )

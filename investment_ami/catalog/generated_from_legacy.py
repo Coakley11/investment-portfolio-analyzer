@@ -174,6 +174,18 @@ _INTENT_SPECS: dict[str, dict[str, object]] = {
         "optional": frozenset({"target_weights", "objective", "health_score"}),
         "follow_up": ("rebalance_allocation", "diversification"),
     },
+    "analytical_synthesis": {
+        "title": "Portfolio analytical synthesis",
+        "category": AmiCategory.PORTFOLIO_ANALYSIS,
+        "description": "Question-conditioned portfolio analysis grounded in computed facts.",
+        "engines": ("portfolio_analysis", "risk_analysis", "macro_intelligence"),
+        "output_type": "recommendation",
+        "profile": "full",
+        "legacy": "p4",
+        "required": frozenset(),
+        "optional": frozenset({"current_weights", "health_score", "macro_assumptions"}),
+        "follow_up": ("portfolio_risk", "scenario_stress"),
+    },
 }
 
 

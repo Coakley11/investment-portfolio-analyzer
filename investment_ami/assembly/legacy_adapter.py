@@ -56,6 +56,12 @@ def attach_routing_metadata(
         computed["ami_pipeline_profile"] = routed.definition.pipeline_profile
     if "ami_catalog_version" not in computed:
         computed["ami_catalog_version"] = "p1-legacy-generated"
+    if routed is not None:
+        computed.setdefault("ami_response_mode", routed.response_mode)
+        if routed.question_tag:
+            computed.setdefault("ami_question_tag", routed.question_tag)
+        if routed.mode_routing:
+            computed.setdefault("ami_mode_routing", dict(routed.mode_routing))
     try:
         result.computed = computed
     except AttributeError:
