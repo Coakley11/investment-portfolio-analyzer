@@ -174,9 +174,15 @@ def _mock_json_response(messages: list[dict[str, str]]) -> str:
     user = next((m["content"] for m in messages if m.get("role") == "user"), "")
     q = user[:120].replace('"', "'")
     payload = {
+        "investment_thesis": (
+            "Mock thesis: a 55/45 VOO/BND barbell expresses belief in US large-cap earnings "
+            "with bond ballast under stable rates and moderate inflation."
+        ),
         "answer_markdown": (
             f"**Mock analytical synthesis** (INVESTMENT_AMI_SYNTHESIS_MOCK=1).\n\n"
             f"Question received: {q}…\n\n"
+            "## Investment Thesis\n"
+            "Mock CIO through-line linking VOO equity beta, BND rate sensitivity, and macro regime.\n\n"
             "## Executive Summary\n"
             "Mock IC memo — enable live model for full institutional synthesis.\n\n"
             "## Investment Committee View\n"

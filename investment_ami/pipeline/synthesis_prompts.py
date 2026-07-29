@@ -5,12 +5,27 @@ from __future__ import annotations
 from typing import Any
 
 
-SYNTHESIS_PROMPT_VERSION = "p4-v2-institutional"
+SYNTHESIS_PROMPT_VERSION = "p4-v3-cio-thesis"
 
+
+_COHERENT_THESIS = """
+Coherent investment thesis (mandatory — this is what separates a CIO memo from a template):
+- Before writing sections, form **one** central thesis about this portfolio in the current macro context
+  (e.g. what the allocator is optimizing for, what they are underweighting/overweighting, and what could break the thesis).
+- Populate JSON field `investment_thesis` with 4–7 sentences that weave together: portfolio shape, macro regime from the brief,
+  the dominant risk, and the direction of recommendations. This is the through-line of the entire memo.
+- Open `answer_markdown` with ## Investment Thesis containing that narrative (same substance as `investment_thesis`).
+- Every major section must **explicitly connect back** to the thesis (use causal language: because, therefore, however).
+- Do not treat sections as independent essays; scenarios, macro, risks, and recommendations must reinforce the same story.
+- Prioritize the **two or three issues that matter most** for these holdings; demote generic advice.
+"""
 
 _IC_MEMO_SECTIONS = """
 Structure `answer_markdown` as a single investment committee memo using these ## headings in order.
 Adapt depth to the user question, but include every section (brief subsections are fine if facts are thin):
+
+## Investment Thesis
+- 4–7 sentences: one coherent CIO narrative linking portfolio, macro, risks, and action (must match JSON `investment_thesis`)
 
 ## Executive Summary
 - Overall institutional assessment (2–4 sentences of judgment, not a holdings list)
@@ -68,8 +83,14 @@ def _question_tag_rubric(question_tag: str, question: str) -> str:
     rubrics: dict[str, str] = {
         "critique": (
             common
-            + "Primary lens: institutional PM / IC report on this portfolio. "
-            "Executive Summary and Investment Committee View must be the strongest sections."
+            + "Primary lens: institutional PM / IC critique of **this** portfolio.\n"
+            "Quality bar — ask yourself before each section:\n"
+            "- Would an experienced PM find this genuinely insightful, not obvious?\n"
+            "- Does it explain **why**, connect ideas, and prioritize what matters for **these** holdings?\n"
+            "- Would it teach the holder something they might not have noticed?\n"
+            "Executive Summary, Investment Thesis, and Investment Committee View must dominate. "
+            "Name specific tickers/sleeves from the brief when discussing risks, macro transmission, and scenarios. "
+            "Recommendations must be portfolio-specific (not generic 'add diversification')."
         ),
         "ranked_risks": (
             common
@@ -149,9 +170,12 @@ Anti-template rules:
 - Do not repeat the same paragraph structure in every section.
 - Do not open every section with 'The portfolio has…'
 
+{_COHERENT_THESIS}
+
 {_IC_MEMO_SECTIONS}
 
 Output **valid JSON only** with keys:
+- investment_thesis (string — 4–7 sentence through-line; must match ## Investment Thesis in answer_markdown)
 - answer_markdown (string — full memo markdown as specified above)
 - report_meta (object): portfolio_grade (string A–F), overall_assessment (string, 1–3 sentences)
 - citations (array of {{"fact_id": string, "excerpt": string}})

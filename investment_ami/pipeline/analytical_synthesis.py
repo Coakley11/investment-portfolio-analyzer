@@ -67,6 +67,19 @@ def _parse_model_json(content: str) -> dict[str, Any]:
         return {"answer_markdown": text, "citations": [], "uncertainties": [], "alternative_viewpoints": []}
 
 
+def _compose_answer_markdown(parsed: dict[str, Any]) -> str:
+    """Ensure investment thesis is visible even if model only populated the JSON field."""
+    answer = str(parsed.get("answer_markdown") or "").strip()
+    thesis = str(parsed.get("investment_thesis") or "").strip()
+    if not thesis:
+        return answer
+    low = answer.lower()
+    if "## investment thesis" in low:
+        return answer
+    block = f"## Investment Thesis\n\n{thesis}\n\n"
+    return block + answer if answer else block.strip()
+
+
 def _apply_grounding_footer(answer: str, grounding: dict[str, Any], limitations: list[str]) -> str:
     parts = [answer.strip()]
     if not grounding.get("ok"):
@@ -173,7 +186,7 @@ def synthesize_with_diagnostics(
 
     parsed = _parse_model_json(completion.content)
     diag.parsed_response = parsed
-    answer = str(parsed.get("answer_markdown") or "").strip()
+    answer = _compose_answer_markdown(parsed)
     if not answer:
         answer = "The model returned an empty answer. Please retry or refine your question."
 
