@@ -2020,6 +2020,13 @@ try:
 except Exception:
     pass
 
+try:
+    from investment_persistence_trace import render_ami_reasoning_laboratory
+
+    render_ami_reasoning_laboratory(st)
+except Exception:
+    pass
+
 if active_main_tab(_active_tab, "getting_started", beginner=beginner_mode):
     if beginner_mode:
         _change_goal_mode = st.session_state.get("_workflow_intent") == "change_goal"
@@ -3513,6 +3520,13 @@ try:
 
     if _PERSISTENCE_OK and investment_trace_enabled(st, persistence_ok=_PERSISTENCE_OK):
         snapshot_full_trace(st, persistence_ok=_PERSISTENCE_OK)
+except Exception:
+    pass
+try:
+    if _PERSISTENCE_OK:
+        from suite_user_persistence import clear_workspace_autosave_block
+
+        clear_workspace_autosave_block(st, "investment")
 except Exception:
     pass
 

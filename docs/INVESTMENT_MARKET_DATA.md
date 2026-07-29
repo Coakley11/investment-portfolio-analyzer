@@ -23,6 +23,10 @@ All Yahoo Finance access for portfolio analytics, ETF explorer, AMI overlap, and
 | `INVESTMENT_MARKET_DISK_CACHE` | true | Persist ETF/history to disk |
 | `INVESTMENT_EGRESS_STRICT` | false | Prefer cache/static over live retry |
 
+| `INVESTMENT_AMI_OPENAI_SESSION_CACHE` | true (1) | Dedupe identical OpenAI synthesis requests per Streamlit session |
+
+See also `docs/EGRESS_AUDIT_INVESTMENT_AND_MUSIC.md`.
+
 ## Developer diagnostics
 
 With developer mode enabled, sidebar panels:

@@ -1575,6 +1575,24 @@ def apply_suite_investment_resume(st: Any) -> None:
         pass
 
 
+# Post-save Supabase GET is only needed to verify explicit user-driven saves (Tests B–D).
+# End-of-run autosave runs every Streamlit rerun; readback would duplicate egress after each write.
+_CLOUD_READBACK_TRIGGERS = frozenset(
+    {
+        "mode_change",
+        "tab_change",
+        "global_setting_change",
+        "portfolio_change",
+        "insight_hydrate",
+        "insight_store",
+    }
+)
+
+
+def _needs_cloud_readback_after_save(trigger: str) -> bool:
+    return str(trigger or "").strip() in _CLOUD_READBACK_TRIGGERS
+
+
 def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str = "unknown") -> None:
     """Persist session snapshot with detailed autosave diagnostics (phone + Dell)."""
     import hashlib
@@ -1687,18 +1705,32 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             page, summary = session_page_summary(APP_ID, state)
             save_cloud_full_session(APP_ID, state, page=page, summary=summary)
             saved_cloud = True
-            cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
-            if cloud_state:
-                event["cloud_readback_experience"] = cloud_state.get(EXPERIENCE_KEY)
-                event["cloud_readback_persisted"] = cloud_state.get(PERSISTED_EXPERIENCE_KEY)
-                event["cloud_readback_tab"] = cloud_state.get(INVESTMENT_ACTIVE_TAB_KEY)
-                event["cloud_readback_portfolio_value"] = cloud_state.get("sidebar_portfolio_value")
-                event["cloud_readback_risk_free_pct"] = cloud_state.get("risk_free_pct")
-                event["cloud_readback_holdings_fingerprint"] = cloud_state.get("holdings_fingerprint")
-                readback_records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
-                event["cloud_readback_holdings_row_count"] = len(readback_records)
-                event["cloud_readback_has_holdings_df"] = bool(readback_records)
-            event["cloud_readback_ts"] = cloud_ts
+            if _needs_cloud_readback_after_save(trigger):
+                cloud_state, cloud_ts = load_cloud_full_session(APP_ID)
+                if cloud_state:
+                    event["cloud_readback_experience"] = cloud_state.get(EXPERIENCE_KEY)
+                    event["cloud_readback_persisted"] = cloud_state.get(PERSISTED_EXPERIENCE_KEY)
+                    event["cloud_readback_tab"] = cloud_state.get(INVESTMENT_ACTIVE_TAB_KEY)
+                    event["cloud_readback_portfolio_value"] = cloud_state.get("sidebar_portfolio_value")
+                    event["cloud_readback_risk_free_pct"] = cloud_state.get("risk_free_pct")
+                    event["cloud_readback_holdings_fingerprint"] = cloud_state.get("holdings_fingerprint")
+                    readback_records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
+                    event["cloud_readback_holdings_row_count"] = len(readback_records)
+                    event["cloud_readback_has_holdings_df"] = bool(readback_records)
+                event["cloud_readback_ts"] = cloud_ts
+                event["cloud_readback_source"] = "supabase_get"
+            else:
+                event["cloud_readback_experience"] = state.get(EXPERIENCE_KEY)
+                event["cloud_readback_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
+                event["cloud_readback_tab"] = state.get(INVESTMENT_ACTIVE_TAB_KEY)
+                event["cloud_readback_portfolio_value"] = state.get("sidebar_portfolio_value")
+                event["cloud_readback_risk_free_pct"] = state.get("risk_free_pct")
+                event["cloud_readback_holdings_fingerprint"] = state.get("holdings_fingerprint")
+                holdings_records = state.get("holdings_df") if isinstance(state.get("holdings_df"), list) else []
+                event["cloud_readback_holdings_row_count"] = len(holdings_records)
+                event["cloud_readback_has_holdings_df"] = bool(holdings_records)
+                event["cloud_readback_ts"] = event["at"]
+                event["cloud_readback_source"] = "local_after_save"
         except Exception as exc:
             event["cloud_save_error"] = str(exc)
 

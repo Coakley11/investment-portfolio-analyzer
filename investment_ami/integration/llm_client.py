@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -10,6 +11,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from investment_ami.integration.synthesis_config import openai_api_key
+
+_OPENAI_SESSION_CACHE_ENV = "INVESTMENT_AMI_OPENAI_SESSION_CACHE"
+_SESSION_CACHE_KEY = "_inv_ami_openai_completion_cache_v1"
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,65 @@ class ChatCompletionResult:
 
 class LlmClientError(RuntimeError):
     pass
+
+
+def _openai_session_cache_enabled() -> bool:
+    raw = str(os.environ.get(_OPENAI_SESSION_CACHE_ENV) or "1").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _completion_cache_key(*, model: str, messages: list[dict[str, str]], temperature: float) -> str:
+    blob = json.dumps(
+        {"model": model, "messages": messages, "temperature": temperature},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
+def _get_cached_completion(cache_key: str) -> ChatCompletionResult | None:
+    try:
+        import streamlit as st
+
+        bucket = st.session_state.get(_SESSION_CACHE_KEY)
+        if not isinstance(bucket, dict):
+            return None
+        raw = bucket.get(cache_key)
+        if not isinstance(raw, dict):
+            return None
+        return ChatCompletionResult(
+            content=str(raw.get("content") or ""),
+            model=str(raw.get("model") or ""),
+            prompt_tokens=_int_or_none(raw.get("prompt_tokens")),
+            completion_tokens=_int_or_none(raw.get("completion_tokens")),
+            total_tokens=_int_or_none(raw.get("total_tokens")),
+            raw_response=dict(raw.get("raw_response") or {}),
+        )
+    except Exception:
+        return None
+
+
+def _store_cached_completion(cache_key: str, result: ChatCompletionResult) -> None:
+    try:
+        import streamlit as st
+
+        bucket = st.session_state.get(_SESSION_CACHE_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket[cache_key] = {
+            "content": result.content,
+            "model": result.model,
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.total_tokens,
+            "raw_response": dict(result.raw_response or {}),
+        }
+        if len(bucket) > 12:
+            for old_key in list(bucket.keys())[:-12]:
+                bucket.pop(old_key, None)
+        st.session_state[_SESSION_CACHE_KEY] = bucket
+    except Exception:
+        pass
 
 
 def chat_completion_json(
@@ -54,6 +117,12 @@ def chat_completion_json(
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
+    if _openai_session_cache_enabled():
+        cache_key = _completion_cache_key(model=model, messages=messages, temperature=temperature)
+        cached = _get_cached_completion(cache_key)
+        if cached is not None and cached.content:
+            return cached
+
     req = urllib.request.Request(
         "https://api.openai.com/v1/chat/completions",
         data=json.dumps(body).encode("utf-8"),
@@ -77,7 +146,7 @@ def chat_completion_json(
         raise LlmClientError("OpenAI returned no choices")
     content = str((choices[0].get("message") or {}).get("content") or "")
     usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
-    return ChatCompletionResult(
+    result = ChatCompletionResult(
         content=content,
         model=str(raw.get("model") or model),
         prompt_tokens=_int_or_none(usage.get("prompt_tokens")),
@@ -85,6 +154,10 @@ def chat_completion_json(
         total_tokens=_int_or_none(usage.get("total_tokens")),
         raw_response=raw,
     )
+    if _openai_session_cache_enabled():
+        cache_key = _completion_cache_key(model=model, messages=messages, temperature=temperature)
+        _store_cached_completion(cache_key, result)
+    return result
 
 
 def _int_or_none(val: Any) -> int | None:
