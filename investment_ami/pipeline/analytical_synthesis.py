@@ -144,6 +144,8 @@ def synthesize_with_diagnostics(
             ],
             model=cfg.model,
             timeout_sec=cfg.timeout_sec,
+            temperature=0.28,
+            max_tokens=6000,
         )
     except LlmClientError as exc:
         diag.error = str(exc)
@@ -186,6 +188,12 @@ def synthesize_with_diagnostics(
 
     uncertainties = parsed.get("uncertainties") if isinstance(parsed.get("uncertainties"), list) else []
     alternatives = parsed.get("alternative_viewpoints") if isinstance(parsed.get("alternative_viewpoints"), list) else []
+    missing_info = parsed.get("missing_information") if isinstance(parsed.get("missing_information"), list) else []
+    report_meta = parsed.get("report_meta") if isinstance(parsed.get("report_meta"), dict) else {}
+    priority_recs = (
+        parsed.get("priority_recommendations") if isinstance(parsed.get("priority_recommendations"), dict) else {}
+    )
+    self_critique = str(parsed.get("self_critique") or "").strip()
 
     result = InvestmentSolverResult(
         short_answer=validated,
@@ -206,8 +214,13 @@ def synthesize_with_diagnostics(
         },
         analyst_sections={
             "direct_answer": validated,
+            "portfolio_analyst_view": str(report_meta.get("overall_assessment") or "").strip(),
+            "portfolio_grade": str(report_meta.get("portfolio_grade") or "").strip(),
             "uncertainties": "\n".join(f"- {u}" for u in uncertainties if str(u).strip()),
             "alternative_viewpoints": "\n".join(f"- {a}" for a in alternatives if str(a).strip()),
+            "missing_information": "\n".join(f"- {m}" for m in missing_info if str(m).strip()),
+            "priority_recommendations": json.dumps(priority_recs, indent=2) if priority_recs else "",
+            "self_critique": self_critique,
             "grounding_summary": json.dumps(diag.grounding, indent=2),
         },
     )

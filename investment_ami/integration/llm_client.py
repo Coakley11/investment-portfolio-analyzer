@@ -95,6 +95,7 @@ def chat_completion_json(
     model: str,
     timeout_sec: int = 90,
     temperature: float = 0.35,
+    max_tokens: int | None = None,
 ) -> ChatCompletionResult:
     mock = str(os.environ.get("INVESTMENT_AMI_SYNTHESIS_MOCK") or "").strip().lower() in ("1", "true", "yes")
     if mock:
@@ -111,12 +112,14 @@ def chat_completion_json(
     if not api_key:
         raise LlmClientError("OPENAI_API_KEY not configured (env or st.secrets openai.api_key).")
 
-    body = {
+    body: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
+    if max_tokens is not None and max_tokens > 0:
+        body["max_tokens"] = int(max_tokens)
     if _openai_session_cache_enabled():
         cache_key = _completion_cache_key(model=model, messages=messages, temperature=temperature)
         cached = _get_cached_completion(cache_key)
@@ -174,11 +177,26 @@ def _mock_json_response(messages: list[dict[str, str]]) -> str:
         "answer_markdown": (
             f"**Mock analytical synthesis** (INVESTMENT_AMI_SYNTHESIS_MOCK=1).\n\n"
             f"Question received: {q}…\n\n"
-            "This portfolio shows measurable concentration in the largest weights; "
-            "any change should weigh liquidity, tax, and macro assumptions noted in the brief limitations."
+            "## Executive Summary\n"
+            "Mock IC memo — enable live model for full institutional synthesis.\n\n"
+            "## Investment Committee View\n"
+            "Committee would debate concentration vs simplicity trade-off.\n"
         ),
+        "report_meta": {
+            "portfolio_grade": "B",
+            "overall_assessment": "Mock assessment for pipeline tests.",
+        },
         "citations": [{"fact_id": "concentration.summary", "excerpt": "concentration summary from brief"}],
         "uncertainties": ["Mock mode — not a live model response."],
         "alternative_viewpoints": ["A more defensive posture would raise bonds at the cost of expected return."],
+        "missing_information": ["Tax and liquidity needs not in brief (mock)."],
+        "priority_recommendations": {
+            "highest_priority": "Mock: review largest weight (test).",
+            "greatest_impact": "Mock.",
+            "least_effort": "Mock.",
+            "implement_now": "Mock.",
+            "monitor_only": "Mock.",
+        },
+        "self_critique": "Mock self-critique.",
     }
     return json.dumps(payload)
