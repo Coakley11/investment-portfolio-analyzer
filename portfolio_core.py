@@ -2257,6 +2257,10 @@ class InvestmentPlanResult:
     monthly_contribution: float
     summary_lines: list[str]
     educational_notes: list[str]
+    money_needed_1_2_years: float = 0.0
+    planned_large_expenses: float = 0.0
+    long_term_allocation_pct: float = 0.0
+    safer_sleeve_allocation_pct: float = 0.0
 
     def to_dict(self) -> dict[str, float | list[str]]:
         """Stable dict view (includes legacy key aliases for UI fallbacks)."""
@@ -2269,10 +2273,31 @@ class InvestmentPlanResult:
             "suggested_long_term_amount": self.long_term_suggested,
             "suggested_safer_amount": self.short_term_investable,
             "monthly_contribution": self.monthly_contribution,
+            "money_needed_1_2_years": self.money_needed_1_2_years,
+            "planned_large_expenses": self.planned_large_expenses,
+            "long_term_allocation_pct": self.long_term_allocation_pct,
+            "safer_sleeve_allocation_pct": self.safer_sleeve_allocation_pct,
             "summary_lines": list(self.summary_lines),
             "educational_notes": list(self.educational_notes),
             "rationale": list(self.educational_notes),
         }
+
+
+def investment_plan_long_term_pct(*, horizon_years: int, risk_tolerance: str) -> float:
+    """
+    Share of *investable* cash suggested for long-term investing (remainder → safer sleeve).
+
+    Base by horizon: ≤2y → 30%, ≤5y → 60%, else 85%. Adjusted by risk tolerance (Low −12pp, High +5pp),
+    clipped to 20%–92%. Documented for UI transparency; logic may change in a future redesign.
+    """
+    if horizon_years <= 2:
+        long_pct = 0.30
+    elif horizon_years <= 5:
+        long_pct = 0.60
+    else:
+        long_pct = 0.85
+    risk_adj = {"Low": -0.12, "Medium": 0.0, "High": 0.05}.get(risk_tolerance, 0.0)
+    return float(np.clip(long_pct + risk_adj, 0.20, 0.92))
 
 
 def compute_investment_plan(
@@ -2287,38 +2312,42 @@ def compute_investment_plan(
 ) -> InvestmentPlanResult:
     """Educational estimate of how much cash may be available to invest."""
     emergency = max(0.0, float(emergency_fund_needed))
-    short_term = max(0.0, float(money_needed_1_2_years) + float(planned_large_expenses))
+    near_term = max(0.0, float(money_needed_1_2_years))
+    planned_exp = max(0.0, float(planned_large_expenses))
+    short_term = near_term + planned_exp
     debt = max(0.0, float(existing_debt_obligations))
     total = max(0.0, float(total_available))
     reserved = emergency + short_term + debt
     investable = max(0.0, total - reserved)
 
-    if horizon_years <= 2:
-        long_pct = 0.30
-    elif horizon_years <= 5:
-        long_pct = 0.60
-    else:
-        long_pct = 0.85
-    risk_adj = {"Low": -0.12, "Medium": 0.0, "High": 0.05}.get(risk_tolerance, 0.0)
-    long_pct = float(np.clip(long_pct + risk_adj, 0.20, 0.92))
+    long_pct = investment_plan_long_term_pct(
+        horizon_years=int(horizon_years),
+        risk_tolerance=str(risk_tolerance),
+    )
+    safer_pct = 1.0 - long_pct
+    long_term = round(investable * long_pct)
+    short_term_inv = max(0.0, round(investable) - long_term)
 
-    long_term = investable * long_pct
-    short_term_inv = investable - long_term
+    pct_label = f"{long_pct * 100:.0f}%"
+    safer_label = f"{safer_pct * 100:.0f}%"
 
     summary = [
-        f"Total available: ${total:,.0f}",
-        f"Suggested emergency reserve: ${emergency:,.0f}",
-        f"Short-term needs (1–2 years + planned expenses): ${short_term:,.0f}",
-        f"Debt / obligations set aside: ${debt:,.0f}",
-        f"Amount potentially available to invest: ${investable:,.0f}",
-        f"Model suggests for long-term investing: ${long_term:,.0f}",
-        f"Model suggests for shorter-term / safer sleeve: ${short_term_inv:,.0f}",
+        f"Total available cash: ${total:,.0f}",
+        f"Emergency fund reserved: ${emergency:,.0f}",
+        f"Money needed in 1–2 years: ${near_term:,.0f}",
+        f"Planned large expenses reserved: ${planned_exp:,.0f}",
+        f"Debt / obligations reserved: ${debt:,.0f}",
+        f"Maximum potentially available to invest: ${investable:,.0f}",
+        f"Long-term sleeve ({pct_label} of investable): ${long_term:,.0f}",
+        f"Conservative / short-term reserve ({safer_label} of investable): ${short_term_inv:,.0f}",
     ]
     if monthly_contribution > 0:
         summary.append(f"Optional monthly contribution noted: ${monthly_contribution:,.0f}/month")
 
     notes = [
-        "Based on these inputs, the model suggests separating money you may need soon from long-term investable amounts.",
+        "Investable amount = total cash − emergency − near-term needs − planned expenses − debt obligations.",
+        f"Long-term vs safer split uses {pct_label} / {safer_label} of the investable amount "
+        f"(from horizon {horizon_years}y and {risk_tolerance} risk tolerance).",
         "Consider keeping short-term needs in cash or T-bill style assets — educational estimate only.",
         "This is for educational purposes only, not financial advice.",
     ]
@@ -2328,11 +2357,15 @@ def compute_investment_plan(
         short_term_cash_amount=short_term,
         debt_reserve=debt,
         amount_potentially_investable=investable,
-        long_term_suggested=long_term,
-        short_term_investable=short_term_inv,
+        long_term_suggested=float(long_term),
+        short_term_investable=float(short_term_inv),
         monthly_contribution=float(monthly_contribution),
         summary_lines=summary,
         educational_notes=notes,
+        money_needed_1_2_years=near_term,
+        planned_large_expenses=planned_exp,
+        long_term_allocation_pct=long_pct,
+        safer_sleeve_allocation_pct=safer_pct,
     )
 
 

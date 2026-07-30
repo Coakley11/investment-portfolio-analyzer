@@ -2320,9 +2320,16 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
                 settings, tickers=tickers, weights=weights, key_prefix="invest_plan_beginner"
             )
         with input_tabs[1]:
+            from components.investment_planning import holding_dollar_from_weight
+            from components.ui_helpers import format_money_cents
+
             alloc_preview = st.session_state.holdings_df.copy()
-            alloc_preview["Value ($)"] = (alloc_preview["Weight (%)"].fillna(0) / 100.0 * pv).map(_money)
-            st.caption(f"Based on portfolio value **{_money(pv)}** from the sidebar.")
+            weights = alloc_preview["Weight (%)"].fillna(0).astype(float)
+            alloc_preview["Value ($)"] = [
+                format_money_cents(holding_dollar_from_weight(portfolio_value=pv, weight_pct=w))
+                for w in weights
+            ]
+            st.caption(f"Dollar amounts use portfolio value **{_money(pv)}** from the sidebar.")
             st.dataframe(alloc_preview, use_container_width=True, hide_index=True)
         with input_tabs[2]:
             render_implementation_guide(
@@ -2338,8 +2345,16 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
             settings, tickers=tickers, weights=weights, key_prefix="invest_plan_advanced"
         )
         st.markdown("#### Dollar amounts (based on portfolio value)")
+        from components.investment_planning import holding_dollar_from_weight
+        from components.ui_helpers import format_money_cents
+
         alloc_preview = st.session_state.holdings_df.copy()
-        alloc_preview["Value ($)"] = (alloc_preview["Weight (%)"].fillna(0) / 100.0 * pv).map(_money)
+        weights = alloc_preview["Weight (%)"].fillna(0).astype(float)
+        alloc_preview["Value ($)"] = [
+            format_money_cents(holding_dollar_from_weight(portfolio_value=pv, weight_pct=w))
+            for w in weights
+        ]
+        st.caption(f"Each row: portfolio value × weight (e.g. {_money(pv)} × 60% = {format_money_cents(holding_dollar_from_weight(portfolio_value=pv, weight_pct=60.0))}).")
         st.dataframe(alloc_preview, use_container_width=True, hide_index=True)
         st.markdown("---")
         render_implementation_guide(

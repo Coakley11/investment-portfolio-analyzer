@@ -132,9 +132,13 @@ def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> 
     )
 
 
-def request_sidebar_portfolio_value(value: int | float) -> None:
+def request_sidebar_portfolio_value(value: int | float, *, force: bool = False) -> None:
     """Queue portfolio value change for the next run (avoids Streamlit widget key conflict)."""
-    st.session_state[PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY] = int(value)
+    rounded = int(round(float(value)))
+    st.session_state[PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY] = rounded
+    st.session_state["investment_plan_applied_portfolio_value"] = rounded
+    if force:
+        st.session_state.pop("_suite_inv_portfolio_value_user_set", None)
 
 
 def is_beginner_mode(settings: dict) -> bool:
@@ -314,6 +318,12 @@ def refresh_market_data_sidebar() -> bool:
     )
     if clicked:
         st.cache_data.clear()
+        try:
+            from investment_market_data import invalidate_all_market_data_caches
+
+            invalidate_all_market_data_caches()
+        except Exception:
+            pass
         from components.macro_engine import clear_forward_projection_cache
 
         clear_forward_projection_cache()
@@ -343,6 +353,10 @@ def refresh_market_data_sidebar() -> bool:
 
 def format_money(x: float) -> str:
     return f"${x:,.0f}"
+
+
+def format_money_cents(x: float) -> str:
+    return f"${x:,.2f}"
 
 
 def add_value_column(df, weight_col: str, total_value: float, value_col: str = "Value ($)") -> "pd.DataFrame":

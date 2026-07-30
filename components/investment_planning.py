@@ -5,13 +5,20 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import streamlit as st
 
 import portfolio_core as core
-from components.ui_helpers import APP_DISCLAIMER, is_beginner_mode, request_sidebar_portfolio_value
+from components.ui_helpers import APP_DISCLAIMER, format_money_cents, is_beginner_mode, request_sidebar_portfolio_value
 
 DISCLAIMER = f"Educational estimate only. {APP_DISCLAIMER}"
+
+# User-facing label for short_term_investable (internal field name unchanged).
+CONSERVATIVE_ALLOCATION_LABEL = "Conservative / short-term reserve"
+CONSERVATIVE_ALLOCATION_HELP = (
+    "Cash the model suggests keeping in lower-risk or short-horizon holdings "
+    "(not the same as your 1–2 year spending reserve above). "
+    "Often held in bonds, T-bills, or cash-like assets until you deploy it."
+)
 
 # Dict keys from older callers / fallbacks mapped to InvestmentPlanResult fields.
 _PLAN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -32,11 +39,11 @@ _PLAN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "monthly_contribution": ("monthly_contribution",),
     "summary_lines": ("summary_lines", "summary", "rationale"),
     "educational_notes": ("educational_notes", "explanation", "notes"),
+    "money_needed_1_2_years": ("money_needed_1_2_years",),
+    "planned_large_expenses": ("planned_large_expenses",),
+    "long_term_allocation_pct": ("long_term_allocation_pct",),
+    "safer_sleeve_allocation_pct": ("safer_sleeve_allocation_pct",),
 }
-
-
-def _money(x: float) -> str:
-    return f"${x:,.0f}"
 
 
 def coerce_plan_integer(value: Any, fallback: int) -> int:
@@ -47,7 +54,7 @@ def coerce_plan_integer(value: Any, fallback: int) -> int:
     if isinstance(value, bool):
         return fb
     if isinstance(value, int):
-        return max(0, value)
+        return max(0, int(value))
     if isinstance(value, float):
         if np.isnan(value):
             return fb
@@ -60,6 +67,392 @@ def coerce_plan_integer(value: Any, fallback: int) -> int:
         return max(0, int(float(cleaned)))
     except (TypeError, ValueError):
         return fb
+
+
+def _money(x: float) -> str:
+    return f"${round(float(x)):,.0f}"
+
+
+def _money_exact(x: float) -> str:
+    return format_money_cents(float(x))
+
+
+def normalize_compare_amounts(raw: list[Any] | None) -> list[float]:
+    """Positive, deduplicated compare amounts (2 decimal precision)."""
+    seen: set[float] = set()
+    out: list[float] = []
+    for item in raw or []:
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            val = float(item)
+        else:
+            text = str(item or "").strip().replace(",", "").replace("$", "")
+            if not text:
+                continue
+            try:
+                val = float(text)
+            except ValueError:
+                continue
+        if val <= 0 or np.isnan(val):
+            continue
+        key = round(val, 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return sorted(out)
+
+
+def holding_dollar_from_weight(*, portfolio_value: float, weight_pct: float) -> float:
+    """Dollar allocation from weight % and portfolio value (2 dp)."""
+    return round(float(portfolio_value) * float(weight_pct) / 100.0, 2)
+
+
+def build_investable_waterfall_markdown(
+    *,
+    total: float,
+    emergency: float,
+    near_term: float,
+    planned_expenses: float,
+    debt: float,
+    investable: float,
+) -> str:
+    """Show subtraction steps for maximum investable amount."""
+    t = round(total)
+    e = round(emergency)
+    n = round(near_term)
+    p = round(planned_expenses)
+    d = round(debt)
+    inv = round(investable)
+    lines = [
+        "**Available to invest (waterfall)**",
+        "",
+        f"- Total available cash: {_money(t)}",
+        f"- Emergency fund reserved: − {_money(e)}",
+        f"- Money needed in the next 1–2 years: − {_money(n)}",
+        f"- Existing debt / obligations: − {_money(d)}",
+        f"- Planned large expenses: − {_money(p)}",
+        "",
+        f"**Maximum potentially available to invest** = {_money(t)} − {_money(e)} − {_money(n)} − {_money(d)} − {_money(p)} = **{_money(inv)}**",
+    ]
+    return "\n".join(lines)
+
+
+def build_sleeve_split_markdown(
+    *,
+    investable: float,
+    long_term: float,
+    safer: float,
+    long_pct: float,
+    safer_pct: float,
+) -> str:
+    inv = round(investable)
+    lt = round(long_term)
+    sf = round(safer)
+    lp = long_pct * 100.0
+    sp = safer_pct * 100.0
+    return (
+        f"**Sleeve split (applied to {_money(inv)} investable)**\n\n"
+        f"- Long-term investment allocation: **{lp:.0f}%** → {_money(lt)} "
+        f"(_{_money_exact(inv * long_pct)} before rounding_)\n"
+        f"- {CONSERVATIVE_ALLOCATION_LABEL}: **{sp:.0f}%** → {_money(sf)} "
+        f"(_remainder after long-term rounding; totals {_money(lt + sf)}_)"
+    )
+
+
+def build_allocation_assumptions_markdown(
+    *,
+    horizon_years: int,
+    risk_tolerance: str,
+    long_pct: float,
+    safer_pct: float,
+) -> str:
+    lp = long_pct * 100.0
+    sp = safer_pct * 100.0
+    return (
+        "**Recommendation assumptions**\n\n"
+        f"- Investment horizon: **{int(horizon_years)} years**\n"
+        f"- Risk tolerance: **{risk_tolerance}**\n"
+        f"- Current allocation rule: **{lp:.0f}% long-term** / **{sp:.0f}% conservative** "
+        f"(applied to the maximum investable amount only)"
+    )
+
+
+def _render_applied_portfolio_value_banner(*, key_prefix: str) -> None:
+    """Persistent status for portfolio value driving allocation tables."""
+    applied = st.session_state.get("investment_plan_applied_portfolio_value")
+    source = str(st.session_state.get("investment_plan_applied_source") or "")
+    if applied is None:
+        sidebar_pv = st.session_state.get("sidebar_portfolio_value")
+        if sidebar_pv is not None:
+            st.caption(
+                f"Portfolio value in the sidebar is **{_money(float(sidebar_pv))}**. "
+                "Use **Step 4** below to apply a recommended amount from this plan."
+            )
+        return
+    src_note = ""
+    if source == "long_term":
+        src_note = " (recommended long-term amount)"
+    elif source == "max_investable":
+        src_note = " (maximum investable amount)"
+    st.markdown(
+        f"""
+<div style="background:rgba(46,204,113,0.12);border:1px solid rgba(46,204,113,0.45);
+border-radius:8px;padding:0.75rem 1rem;margin:0.5rem 0 1rem 0;">
+<strong>Current portfolio value:</strong> {_money(float(applied))} ✓{src_note}<br/>
+<span style="font-size:0.85rem;color:#94a3b8;">This value drives <em>Dollar amounts (based on portfolio value)</em> below.</span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def _apply_plan_portfolio_value(amount: float, *, source: str) -> None:
+    request_sidebar_portfolio_value(amount, force=True)
+    st.session_state.capital_deployed = True
+    st.session_state.investment_plan_applied_portfolio_value = int(round(float(amount)))
+    st.session_state.investment_plan_applied_source = str(source)
+
+
+def _render_portfolio_value_buttons(
+    *,
+    key_prefix: str,
+    amount_investable: float,
+    long_term_suggested: float,
+    beginner: bool,
+) -> None:
+    inv = round(amount_investable)
+    lt = round(long_term_suggested)
+    st.markdown("##### Step 4 — Apply to portfolio value")
+    st.caption(
+        "Choose which dollar total powers **Portfolio value** in the sidebar and the allocation table. "
+        "This is **not** your total cash from Step 1."
+    )
+    st.markdown("**Recommended**")
+    primary_label = f"Use Recommended Long-Term Amount ({_money(lt)}) as Portfolio Value"
+    if st.button(
+        primary_label,
+        type="primary",
+        use_container_width=True,
+        key=f"{key_prefix}_apply_long_term_primary",
+    ):
+        _apply_plan_portfolio_value(lt, source="long_term")
+        st.rerun()
+    st.caption(
+        "Best default for long-horizon portfolio analysis — uses the long-term portion from Step 3."
+    )
+    st.markdown("**Alternative**")
+    secondary_label = f"Use Maximum Investable Amount ({_money(inv)}) as Portfolio Value"
+    if st.button(
+        secondary_label,
+        use_container_width=True,
+        key=f"{key_prefix}_apply_investable_secondary",
+    ):
+        _apply_plan_portfolio_value(inv, source="max_investable")
+        st.rerun()
+    st.caption(
+        "Uses the full investable amount before the long-term / conservative split (Step 3)."
+    )
+
+
+def _render_compare_investment_amounts(
+    *,
+    key_prefix: str,
+    plan: core.InvestmentPlanResult,
+    beginner: bool,
+) -> None:
+    list_key = f"{key_prefix}_compare_amounts_list"
+    if list_key not in st.session_state or not isinstance(st.session_state.get(list_key), list):
+        st.session_state[list_key] = []
+
+    inv = round(float(plan.amount_potentially_investable))
+    lt = round(float(plan.long_term_suggested))
+    st.markdown("##### Compare investment amounts")
+    st.caption("Add any dollar amounts to compare simple one-year model projections (optional).")
+
+    c_add, c_scenario = st.columns([2, 1])
+    with c_add:
+        new_amt = st.number_input(
+            "Custom amount ($)",
+            min_value=0,
+            max_value=50_000_000,
+            value=0,
+            step=1_000,
+            key=f"{key_prefix}_compare_new_amount",
+        )
+        if st.button("Add amount", key=f"{key_prefix}_compare_add"):
+            merged = normalize_compare_amounts(list(st.session_state[list_key]) + [new_amt])
+            st.session_state[list_key] = merged
+            st.rerun()
+    with c_scenario:
+        if st.button(f"Add max investable ({_money(inv)})", key=f"{key_prefix}_compare_add_inv"):
+            st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [inv])
+            st.rerun()
+        if st.button(f"Add long-term ({_money(lt)})", key=f"{key_prefix}_compare_add_lt"):
+            st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [lt])
+            st.rerun()
+
+    amounts = normalize_compare_amounts(st.session_state.get(list_key))
+    st.session_state[list_key] = amounts
+
+    if not amounts:
+        st.caption("No comparison amounts yet — add a custom value or use a scenario button.")
+        return
+
+    st.markdown("**Current comparison amounts**")
+    for idx, amt in enumerate(amounts):
+        c_label, c_remove = st.columns([4, 1])
+        with c_label:
+            st.text(_money(amt))
+        with c_remove:
+            if st.button("Remove", key=f"{key_prefix}_compare_rm_{idx}"):
+                remaining = [a for i, a in enumerate(amounts) if i != idx]
+                st.session_state[list_key] = remaining
+                st.rerun()
+
+    edit_amt = st.number_input(
+        "Edit selected amount ($)",
+        min_value=0.0,
+        max_value=50_000_000.0,
+        value=float(amounts[0]),
+        step=1000.0,
+        key=f"{key_prefix}_compare_edit_value",
+    )
+    edit_idx = st.number_input(
+        "Index to replace (0 = first)",
+        min_value=0,
+        max_value=max(0, len(amounts) - 1),
+        value=0,
+        step=1,
+        key=f"{key_prefix}_compare_edit_idx",
+    )
+    if st.button("Save edited amount", key=f"{key_prefix}_compare_save_edit"):
+        updated = list(amounts)
+        if 0 <= int(edit_idx) < len(updated):
+            updated[int(edit_idx)] = float(edit_amt)
+        st.session_state[list_key] = normalize_compare_amounts(updated)
+        st.rerun()
+
+    if st.button("Clear all comparison amounts", key=f"{key_prefix}_compare_clear"):
+        st.session_state[list_key] = []
+        st.rerun()
+
+    compare_amounts = normalize_compare_amounts(st.session_state.get(list_key))
+    if compare_amounts and st.session_state.get("plan_compare_return") is not None:
+        ann_ret = float(st.session_state["plan_compare_return"])
+        rows = []
+        for amt in compare_amounts:
+            proj = amt * (1 + ann_ret)
+            rows.append(
+                {
+                    "If you invest": _money(amt),
+                    "Est. value in 1 year (model)": _money(proj),
+                    "Est. change": _money(proj - amt),
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _render_plan_results(
+    plan: core.InvestmentPlanResult,
+    *,
+    key_prefix: str,
+    beginner: bool,
+    total_cash: float,
+    emergency: float,
+    horizon_years: int,
+    risk_tolerance: str,
+) -> None:
+    long_term_suggested = float(_plan_field(plan, "long_term_suggested", 0.0))
+    amount_investable = float(_plan_field(plan, "amount_potentially_investable", 0.0))
+    safer = float(_plan_field(plan, "short_term_investable", 0.0))
+    long_pct = float(_plan_field(plan, "long_term_allocation_pct", 0.0))
+    safer_pct = float(_plan_field(plan, "safer_sleeve_allocation_pct", 0.0))
+    if safer_pct <= 0 and long_pct > 0:
+        safer_pct = 1.0 - long_pct
+    near_term = float(_plan_field(plan, "money_needed_1_2_years", 0.0))
+    planned_exp = float(_plan_field(plan, "planned_large_expenses", 0.0))
+    debt = float(_plan_field(plan, "debt_reserve", 0.0))
+    protected = float(emergency) + near_term + planned_exp + debt
+
+    st.markdown("##### Your plan at a glance")
+    st.caption(
+        "Follow the steps: cash on hand → protected amounts → investable total → "
+        "long-term vs conservative split → portfolio value for allocation tables."
+    )
+    _render_applied_portfolio_value_banner(key_prefix=key_prefix)
+
+    st.markdown("##### Step 1 — Total cash and protected amounts")
+    st.markdown(
+        build_investable_waterfall_markdown(
+            total=float(total_cash),
+            emergency=float(emergency),
+            near_term=near_term,
+            planned_expenses=planned_exp,
+            debt=debt,
+            investable=amount_investable,
+        )
+    )
+
+    st.markdown("##### Step 2 — Maximum investable amount")
+    st.markdown(
+        f"After reserves, **{_money(amount_investable)}** is the maximum that could be invested "
+        f"while keeping **{_money(protected)}** protected (not double-counted in the split below)."
+    )
+
+    st.markdown("##### Step 3 — Recommended split of investable cash")
+    if long_pct > 0:
+        st.markdown(
+            build_allocation_assumptions_markdown(
+                horizon_years=horizon_years,
+                risk_tolerance=risk_tolerance,
+                long_pct=long_pct,
+                safer_pct=safer_pct,
+            )
+        )
+        st.markdown(
+            build_sleeve_split_markdown(
+                investable=amount_investable,
+                long_term=long_term_suggested,
+                safer=safer,
+                long_pct=long_pct,
+                safer_pct=safer_pct,
+            )
+        )
+    st.markdown(
+        f"**{CONSERVATIVE_ALLOCATION_LABEL}** — {CONSERVATIVE_ALLOCATION_HELP}"
+    )
+
+    st.markdown("##### Summary")
+    st.markdown(
+        "| Step | Concept | Amount |\n|------|--------|--------|\n"
+        f"| 1 | Total available cash (not portfolio value) | **{_money(total_cash)}** |\n"
+        f"| 1 | Protected cash & obligations | **{_money(protected)}** |\n"
+        f"| 2 | Maximum potentially available to invest | **{_money(amount_investable)}** |\n"
+        f"| 3 | Recommended long-term investment amount | **{_money(long_term_suggested)}** |\n"
+        f"| 3 | Recommended {CONSERVATIVE_ALLOCATION_LABEL.lower()} | **{_money(safer)}** |"
+    )
+
+    if beginner:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Step 1: Total cash", _money(float(total_cash)))
+        m2.metric("Step 2: Max investable", _money(amount_investable))
+        m3.metric("Step 3: Long-term rec.", _money(long_term_suggested))
+
+    notes = _plan_field(plan, "educational_notes", [])
+    if notes:
+        with st.expander("How the long-term / conservative split works", expanded=False):
+            for note in notes:
+                st.markdown(f"- {note}")
+
+    _render_portfolio_value_buttons(
+        key_prefix=key_prefix,
+        amount_investable=amount_investable,
+        long_term_suggested=long_term_suggested,
+        beginner=beginner,
+    )
+    _render_applied_portfolio_value_banner(key_prefix=key_prefix)
+    with st.expander("Compare investment amounts (optional)", expanded=not beginner):
+        _render_compare_investment_amounts(key_prefix=key_prefix, plan=plan, beginner=beginner)
 
 
 def plan_integer_from_session(key: str, fallback: int) -> int:
@@ -146,6 +539,10 @@ def _normalize_investment_plan(raw: Any) -> core.InvestmentPlanResult:
         monthly_contribution=monthly,
         summary_lines=list(summary),
         educational_notes=list(notes),
+        money_needed_1_2_years=float(_plan_field(raw, "money_needed_1_2_years", 0.0)),
+        planned_large_expenses=float(_plan_field(raw, "planned_large_expenses", 0.0)),
+        long_term_allocation_pct=float(_plan_field(raw, "long_term_allocation_pct", 0.0)),
+        safer_sleeve_allocation_pct=float(_plan_field(raw, "safer_sleeve_allocation_pct", 0.0)),
     )
 
 
@@ -162,30 +559,26 @@ def _fallback_investment_plan(
 ) -> core.InvestmentPlanResult:
     """Local fallback when portfolio_core.compute_investment_plan is unavailable."""
     emergency = max(0.0, emergency_fund_needed)
-    short_term = max(0.0, money_needed_1_2_years + planned_large_expenses)
+    near_term = max(0.0, money_needed_1_2_years)
+    planned_exp = max(0.0, planned_large_expenses)
+    short_term = near_term + planned_exp
     debt = max(0.0, existing_debt_obligations)
     total = max(0.0, total_available)
     investable = max(0.0, total - emergency - short_term - debt)
 
-    if horizon_years <= 2:
-        long_pct = 0.30
-    elif horizon_years <= 5:
-        long_pct = 0.60
+    long_pct_fn = getattr(core, "investment_plan_long_term_pct", None)
+    if callable(long_pct_fn):
+        long_pct = float(long_pct_fn(horizon_years=int(horizon_years), risk_tolerance=str(risk_tolerance)))
     else:
         long_pct = 0.85
-    risk_adj = {"Low": -0.12, "Medium": 0.0, "High": 0.05}.get(risk_tolerance, 0.0)
-    long_pct = min(0.92, max(0.20, long_pct + risk_adj))
-    long_term = investable * long_pct
-    short_inv = investable - long_term
+    safer_pct = 1.0 - long_pct
+    long_term = round(investable * long_pct)
+    short_inv = max(0.0, round(investable) - long_term)
 
     summary = [
-        f"Total available: {_money(total)}",
-        f"Suggested emergency reserve: {_money(emergency)}",
-        f"Short-term needs (1–2 years + planned expenses): {_money(short_term)}",
-        f"Debt / obligations set aside: {_money(debt)}",
-        f"Amount potentially available to invest: {_money(investable)}",
-        f"Model suggests for long-term investing: {_money(long_term)}",
-        f"Model suggests for shorter-term / safer sleeve: {_money(short_inv)}",
+        f"Maximum potentially available to invest: {_money(investable)}",
+        f"Long-term sleeve ({long_pct * 100:.0f}%): {_money(long_term)}",
+        f"Safer sleeve ({safer_pct * 100:.0f}%): {_money(short_inv)}",
     ]
     if monthly_contribution > 0:
         summary.append(f"Optional monthly contribution noted: {_money(monthly_contribution)}/month")
@@ -196,15 +589,18 @@ def _fallback_investment_plan(
         short_term_cash_amount=short_term,
         debt_reserve=debt,
         amount_potentially_investable=investable,
-        long_term_suggested=long_term,
-        short_term_investable=short_inv,
+        long_term_suggested=float(long_term),
+        short_term_investable=float(short_inv),
         monthly_contribution=float(monthly_contribution),
         summary_lines=summary,
         educational_notes=[
             "Simplified on-page estimate (core planner unavailable).",
-            "Consider keeping short-term needs in cash or T-bill style assets.",
             "Educational purposes only — not financial advice.",
         ],
+        money_needed_1_2_years=near_term,
+        planned_large_expenses=planned_exp,
+        long_term_allocation_pct=long_pct,
+        safer_sleeve_allocation_pct=safer_pct,
     )
 
 
@@ -358,90 +754,15 @@ def render_how_much_to_invest(
     )
     st.session_state.investment_plan = plan
 
-    long_term_suggested = float(_plan_field(plan, "long_term_suggested", 0.0))
-    amount_investable = float(_plan_field(plan, "amount_potentially_investable", 0.0))
-
-    if beginner:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Available Cash", _money(float(total_cash)))
-        m2.metric("Emergency Reserve", _money(float(emergency)))
-        m3.metric("Investable Amount", _money(amount_investable))
-        st.markdown(
-            f"Based on your inputs, the model suggests approximately **{_money(long_term_suggested)}** "
-            f"may be available for **long-term investing** "
-            f"(from **{_money(amount_investable)}** potentially investable after reserves)."
-        )
-        with st.expander("Adjust planning details", expanded=False):
-            st.caption("Optional: apply this amount as your portfolio value for dollar estimates.")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button(
-                "Use investable amount as portfolio value",
-                use_container_width=True,
-                key=f"{key_prefix}_apply_investable",
-            ):
-                request_sidebar_portfolio_value(amount_investable)
-                st.session_state.plan_total_cash = int(total_cash)
-                st.session_state.capital_deployed = True
-                st.success(f"Portfolio value set to {_money(amount_investable)}.")
-                st.rerun()
-        with b2:
-            if st.button(
-                "Use long-term sleeve only",
-                use_container_width=True,
-                key=f"{key_prefix}_apply_long_term",
-            ):
-                request_sidebar_portfolio_value(long_term_suggested)
-                st.session_state.capital_deployed = True
-                st.success(f"Portfolio value set to {_money(long_term_suggested)}.")
-                st.rerun()
-    else:
-        summary_lines = _plan_field(plan, "summary_lines", [])
-        st.markdown("##### Model summary")
-        for line in summary_lines or []:
-            st.markdown(f"- {line}")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button(
-                "Use long-term amount as portfolio value",
-                use_container_width=True,
-                key=f"{key_prefix}_apply_long_term_adv",
-            ):
-                request_sidebar_portfolio_value(long_term_suggested)
-                st.session_state.capital_deployed = True
-                st.success(f"Portfolio value set to {_money(long_term_suggested)} for analysis.")
-                st.rerun()
-        with b2:
-            if st.button(
-                "Use full investable amount",
-                use_container_width=True,
-                key=f"{key_prefix}_apply_investable_adv",
-            ):
-                request_sidebar_portfolio_value(amount_investable)
-                st.session_state.capital_deployed = True
-                st.success(f"Portfolio value set to {_money(amount_investable)}.")
-                st.rerun()
-
-        with st.expander("Compare investment amounts", expanded=False):
-            compare_amounts = st.multiselect(
-                "Amounts to compare ($)",
-                options=[25_000, 50_000, 100_000, 150_000, 200_000, 500_000],
-                default=[50_000, 100_000, 200_000],
-                key=f"{key_prefix}_plan_compare_amounts",
-            )
-            if compare_amounts and st.session_state.get("plan_compare_return") is not None:
-                ann_ret = float(st.session_state["plan_compare_return"])
-                rows = []
-                for amt in compare_amounts:
-                    proj = amt * (1 + ann_ret)
-                    rows.append(
-                        {
-                            "If you invest": _money(amt),
-                            "Est. value in 1 year (model)": _money(proj),
-                            "Est. change": _money(proj - amt),
-                        }
-                    )
-                st.dataframe(rows, use_container_width=True, hide_index=True)
+    _render_plan_results(
+        plan,
+        key_prefix=key_prefix,
+        beginner=beginner,
+        total_cash=float(total_cash),
+        emergency=float(emergency),
+        horizon_years=int(horizon),
+        risk_tolerance=str(risk),
+    )
 
     st.caption(DISCLAIMER)
     return plan
