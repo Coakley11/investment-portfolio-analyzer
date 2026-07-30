@@ -359,6 +359,27 @@ def format_money_cents(x: float) -> str:
     return f"${x:,.2f}"
 
 
+def holding_dollar_from_weight(
+    portfolio_value: float,
+    weight: float,
+    *,
+    weight_pct: float | None = None,
+) -> float:
+    """
+    Holding dollar value from portfolio value and allocation weight.
+
+    Weights in holdings tables are **percentages** (e.g. 60 means 60%, not 0.60).
+    Values in (0, 1] are treated as decimal proportions for safety.
+    """
+    pv = max(float(portfolio_value or 0), 0.0)
+    w = weight_pct if weight_pct is not None else weight
+    w = float(w or 0)
+    if w > 1.0:
+        w = w / 100.0
+    w = min(max(w, 0.0), 1.0)
+    return round(pv * w, 2)
+
+
 def add_value_column(df, weight_col: str, total_value: float, value_col: str = "Value ($)") -> "pd.DataFrame":
     """Add dollar column from weight percentages and total portfolio value."""
     import pandas as pd

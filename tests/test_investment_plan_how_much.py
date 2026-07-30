@@ -61,7 +61,14 @@ def test_eighty_five_fifteen_split_rounding():
 
 
 def test_holding_dollar_from_weight_example():
-    assert holding_dollar_from_weight(portfolio_value=43_881, weight_pct=60.0) == 26_328.60
+    assert holding_dollar_from_weight(43_881, 60.0) == 26_328.60
+    assert holding_dollar_from_weight(43_881, 0.60) == 26_328.60
+
+
+def test_holding_dollar_from_weight_ui_helpers():
+    from components.ui_helpers import holding_dollar_from_weight as fn
+
+    assert fn(43_881, 60) == 26_328.60
 
 
 def test_request_sidebar_portfolio_value_long_term_force(monkeypatch):

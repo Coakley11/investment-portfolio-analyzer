@@ -8,7 +8,7 @@ import numpy as np
 import streamlit as st
 
 import portfolio_core as core
-from components.ui_helpers import APP_DISCLAIMER, format_money_cents, is_beginner_mode, request_sidebar_portfolio_value
+from components.ui_helpers import APP_DISCLAIMER, format_money_cents, holding_dollar_from_weight, is_beginner_mode, request_sidebar_portfolio_value
 
 DISCLAIMER = f"Educational estimate only. {APP_DISCLAIMER}"
 
@@ -100,11 +100,6 @@ def normalize_compare_amounts(raw: list[Any] | None) -> list[float]:
         seen.add(key)
         out.append(key)
     return sorted(out)
-
-
-def holding_dollar_from_weight(*, portfolio_value: float, weight_pct: float) -> float:
-    """Dollar allocation from weight % and portfolio value (2 dp)."""
-    return round(float(portfolio_value) * float(weight_pct) / 100.0, 2)
 
 
 def build_investable_waterfall_markdown(
