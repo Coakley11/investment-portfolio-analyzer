@@ -1096,6 +1096,9 @@ def build_return_insight_payload(
         live = getattr(result, "live_metrics", None)
         if isinstance(computed, dict):
             key_numbers.update({k: v for k, v in computed.items() if v is not None})
+            layout = str(computed.get("insights_layout") or "").strip()
+            if layout:
+                key_numbers["insights_layout"] = layout
         if isinstance(live, dict):
             key_numbers.update({f"live_{k}": v for k, v in list(live.items())[:6]})
         sections = getattr(result, "analyst_sections", None)
@@ -2126,6 +2129,47 @@ def clear_pending_insight(st: Any) -> None:
     st.session_state.pop(SESSION_RETURN_CONTEXT_KEY, None)
 
 
+def _is_legacy_decision_support_conclusion(conclusion: str) -> bool:
+    text = str(conclusion or "")
+    if "### Investment Allocation Advisor" in text or "### Cash Reserve Analysis" in text:
+        return True
+    if "Framework `ds-v1`" in text or "Framework ds-v1" in text:
+        return True
+    if "placeholder scoring" in text.lower():
+        return True
+    return False
+
+
+def _resolve_insight_analyst_sections(data: dict[str, Any]) -> tuple[dict[str, Any] | None, bool, bool]:
+    """
+    Return (sections, is_decision_support_layout, is_legacy_stale_markdown).
+
+    Legacy stale: pre-af8cbc7 insights stored full markdown in ``conclusion`` without structured sections.
+    """
+    sections: dict[str, Any] | None = None
+    if isinstance(data.get("analyst_sections"), dict):
+        sections = dict(data["analyst_sections"])
+    kn = data.get("key_numbers")
+    if sections is None and isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
+        sections = dict(kn["analyst_sections"])
+
+    problem = str(data.get("problem_type") or (kn or {}).get("problem_type") or "").strip()
+    is_ds_intent = problem in ("allocation_advisor", "cash_reserve_advisor")
+
+    if isinstance(sections, dict) and str(sections.get("insights_layout") or "") == "decision_support":
+        return sections, True, False
+
+    conclusion = str(data.get("conclusion") or "")
+    if _is_legacy_decision_support_conclusion(conclusion) or (
+        is_ds_intent and _is_legacy_decision_support_conclusion(conclusion)
+    ):
+        return None, True, True
+    if is_ds_intent and conclusion.startswith("###"):
+        return None, True, True
+
+    return sections, False, False
+
+
 def render_applied_math_insight_panel(
     st: Any,
     *,
@@ -2151,16 +2195,16 @@ def render_applied_math_insight_panel(
                     st.rerun()
             except ImportError:
                 pass
-        sections = data.get("analyst_sections")
-        if not isinstance(sections, dict) or not sections:
-            kn = data.get("key_numbers")
-            if isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
-                sections = kn.get("analyst_sections")
-        if isinstance(sections, dict) and sections:
+        sections, is_decision_support, legacy_stale = _resolve_insight_analyst_sections(data)
+        if legacy_stale:
+            st.info(
+                "This insight was saved in an **older AMI layout**. Submit the question again to refresh "
+                "with the structured Assessment / Facts Used / Information Needed format."
+            )
+        elif isinstance(sections, dict) and sections:
             from investment_ami_answer_format import render_investment_page_insight_markdown
 
             exp = str(data.get("experience_mode") or "").lower()
-            is_decision_support = str(sections.get("insights_layout") or "") == "decision_support"
             body = render_investment_page_insight_markdown(
                 sections,
                 beginner="beginner" in exp,
@@ -2170,10 +2214,9 @@ def render_applied_math_insight_panel(
                 st.markdown(body)
             elif not is_decision_support:
                 st.markdown(f"**Conclusion:** {data.get('conclusion')}")
-        else:
+        elif not legacy_stale:
             st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         show_details = str(source_app or data.get("source_app") or "").strip().lower() != "investment"
-        is_decision_support = isinstance(sections, dict) and sections.get("insights_layout") == "decision_support"
         if is_decision_support and str(source_app or data.get("source_app") or "").strip().lower() == "investment":
             try:
                 from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS

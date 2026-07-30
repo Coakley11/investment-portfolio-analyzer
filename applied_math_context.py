@@ -266,8 +266,8 @@ def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict
     ):
         if key in session_state and session_state.get(key) is not None:
             ctx[key] = session_state[key]
-    if session_state.get("investment_plan_generated"):
-        ctx["investment_plan_generated"] = True
+    if session_state.get("sidebar_portfolio_value") is not None:
+        ctx["sidebar_portfolio_value"] = session_state["sidebar_portfolio_value"]
     plan = session_state.get("investment_plan")
     if plan is not None:
         ctx["investment_plan"] = plan

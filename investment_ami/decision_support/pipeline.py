@@ -37,6 +37,7 @@ def decision_support_to_solver_payload(response: DecisionSupportResponse) -> dic
         "computed": {
             "ami_engine_id": response.module_id,
             "decision_support_version": DECISION_SUPPORT_VERSION,
+            "insights_layout": "decision_support",
             "applied_rule_ids": list(response.applied_rule_ids),
             "insights_layout": "decision_support",
             "decision_support": {

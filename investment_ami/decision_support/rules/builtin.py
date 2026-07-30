@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from investment_ami.decision_support.models import FinancialSnapshot, ReasoningFinding
 from investment_ami.decision_support.modules import MODULE_ALLOCATION_ADVISOR, MODULE_CASH_RESERVE
+from investment_ami.decision_support.question_topics import is_invested_amount_question, is_monthly_contribution_question
 from investment_ami.decision_support.rules import DecisionRule, GLOBAL_RULE_REGISTRY
 
 
@@ -35,6 +36,11 @@ class MonthlyContributionRule(_BaseRule):
         "should i decrease",
     )
 
+    def matches(self, snapshot: FinancialSnapshot, question: str) -> bool:
+        if is_invested_amount_question(question):
+            return False
+        return is_monthly_contribution_question(question) or super().matches(snapshot, question)
+
     def analyze(self, snapshot: FinancialSnapshot, question: str) -> ReasoningFinding | None:
         q = question.lower()
         contrib = snapshot.monthly_contribution
@@ -62,7 +68,66 @@ class MonthlyContributionRule(_BaseRule):
             concern="Contributing too much while cash is thin can force selling investments at the wrong time.",
             suggested_action=action,
             trade_off="Higher contributions accelerate growth but reduce liquidity for surprises.",
-            confidence="medium" if contrib is not None else "placeholder",
+            confidence="medium" if contrib is not None else "medium",
+        )
+
+
+class InvestedAmountAppropriateRule:
+    rule_id = "alloc_invested_amount"
+    module_id = MODULE_ALLOCATION_ADVISOR
+    topics = ("invested_amount", "cash_vs_invested")
+
+    def matches(self, snapshot: FinancialSnapshot, question: str) -> bool:
+        return is_invested_amount_question(question)
+
+    def analyze(self, snapshot: FinancialSnapshot, question: str) -> ReasoningFinding | None:
+        pv = snapshot.portfolio_value
+        target = snapshot.long_term_suggested
+        investable = snapshot.investable_amount
+        obs_parts: list[str] = []
+        if pv is not None:
+            obs_parts.append(f"Portfolio value **{_money(pv)}** vs plan context.")
+        if target is not None:
+            obs_parts.append(f"Suggested long-term deployment **{_money(target)}**.")
+        if investable is not None:
+            obs_parts.append(f"Potentially investable after reserves **{_money(investable)}**.")
+        reserve_note = []
+        if snapshot.emergency_fund_target:
+            reserve_note.append(f"emergency **{_money(snapshot.emergency_fund_target)}**")
+        if snapshot.near_term_cash_needs:
+            reserve_note.append(f"near-term **{_money(snapshot.near_term_cash_needs)}**")
+        if snapshot.debt_obligations:
+            reserve_note.append(f"debt reserve **{_money(snapshot.debt_obligations)}**")
+        if reserve_note:
+            obs_parts.append("Protected amounts: " + ", ".join(reserve_note) + ".")
+        if snapshot.risk_tolerance:
+            obs_parts.append(f"Stated risk tolerance: **{snapshot.risk_tolerance}**.")
+        if snapshot.horizon_years:
+            obs_parts.append(f"Horizon: **{snapshot.horizon_years} years**.")
+
+        action = (
+            "Compare portfolio value to the plan's long-term suggested amount and remaining investable cash; "
+            "fund reserves before increasing market exposure."
+        )
+        if pv is not None and target is not None and pv < target * 0.85:
+            action = (
+                "Consider deploying additional cash toward long-term investments in line with your risk tolerance, "
+                "without reducing emergency or near-term reserves."
+            )
+        elif pv is not None and investable is not None and investable > (pv or 0) + 5000:
+            action = (
+                "You may be holding more uninvested cash than the plan suggests — stage investing in tranches "
+                "while keeping obligated reserves liquid."
+            )
+
+        return ReasoningFinding(
+            rule_id=self.rule_id,
+            topic="invested_amount",
+            observation=" ".join(obs_parts) or "Review portfolio value against plan investable and long-term targets.",
+            concern="Being underinvested slows compounding; being overinvested without reserves increases forced-selling risk.",
+            suggested_action=action,
+            trade_off="Deploying more cash raises expected return but reduces liquidity for shocks and planned spending.",
+            confidence="medium" if pv is not None and target is not None else "low",
         )
 
 
@@ -391,6 +456,7 @@ class BaselineAllocationContextRule:
 
 def register_default_rules() -> None:
     for rule in (
+        InvestedAmountAppropriateRule(),
         MonthlyContributionRule(),
         LumpSumVsDcaRule(),
         DebtBeforeInvestRule(),

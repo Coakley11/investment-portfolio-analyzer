@@ -179,14 +179,44 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         self.assertIn("67,000", facts)
         self.assertNotIn("Limited plan data", response.assessment)
 
-    def test_information_needed_listed_once(self) -> None:
-        response = run_decision_support_module(
-            MODULE_ALLOCATION_ADVISOR,
-            {k: v for k, v in self._CTX.items() if k not in ("monthly_expenses",)},
-            question="Am I investing enough?",
+    def test_invested_amount_question_routing_and_rule(self) -> None:
+        q = (
+            "Given my total net worth and financial situation, "
+            "is the amount I currently have invested appropriate?"
         )
-        self.assertTrue(response.information_needed_markdown)
-        self.assertLessEqual(response.information_needed_markdown.lower().count("monthly income"), 1)
+        self.assertEqual(detect_investment_send_intent(q, ""), "allocation_advisor")
+        ctx = dict(self._CTX)
+        ctx["sidebar_portfolio_value"] = 45_000
+        ctx["investment_plan_generated"] = True
+        response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=q)
+        self.assertIn("alloc_invested_amount", response.applied_rule_ids)
+        self.assertNotIn("alloc_monthly_contribution", response.applied_rule_ids)
+        self.assertIn("portfolio", response.assessment.lower())
+        self.assertNotIn("contribution assessment", response.assessment.lower())
+        visible = user_visible_markdown(response).lower()
+        self.assertNotIn("framework ds-v1", visible)
+        self.assertNotIn("placeholder", visible)
+
+    def test_invested_amount_rendered_sections(self) -> None:
+        q = "Am I underinvested given my plan?"
+        ctx = {**self._CTX, "sidebar_portfolio_value": 30_000, "investment_plan_generated": True}
+        result = run_instant_engine("allocation_advisor", ctx, beginner=False, question=q)
+        sections = result.analyst_sections or {}
+        body = render_investment_page_insight_markdown(sections)
+        self.assertIn("**Assessment**", body)
+        self.assertNotIn("Conclusion:", body)
+        self.assertNotIn("### Investment Allocation Advisor", body)
+
+    def test_legacy_conclusion_detected(self) -> None:
+        from applied_math_return_insight import _is_legacy_decision_support_conclusion, _resolve_insight_analyst_sections
+
+        legacy = "### Investment Allocation Advisor\n\nFramework `ds-v1`"
+        self.assertTrue(_is_legacy_decision_support_conclusion(legacy))
+        _sections, is_ds, stale = _resolve_insight_analyst_sections(
+            {"conclusion": legacy, "problem_type": "allocation_advisor"}
+        )
+        self.assertTrue(is_ds)
+        self.assertTrue(stale)
 
 
 if __name__ == "__main__":

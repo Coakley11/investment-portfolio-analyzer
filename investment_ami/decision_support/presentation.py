@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from typing import Any
+from investment_ami.decision_support.question_topics import is_invested_amount_question, is_monthly_contribution_question
 
 from investment_ami.decision_support.models import DecisionSupportResponse, FinancialSnapshot, ReasoningFinding
 
@@ -54,12 +53,26 @@ def build_facts_used(snapshot: FinancialSnapshot) -> list[str]:
 
 def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list[str]:
     q = question.lower()
-    items: list[str] = []
+    if is_invested_amount_question(q):
+        items: list[str] = []
+        if snapshot.portfolio_value is None:
+            items.append("Current portfolio value (sidebar portfolio value or holdings)")
+        if snapshot.long_term_suggested is None and snapshot.investable_amount is None:
+            items.append("How Much Should I Invest plan (investable and long-term suggested amounts)")
+        if snapshot.total_available_cash is None:
+            items.append("Total available cash from your plan")
+        if not snapshot.risk_tolerance:
+            items.append("Risk tolerance from your plan")
+        if snapshot.horizon_years is None:
+            items.append("Investment time horizon from your plan")
+        return items
+
+    items = []
     if snapshot.monthly_income is None:
         items.append("Monthly after-tax income")
     if snapshot.monthly_expenses is None and snapshot.question_expense_after is None:
         items.append("Monthly essential expenses")
-    if not snapshot.monthly_contribution_known:
+    if not snapshot.monthly_contribution_known and is_monthly_contribution_question(q):
         items.append("Current monthly contribution (from How Much Should I Invest?)")
     if not snapshot.job_stability:
         items.append("Job or income stability")
@@ -127,6 +140,51 @@ def _investing_enough_assessment(snapshot: FinancialSnapshot) -> str:
     return base
 
 
+def _invested_amount_assessment(snapshot: FinancialSnapshot) -> str:
+    pv = snapshot.portfolio_value
+    target = snapshot.long_term_suggested
+    investable = snapshot.investable_amount
+    cash = snapshot.total_available_cash
+
+    if pv is None:
+        return (
+            "AMI cannot judge whether your **invested amount** is appropriate without a "
+            "current **portfolio value**. Set portfolio value in the sidebar or complete your holdings."
+        )
+
+    parts: list[str] = [f"Your current portfolio is about **{_money(pv)}**."]
+
+    if target is not None and target > 0:
+        if pv < target * 0.85:
+            parts.append(
+                f"That is **below** your plan's suggested long-term deployment "
+                f"(**{_money(target)}**) — you may be **underinvested** relative to cash available after reserves."
+            )
+        elif pv > target * 1.15:
+            parts.append(
+                f"That is **above** the suggested long-term amount (**{_money(target)}**) — "
+                "confirm emergency fund, near-term needs, and debt reserves are fully covered before adding risk."
+            )
+        else:
+            parts.append(
+                f"That is **broadly in line** with your plan's suggested long-term amount (**{_money(target)}**)."
+            )
+
+    if investable is not None and cash is not None:
+        uninvested = max(0.0, investable - min(pv, investable))
+        if investable > pv + 5000:
+            parts.append(
+                f"You still show about **{_money(investable)}** potentially investable after reserves "
+                f"vs **{_money(pv)}** deployed — you may be **holding excess cash** relative to the plan."
+            )
+        elif uninvested <= 5000 and investable > 0:
+            parts.append(
+                "Most of the plan's investable cushion appears deployed; focus next on contribution pace and rebalancing."
+            )
+
+    return " ".join(parts)
+
+
 def build_assessment(
     *,
     question: str,
@@ -134,7 +192,12 @@ def build_assessment(
     findings: list[ReasoningFinding],
 ) -> str:
     q = question.lower()
-    if "investing enough" in q or "invest enough" in q:
+    if is_invested_amount_question(q):
+        for f in findings:
+            if f.rule_id == "alloc_invested_amount":
+                return f.observation.split(".")[0] + "." if f.observation else _invested_amount_assessment(snapshot)
+        return _invested_amount_assessment(snapshot)
+    if is_monthly_contribution_question(q) or ("investing enough" in q and "invested" not in q):
         return _investing_enough_assessment(snapshot)
     if "lost my job" in q or "lose my job" in q:
         for f in findings:
@@ -156,9 +219,11 @@ def build_assessment(
             if sentence:
                 return sentence.split(".")[0] + ("." if not sentence.endswith(".") else "")
     if build_facts_used(snapshot):
+        if is_invested_amount_question(q):
+            return _invested_amount_assessment(snapshot)
         return (
             "AMI reviewed your saved plan inputs below. "
-            "Add any missing income and expense details for a sharper contribution assessment."
+            "Add any missing income and expense details for a sharper answer."
         )
     return (
         "AMI needs a few more financial inputs before it can give a specific recommendation. "

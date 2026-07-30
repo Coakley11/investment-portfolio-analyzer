@@ -276,6 +276,10 @@ _ALLOCATION_ADVISOR_PHRASES = (
     "how much should i invest",
     "invest this month",
     "investing enough",
+    "invested appropriate",
+    "amount i have invested",
+    "underinvested",
+    "should more of my available assets be invested",
     "increase my monthly",
     "decrease my monthly",
     "monthly contribution",
@@ -334,6 +338,13 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "macro_inflation"
     if _is_recession_question(q):
         return "macro_recession"
+    try:
+        from investment_ami.decision_support.question_topics import is_invested_amount_question
+
+        if is_invested_amount_question(q):
+            return "allocation_advisor"
+    except ImportError:
+        pass
     if any(p in q for p in _CASH_RESERVE_ADVISOR_PHRASES):
         return "cash_reserve_advisor"
     if any(p in q for p in _ALLOCATION_ADVISOR_PHRASES):
