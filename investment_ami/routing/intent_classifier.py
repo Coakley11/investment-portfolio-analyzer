@@ -193,6 +193,8 @@ def classify_routing_intent(
             "sector_exposure",
             "valuation",
             "rebalance_allocation",
+            "allocation_advisor",
+            "cash_reserve_advisor",
         }
     )
     if legacy in calc_legacy and reasoning < 2.5:

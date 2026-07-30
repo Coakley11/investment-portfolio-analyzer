@@ -76,6 +76,8 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "macro_recession",
         "macro_inflation",
         "allocation_recommendation",
+        "allocation_advisor",
+        "cash_reserve_advisor",
         "analytical_synthesis",
     }
 )
@@ -245,6 +247,55 @@ _INFLATION_PHRASES = (
     "cost of living",
 )
 
+_CASH_RESERVE_ADVISOR_PHRASES = (
+    "emergency fund",
+    "keep more cash",
+    "hold more cash",
+    "invest more of my savings",
+    "saving too much cash",
+    "lost my job",
+    "lose my job",
+    "what if i lost my job",
+    "job tomorrow",
+    "expenses increased",
+    "expenses decreased",
+    "expense increased",
+    "expense decreased",
+    "income became less predictable",
+    "income less predictable",
+    "unpredictable income",
+    "buy a house",
+    "buying a house",
+    "large purchase",
+    "next 12 months",
+    "should i invest less",
+    "can i safely invest more",
+)
+
+_ALLOCATION_ADVISOR_PHRASES = (
+    "how much should i invest",
+    "invest this month",
+    "investing enough",
+    "increase my monthly",
+    "decrease my monthly",
+    "monthly contribution",
+    "pause investing",
+    "lump sum",
+    "dollar-cost average",
+    "dollar cost average",
+    "pay off debt before",
+    "pay down debt",
+    "debt before investing",
+    "financial setup",
+    "financial situation",
+    "critique my current investment strategy",
+    "investing too aggressive",
+    "investing too conservative",
+    "invest too aggressive",
+    "invest too conservative",
+    "am i saving too much cash",
+)
+
 
 def investment_ami_default_question(source_page: str) -> str:
     page = str(source_page or "").strip().lower()
@@ -283,6 +334,14 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "macro_inflation"
     if _is_recession_question(q):
         return "macro_recession"
+    if any(p in q for p in _CASH_RESERVE_ADVISOR_PHRASES):
+        return "cash_reserve_advisor"
+    if any(p in q for p in _ALLOCATION_ADVISOR_PHRASES):
+        return "allocation_advisor"
+    if "what would you change" in q and any(
+        w in q for w in ("financial", "money", "save", "invest", "cash", "debt", "fund")
+    ):
+        return "allocation_advisor"
     if any(p in q for p in _SCENARIO_PHRASES):
         return "scenario_stress"
     if any(p in q for p in _DIVERSIFICATION_PHRASES):

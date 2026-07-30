@@ -7,7 +7,7 @@ import unittest
 from investment_ami_allocation import allocation_recommendation_answer
 from investment_ami_answer_format import render_analyst_sections_markdown
 from investment_ami_context import detect_investment_send_intent
-from investment_ami_instant_solver import solve_instant_investment_insight
+from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID, solve_instant_investment_insight
 from investment_ami_sliders import (
     build_scenario_params_from_sliders,
     refresh_investment_insight_from_params,
@@ -280,7 +280,7 @@ class TestAmiSliders(unittest.TestCase):
         stored = store_mock.call_args[0][0]
         self.assertEqual(stored.get("insight_id"), "stable-store-id")
         self.assertIn("scenario_params", stored)
-        self.assertEqual(stored.get("solver_build_id"), "investment-ami-v2-phase2j-allocation-diag1")
+        self.assertEqual(stored.get("solver_build_id"), INVESTMENT_AMI_BUILD_ID)
         self.assertTrue(stored.get("scenario_refreshed_at"))
         sections = stored.get("analyst_sections") or {}
         self.assertIn("proposed_portfolio", sections)

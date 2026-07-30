@@ -127,6 +127,14 @@ def solve_phase2_or_structured(
         result = education_answer(ctx, beginner=beginner, question=question)
     elif intent == "risk_reduction":
         result = behavioral_finance_answer(ctx, beginner=beginner, question=question)
+    elif intent == "allocation_advisor":
+        from investment_ami.pipeline.instant import run_instant_engine
+
+        result = run_instant_engine("allocation_advisor", ctx, beginner=beginner, question=question)
+    elif intent == "cash_reserve_advisor":
+        from investment_ami.pipeline.instant import run_instant_engine
+
+        result = run_instant_engine("cash_reserve_advisor", ctx, beginner=beginner, question=question)
     else:
         return None
     route = _route_for_intent(intent)

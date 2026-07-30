@@ -20,7 +20,7 @@ class TestInvestmentAmiPhase2(unittest.TestCase):
     }
 
     def test_build_id_phase2(self) -> None:
-        self.assertIn("phase2", INVESTMENT_AMI_BUILD_ID)
+        self.assertEqual(INVESTMENT_AMI_BUILD_ID, "investment-ami-ds-v1")
 
     def test_concentration_has_analyst_sections(self) -> None:
         solved = solve_instant_investment_insight("Is my portfolio too concentrated?", self._CTX)
