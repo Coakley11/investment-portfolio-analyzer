@@ -194,6 +194,17 @@ _BEGINNER_INVESTMENT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
+DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
+    ("direct_answer", "Assessment"),
+    ("key_variables", "Facts Used"),
+    ("portfolio_analyst_view", "What AMI Observes"),
+    ("recommended_actions", "Suggested Next Steps"),
+    ("tradeoffs", "Trade-Offs"),
+    ("risk_notes", "Information Needed"),
+    ("methodology", "Confidence"),
+)
+
+
 def render_investment_page_insight_markdown(
     sections: dict[str, Any] | None,
     *,
@@ -203,6 +214,16 @@ def render_investment_page_insight_markdown(
     """Concise action-oriented insight card for the Investment app page."""
     if not isinstance(sections, dict) or not sections:
         return ""
+    if str(sections.get("insights_layout") or "") == "decision_support":
+        parts: list[str] = []
+        for key, label in DECISION_SUPPORT_PAGE_SECTION_ORDER:
+            body = str(sections.get(key) or "").strip()
+            if body:
+                parts.append(f"**{label}**\n\n{body}")
+        disclaimer = str(sections.get("assumptions") or "").strip()
+        if disclaimer:
+            parts.append(disclaimer)
+        return "\n\n".join(parts)
     order = _BEGINNER_INVESTMENT_PAGE_SECTION_ORDER if beginner else INVESTMENT_PAGE_SECTION_ORDER
     parts: list[str] = []
     for key, label in order:

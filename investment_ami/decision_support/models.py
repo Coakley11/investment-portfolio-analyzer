@@ -35,6 +35,7 @@ class FinancialSnapshot:
     upcoming_major_purchase: str = ""
     question_expense_before: float | None = None
     question_expense_after: float | None = None
+    monthly_contribution_known: bool = False
     raw_context_keys: tuple[str, ...] = ()
     limitations: list[str] = field(default_factory=list)
 
@@ -87,3 +88,8 @@ class DecisionSupportResponse:
     limitations: list[str]
     findings: list[ReasoningFinding] = field(default_factory=list)
     applied_rule_ids: tuple[str, ...] = ()
+    assessment: str = ""
+    information_needed: list[str] = field(default_factory=list)
+    confidence_pct: int = 65
+    confidence_note: str = ""
+    information_needed_markdown: str = ""

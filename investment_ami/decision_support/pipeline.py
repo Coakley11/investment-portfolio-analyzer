@@ -21,33 +21,32 @@ def run_decision_support_module(
 ) -> DecisionSupportResponse:
     snapshot = build_financial_snapshot(context, question=question)
     findings = run_financial_analysis(module_id, snapshot, question)
-    return build_decision_support_response(module_id, snapshot, question, findings)
+    from investment_ami.decision_support.presentation import finalize_decision_support_response
+
+    return finalize_decision_support_response(module_id, snapshot, question, findings)
 
 
 def decision_support_to_solver_payload(response: DecisionSupportResponse) -> dict[str, Any]:
-    md = format_decision_support_markdown(response)
+    from investment_ami.decision_support.presentation import render_user_analyst_sections
+
+    sections = render_user_analyst_sections(response)
     return {
-        "short_answer": md,
-        "math_idea": "Rule-based decision support from financial snapshot + extensible reasoning rules.",
-        "confidence_pct": 72 if response.confidence != "placeholder" else 65,
+        "short_answer": response.assessment,
+        "math_idea": "",
+        "confidence_pct": response.confidence_pct,
         "computed": {
             "ami_engine_id": response.module_id,
             "decision_support_version": DECISION_SUPPORT_VERSION,
             "applied_rule_ids": list(response.applied_rule_ids),
+            "insights_layout": "decision_support",
             "decision_support": {
                 "facts": response.facts,
                 "observations": response.observations,
-                "concerns": response.concerns,
                 "suggested_actions": response.suggested_actions,
                 "trade_offs": response.trade_offs,
                 "confidence": response.confidence,
+                "confidence_pct": response.confidence_pct,
             },
         },
-        "analyst_sections": {
-            "facts": "\n".join(f"- {x}" for x in response.facts),
-            "observations": "\n".join(f"- {x}" for x in response.observations),
-            "concerns": "\n".join(f"- {x}" for x in response.concerns),
-            "suggested_actions": "\n".join(f"- {x}" for x in response.suggested_actions),
-            "trade_offs": "\n".join(f"- {x}" for x in response.trade_offs),
-        },
+        "analyst_sections": sections,
     }

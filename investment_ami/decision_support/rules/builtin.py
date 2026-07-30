@@ -378,21 +378,13 @@ class BaselineAllocationContextRule:
         return True
 
     def analyze(self, snapshot: FinancialSnapshot, question: str) -> ReasoningFinding | None:
-        facts = snapshot.to_facts_dict()
-        if not facts:
-            return ReasoningFinding(
-                rule_id=self.rule_id,
-                topic="baseline",
-                observation="Limited plan data was available — add cash, emergency, and horizon inputs for sharper guidance.",
-                suggested_action="Complete the How Much Should I Invest inputs, then re-ask this question.",
-                confidence="placeholder",
-            )
-        parts = [f"**{k.replace('_', ' ')}**: {v}" for k, v in list(facts.items())[:8]]
+        if snapshot.to_facts_dict():
+            return None
         return ReasoningFinding(
             rule_id=self.rule_id,
             topic="baseline",
-            observation="From your data: " + "; ".join(parts) + ".",
-            suggested_action="Use reserves and investable amounts as upper bounds before increasing risk or contributions.",
+            observation="Limited plan data was available — add cash, emergency, and horizon inputs for sharper guidance.",
+            suggested_action="Complete the How Much Should I Invest inputs, then re-ask this question.",
             confidence="medium",
         )
 

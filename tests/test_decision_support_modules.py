@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import unittest
 
+import portfolio_core as core
+
+from applied_math_context import build_investment_applied_math_context
 from investment_ami.decision_support.modules import MODULE_ALLOCATION_ADVISOR, MODULE_CASH_RESERVE
 from investment_ami.decision_support.pipeline import run_decision_support_module
+from investment_ami.decision_support.presentation import render_user_analyst_sections, user_visible_markdown
+from investment_ami_answer_format import render_investment_page_insight_markdown
 from investment_ami.pipeline.instant import run_instant_engine
 from investment_ami_context import detect_investment_send_intent, intent_supported
 
@@ -15,10 +20,13 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         "plan_total_cash": 120_000,
         "plan_emergency": 30_000,
         "plan_near_term": 10_000,
+        "plan_debt": 5_000,
+        "plan_expenses": 8_000,
         "plan_monthly": 2_000,
-        "monthly_expenses": 5_000,
         "plan_horizon": 20,
         "plan_risk": "moderate",
+        "investment_plan_generated": True,
+        "monthly_expenses": 5_000,
     }
 
     def test_allocation_monthly_question_applies_rules(self) -> None:
@@ -28,8 +36,7 @@ class DecisionSupportPipelineTests(unittest.TestCase):
             question="How much should I invest this month?",
         )
         self.assertIn("alloc_monthly_contribution", response.applied_rule_ids)
-        self.assertIn("alloc_baseline_context", response.applied_rule_ids)
-        self.assertTrue(response.suggested_actions)
+        self.assertTrue(response.assessment)
         self.assertTrue(response.facts)
 
     def test_cash_emergency_fund_question(self) -> None:
@@ -47,24 +54,25 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         self.assertEqual(intent, "allocation_advisor")
         self.assertTrue(intent_supported(intent))
         result = run_instant_engine(intent, self._CTX, beginner=True, question=q)
-        self.assertIn("Investment Allocation Advisor", result.short_answer)
+        self.assertNotIn("###", result.short_answer)
         self.assertEqual(result.computed.get("decision_support_version"), "ds-v1")
+        sections = result.analyst_sections or {}
+        self.assertEqual(sections.get("insights_layout"), "decision_support")
 
     def test_cash_intent_job_loss(self) -> None:
         intent = detect_investment_send_intent("What if I lost my job?", "")
         self.assertEqual(intent, "cash_reserve_advisor")
         result = run_instant_engine(intent, self._CTX, beginner=False, question="What if I lost my job?")
-        self.assertIn("Cash Reserve", result.short_answer)
         self.assertIn("Pause or reduce", result.short_answer)
 
     def test_expense_shift_question_compares_levels(self) -> None:
         q = "My monthly expenses increased from $5,000 to $7,000. How should that affect my investing?"
         response = run_decision_support_module(MODULE_CASH_RESERVE, dict(self._CTX), question=q)
-        joined = " ".join(response.observations)
+        joined = " ".join([response.assessment] + response.observations)
         self.assertIn("5,000", joined)
         self.assertIn("7,000", joined)
-        self.assertIn("30,000", joined)  # 6 * 5000
-        self.assertIn("42,000", joined)  # 6 * 7000
+        self.assertIn("30,000", joined)
+        self.assertIn("42,000", joined)
 
     def test_portfolio_questions_not_captured_by_decision_support(self) -> None:
         self.assertEqual(
@@ -85,8 +93,100 @@ class DecisionSupportPipelineTests(unittest.TestCase):
             question="How much should I invest this month?",
         )
         facts_joined = " ".join(response.facts).lower()
-        self.assertNotIn("monthly income", facts_joined)
-        self.assertTrue(any("income" in x.lower() for x in response.limitations))
+        self.assertNotIn("monthly income:", facts_joined)
+        self.assertTrue(response.information_needed)
+
+    def test_user_visible_output_has_no_internal_tokens(self) -> None:
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            dict(self._CTX),
+            question="Am I investing enough?",
+        )
+        visible = user_visible_markdown(response).lower()
+        self.assertNotIn("placeholder", visible)
+        self.assertNotIn("framework ds-v1", visible)
+        self.assertNotIn("ds-v1", visible)
+
+    def test_single_confidence_in_rendered_sections(self) -> None:
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            dict(self._CTX),
+            question="Am I investing enough?",
+        )
+        sections = render_user_analyst_sections(response)
+        body = render_investment_page_insight_markdown(sections, beginner=False)
+        self.assertEqual(body.count("**Confidence**"), 1)
+        self.assertIn("**Assessment**", body)
+        self.assertNotIn("Conclusion:", body)
+
+    def test_explicit_zero_monthly_contribution(self) -> None:
+        ctx = dict(self._CTX)
+        ctx["plan_monthly"] = 0
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            ctx,
+            question="Am I investing enough?",
+        )
+        self.assertIn("$0", response.assessment)
+        facts = " ".join(response.facts)
+        self.assertIn("$0", facts)
+
+    def test_investing_enough_starts_with_direct_assessment(self) -> None:
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            dict(self._CTX),
+            question="Am I investing enough?",
+        )
+        self.assertTrue(response.assessment.lower().startswith("ami cannot") or "stated monthly" in response.assessment.lower())
+
+    def test_plan_session_reaches_snapshot_via_applied_math_context(self) -> None:
+        plan = core.InvestmentPlanResult(
+            total_available=120_000,
+            suggested_emergency_reserve=30_000,
+            short_term_cash_amount=10_000,
+            debt_reserve=5_000,
+            amount_potentially_investable=67_000,
+            long_term_suggested=56_950,
+            short_term_investable=10_050,
+            monthly_contribution=0,
+            summary_lines=[],
+            educational_notes=[],
+            money_needed_1_2_years=10_000,
+            planned_large_expenses=8_000,
+        )
+        session = {
+            "investment_active_tab": "Portfolio Inputs",
+            "plan_total_cash": 120_000,
+            "plan_emergency": 30_000,
+            "plan_near_term": 10_000,
+            "plan_debt": 5_000,
+            "plan_expenses": 8_000,
+            "plan_monthly": 0,
+            "plan_horizon": 20,
+            "plan_risk": "moderate",
+            "investment_plan_generated": True,
+            "investment_plan": plan,
+        }
+        ctx = build_investment_applied_math_context("Portfolio Inputs", session)
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            ctx,
+            question="Am I investing enough?",
+        )
+        facts = " ".join(response.facts)
+        self.assertIn("120,000", facts)
+        self.assertIn("30,000", facts)
+        self.assertIn("67,000", facts)
+        self.assertNotIn("Limited plan data", response.assessment)
+
+    def test_information_needed_listed_once(self) -> None:
+        response = run_decision_support_module(
+            MODULE_ALLOCATION_ADVISOR,
+            {k: v for k, v in self._CTX.items() if k not in ("monthly_expenses",)},
+            question="Am I investing enough?",
+        )
+        self.assertTrue(response.information_needed_markdown)
+        self.assertLessEqual(response.information_needed_markdown.lower().count("monthly income"), 1)
 
 
 if __name__ == "__main__":

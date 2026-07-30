@@ -20,7 +20,7 @@ INVESTMENT_AMI_STARTER_QUESTIONS: tuple[str, ...] = (
 )
 
 # User-facing AMI copy — outcome language, not platform implementation names.
-INVESTMENT_INSIGHT_PANEL_TITLE = "Investment Insight"
+INVESTMENT_INSIGHT_PANEL_TITLE = "AMI Investment Insight"
 INVESTMENT_INSIGHT_SIDEBAR_HEADING = "Get Investment Insight"
 INVESTMENT_INSIGHT_SIDEBAR_CAPTION = (
     "Ask about allocation, concentration, risk, ETFs, macro, or your current portfolio."

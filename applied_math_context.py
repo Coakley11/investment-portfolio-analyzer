@@ -247,7 +247,30 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
                 ctx.setdefault("current_weights_real", real_ctx["position_weights"])
         except Exception:
             pass
+
+    _merge_investment_plan_into_context(session_state, ctx)
     return ctx
+
+
+def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict[str, Any]) -> None:
+    """Expose How Much Should I Invest session inputs to AMI decision support."""
+    for key in (
+        "plan_total_cash",
+        "plan_emergency",
+        "plan_near_term",
+        "plan_debt",
+        "plan_expenses",
+        "plan_monthly",
+        "plan_horizon",
+        "plan_risk",
+    ):
+        if key in session_state and session_state.get(key) is not None:
+            ctx[key] = session_state[key]
+    if session_state.get("investment_plan_generated"):
+        ctx["investment_plan_generated"] = True
+    plan = session_state.get("investment_plan")
+    if plan is not None:
+        ctx["investment_plan"] = plan
 
 
 def _enrich_investment_ami_analytics(

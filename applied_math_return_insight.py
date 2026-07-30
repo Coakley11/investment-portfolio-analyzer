@@ -2160,20 +2160,39 @@ def render_applied_math_insight_panel(
             from investment_ami_answer_format import render_investment_page_insight_markdown
 
             exp = str(data.get("experience_mode") or "").lower()
+            is_decision_support = str(sections.get("insights_layout") or "") == "decision_support"
             body = render_investment_page_insight_markdown(
                 sections,
                 beginner="beginner" in exp,
-                include_summary=True,
+                include_summary=not is_decision_support,
             )
             if body:
                 st.markdown(body)
-            else:
+            elif not is_decision_support:
                 st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         else:
             st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         show_details = str(source_app or data.get("source_app") or "").strip().lower() != "investment"
+        is_decision_support = isinstance(sections, dict) and sections.get("insights_layout") == "decision_support"
+        if is_decision_support and str(source_app or data.get("source_app") or "").strip().lower() == "investment":
+            try:
+                from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS
+
+                exp = str(data.get("experience_mode") or "").lower()
+                labels = BEGINNER_TAB_LABELS if "beginner" in exp else ADVANCED_TAB_LABELS
+                plan_tab = labels[2]
+                if st.button(
+                    "Go to How Much Should I Invest?",
+                    key=f"ami_ds_plan_nav_{str(data.get('insight_id') or 'pending')[:12]}",
+                    use_container_width=True,
+                ):
+                    st.session_state["_pending_investment_tab"] = plan_tab
+                    st.session_state["investment_active_tab"] = plan_tab
+                    st.rerun()
+            except ImportError:
+                pass
         method = str(data.get("method") or data.get("model_name") or "").strip()
-        if show_details and method:
+        if show_details and method and not is_decision_support:
             st.markdown(f"**Math used:** {method}")
         assumptions = data.get("assumptions") or []
         if show_details and assumptions:
@@ -2181,7 +2200,7 @@ def render_applied_math_insight_panel(
             for a in assumptions[:4]:
                 st.markdown(f"- {a}")
         conf = data.get("confidence")
-        if conf:
+        if conf and not is_decision_support:
             extra = f" ({data.get('confidence_pct')}%)" if data.get("confidence_pct") else ""
             st.caption(f"Confidence: **{conf}**{extra}")
         elif not show_details and isinstance(sections, dict) and sections:

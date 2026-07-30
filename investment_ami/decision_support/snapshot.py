@@ -24,6 +24,12 @@ def _int_or_none(val: Any) -> int | None:
     return int(f)
 
 
+def _plan_attr(plan: Any, name: str) -> float | None:
+    if isinstance(plan, dict):
+        return _float_or_none(plan.get(name))
+    return _float_or_none(getattr(plan, name, None))
+
+
 def _parse_expense_shift_from_question(question: str) -> tuple[float | None, float | None]:
     q = str(question or "")
     patterns = (
@@ -47,23 +53,26 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
     near_term = _float_or_none(ctx.get("plan_near_term") or ctx.get("money_needed_1_2_years"))
     debt = _float_or_none(ctx.get("plan_debt") or ctx.get("debt_obligations"))
     expenses = _float_or_none(ctx.get("plan_expenses") or ctx.get("planned_large_expenses"))
-    monthly = _float_or_none(ctx.get("plan_monthly") or ctx.get("monthly_contribution"))
+    monthly = _float_or_none(ctx.get("plan_monthly") if "plan_monthly" in ctx else ctx.get("monthly_contribution"))
+    monthly_known = "plan_monthly" in ctx or bool(ctx.get("investment_plan_generated"))
     horizon = _int_or_none(ctx.get("plan_horizon") or ctx.get("horizon_years"))
     risk = str(ctx.get("plan_risk") or ctx.get("risk_tolerance") or "").strip()
     pv = _float_or_none(ctx.get("sidebar_portfolio_value") or ctx.get("initial_value"))
 
+    investable: float | None = None
+    long_term: float | None = None
     plan = ctx.get("investment_plan")
-    if isinstance(plan, dict):
-        total = total or _float_or_none(plan.get("total_available"))
-        emergency = emergency or _float_or_none(plan.get("suggested_emergency_reserve"))
-        investable = _float_or_none(plan.get("amount_potentially_investable"))
-        long_term = _float_or_none(plan.get("long_term_suggested"))
-    else:
-        investable = None
-        long_term = None
-        if hasattr(plan, "amount_potentially_investable"):
-            investable = _float_or_none(getattr(plan, "amount_potentially_investable", None))
-            long_term = _float_or_none(getattr(plan, "long_term_suggested", None))
+    if plan is not None:
+        monthly_known = True
+        total = total or _plan_attr(plan, "total_available")
+        emergency = emergency or _plan_attr(plan, "suggested_emergency_reserve")
+        near_term = near_term or _plan_attr(plan, "money_needed_1_2_years")
+        debt = debt or _plan_attr(plan, "debt_reserve")
+        expenses = expenses or _plan_attr(plan, "planned_large_expenses")
+        investable = _plan_attr(plan, "amount_potentially_investable")
+        long_term = _plan_attr(plan, "long_term_suggested")
+        if monthly is None:
+            monthly = _plan_attr(plan, "monthly_contribution")
 
     if investable is None and total is not None:
         reserved = sum(x or 0 for x in (emergency, near_term, debt, expenses))
@@ -73,23 +82,13 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
     monthly_exp = _float_or_none(ctx.get("monthly_expenses"))
     debt_rate = _float_or_none(ctx.get("debt_interest_rate_pct"))
 
-    if income is None:
-        limitations.append("Monthly income not provided — contribution guidance uses plan inputs only.")
-    if monthly_exp is None:
-        limitations.append("Monthly expenses not provided — emergency fund months cannot be estimated precisely.")
-    if debt is not None and debt_rate is None:
-        limitations.append("Debt amount is set but interest rate is unknown — payoff vs invest trade-offs stay qualitative.")
-    if not str(ctx.get("job_stability") or "").strip():
-        limitations.append("Job stability not provided — reserve guidance uses general assumptions.")
-
     q_before, q_after = _parse_expense_shift_from_question(question)
     effective_expenses = monthly_exp
     if q_after is not None:
         effective_expenses = q_after
         if monthly_exp is not None and abs(monthly_exp - q_after) > 1:
             limitations.append(
-                "Question describes a different monthly expense level than saved plan inputs — "
-                "scenario uses the expense levels stated in your question."
+                "Question describes a different monthly expense level than saved plan inputs."
             )
 
     return FinancialSnapshot(
@@ -99,7 +98,8 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
         emergency_fund_actual=emergency,
         monthly_income=income,
         monthly_expenses=effective_expenses,
-        monthly_contribution=monthly,
+        monthly_contribution=monthly if monthly_known or monthly is not None else None,
+        monthly_contribution_known=monthly_known,
         debt_obligations=debt,
         debt_interest_rate_pct=debt_rate,
         near_term_cash_needs=near_term,

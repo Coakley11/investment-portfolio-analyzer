@@ -44,7 +44,7 @@ class TestInvestmentAmiUxCopy(unittest.TestCase):
         self.assertNotIn("Command Center", button)
 
     def test_panel_and_full_analysis_labels(self) -> None:
-        self.assertEqual(INVESTMENT_INSIGHT_PANEL_TITLE, "Investment Insight")
+        self.assertEqual(INVESTMENT_INSIGHT_PANEL_TITLE, "AMI Investment Insight")
         self.assertEqual(INVESTMENT_INSIGHT_FULL_ANALYSIS_BUTTON, "View Investment Insight →")
 
 
