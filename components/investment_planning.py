@@ -261,28 +261,36 @@ def _render_compare_investment_amounts(
 
     inv = round(float(plan.amount_potentially_investable))
     lt = round(float(plan.long_term_suggested))
-    st.markdown("##### Compare investment amounts")
-    st.caption("Add any dollar amounts to compare simple one-year model projections (optional).")
+    st.caption(
+        "Optional: compare a few dollar amounts using a simple one-year model projection. "
+        "Add amounts below; remove any you no longer need."
+    )
 
-    c_add, c_scenario = st.columns([2, 1])
-    with c_add:
+    add_col, quick_col = st.columns([3, 2])
+    with add_col:
         new_amt = st.number_input(
-            "Custom amount ($)",
+            "Amount to compare ($)",
             min_value=0,
             max_value=50_000_000,
-            value=0,
+            value=10_000,
             step=1_000,
             key=f"{key_prefix}_compare_new_amount",
+            help="Enter a dollar amount, then click Add to comparison.",
         )
-        if st.button("Add amount", key=f"{key_prefix}_compare_add"):
-            merged = normalize_compare_amounts(list(st.session_state[list_key]) + [new_amt])
-            st.session_state[list_key] = merged
-            st.rerun()
-    with c_scenario:
-        if st.button(f"Add max investable ({_money(inv)})", key=f"{key_prefix}_compare_add_inv"):
+        if st.button("Add to comparison", type="primary", key=f"{key_prefix}_compare_add"):
+            if new_amt <= 0:
+                st.warning("Enter an amount greater than zero.")
+            else:
+                st.session_state[list_key] = normalize_compare_amounts(
+                    list(st.session_state[list_key]) + [new_amt]
+                )
+                st.rerun()
+    with quick_col:
+        st.markdown("**Quick add**")
+        if st.button(f"Max investable ({_money(inv)})", key=f"{key_prefix}_compare_add_inv"):
             st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [inv])
             st.rerun()
-        if st.button(f"Add long-term ({_money(lt)})", key=f"{key_prefix}_compare_add_lt"):
+        if st.button(f"Long-term rec. ({_money(lt)})", key=f"{key_prefix}_compare_add_lt"):
             st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [lt])
             st.rerun()
 
@@ -290,42 +298,18 @@ def _render_compare_investment_amounts(
     st.session_state[list_key] = amounts
 
     if not amounts:
-        st.caption("No comparison amounts yet — add a custom value or use a scenario button.")
+        st.info("No comparison amounts yet. Add one above or use a quick-add shortcut.")
         return
 
-    st.markdown("**Current comparison amounts**")
+    st.markdown("**Your comparison amounts**")
     for idx, amt in enumerate(amounts):
-        c_label, c_remove = st.columns([4, 1])
-        with c_label:
-            st.text(_money(amt))
-        with c_remove:
-            if st.button("Remove", key=f"{key_prefix}_compare_rm_{idx}"):
-                remaining = [a for i, a in enumerate(amounts) if i != idx]
-                st.session_state[list_key] = remaining
+        row_left, row_right = st.columns([5, 1])
+        with row_left:
+            st.markdown(f"- **{_money(amt)}**")
+        with row_right:
+            if st.button("Remove", key=f"{key_prefix}_compare_rm_{idx}", use_container_width=True):
+                st.session_state[list_key] = [a for i, a in enumerate(amounts) if i != idx]
                 st.rerun()
-
-    edit_amt = st.number_input(
-        "Edit selected amount ($)",
-        min_value=0.0,
-        max_value=50_000_000.0,
-        value=float(amounts[0]),
-        step=1000.0,
-        key=f"{key_prefix}_compare_edit_value",
-    )
-    edit_idx = st.number_input(
-        "Index to replace (0 = first)",
-        min_value=0,
-        max_value=max(0, len(amounts) - 1),
-        value=0,
-        step=1,
-        key=f"{key_prefix}_compare_edit_idx",
-    )
-    if st.button("Save edited amount", key=f"{key_prefix}_compare_save_edit"):
-        updated = list(amounts)
-        if 0 <= int(edit_idx) < len(updated):
-            updated[int(edit_idx)] = float(edit_amt)
-        st.session_state[list_key] = normalize_compare_amounts(updated)
-        st.rerun()
 
     if st.button("Clear all comparison amounts", key=f"{key_prefix}_compare_clear"):
         st.session_state[list_key] = []
@@ -334,17 +318,20 @@ def _render_compare_investment_amounts(
     compare_amounts = normalize_compare_amounts(st.session_state.get(list_key))
     if compare_amounts and st.session_state.get("plan_compare_return") is not None:
         ann_ret = float(st.session_state["plan_compare_return"])
+        st.markdown("**Projected change in one year (model)**")
         rows = []
         for amt in compare_amounts:
             proj = amt * (1 + ann_ret)
             rows.append(
                 {
                     "If you invest": _money(amt),
-                    "Est. value in 1 year (model)": _money(proj),
+                    "Est. value in 1 year": _money(proj),
                     "Est. change": _money(proj - amt),
                 }
             )
         st.dataframe(rows, use_container_width=True, hide_index=True)
+    elif compare_amounts:
+        st.caption("Run portfolio analysis to enable projected comparison rows.")
 
 
 def _render_plan_results(
