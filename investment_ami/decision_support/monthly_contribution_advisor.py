@@ -19,6 +19,12 @@ def _round_contribution(amount: float) -> float:
     return float(round(amount / 50) * 50)
 
 
+def _surplus_usage_pct(contribution: float, surplus: float) -> int:
+    if surplus <= 0:
+        return 0
+    return int(round(100.0 * float(contribution) / float(surplus)))
+
+
 def monthly_surplus(snapshot: FinancialSnapshot) -> float | None:
     if snapshot.monthly_income is None or snapshot.monthly_expenses is None:
         return None
@@ -252,8 +258,9 @@ def analyze_monthly_contribution(snapshot: FinancialSnapshot, *, question: str =
         if recommended <= contrib:
             recommended = _round_contribution(min(deploy_cap, contrib + 50))
         reason = (
-            f"Contribution **{_money(contrib)}** is well below surplus capacity; a step toward **{_money(recommended)}** "
-            "may be reasonable if reserves stay intact."
+            f"Your current **{_money(contrib)}** contribution uses about **{_surplus_usage_pct(contrib, surplus)}%** "
+            f"of the estimated **{_money(surplus)}** monthly surplus, so a gradual increase toward "
+            f"**{_money(recommended)}** may be sustainable while preserving flexibility."
         )
         observations.append("There appears **room to increase** contributions without exceeding surplus guardrails.")
     else:
@@ -280,7 +287,8 @@ def analyze_monthly_contribution(snapshot: FinancialSnapshot, *, question: str =
         pass  # unreachable
     elif contrib is not None and contrib > 0 and contrib <= surplus and recommended >= contrib:
         assessment += (
-            " This is **moderately confident** for plan consistency; refine as income, expenses, or job stability change."
+            " This is **moderately confident** for plan consistency; revisit the recommendation if income, "
+            "expenses, or job stability materially change."
         )
 
     suggested = _format_precise_suggested_section(

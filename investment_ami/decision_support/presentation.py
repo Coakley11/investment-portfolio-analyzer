@@ -437,6 +437,20 @@ def _resolve_confidence_invested_amount(
     return "medium", pct, " ".join(note_parts)
 
 
+def _monthly_contribution_optional_refinements(
+    snapshot: FinancialSnapshot,
+    information_needed: list[str],
+) -> list[str]:
+    labels: list[str] = []
+    if not snapshot.job_stability and any("job" in item.lower() for item in information_needed):
+        labels.append("job stability")
+    if any("employer" in item.lower() for item in information_needed):
+        labels.append("employer match")
+    if any("retirement" in item.lower() and "goal" in item.lower() for item in information_needed):
+        labels.append("retirement goals")
+    return labels
+
+
 def _resolve_confidence_monthly_contribution(
     snapshot: FinancialSnapshot,
     information_needed: list[str],
@@ -454,9 +468,11 @@ def _resolve_confidence_monthly_contribution(
             "monthly after-tax income and essential expenses are available."
         )
     elif information_needed:
-        parts.append(
-            "Confidence may increase after employer match, retirement goals, and job stability are included."
-        )
+        optional = _monthly_contribution_optional_refinements(snapshot, information_needed)
+        if optional:
+            parts.append(
+                "Confidence may increase after " + ", ".join(optional) + " are included."
+            )
     return "medium", pct, " ".join(parts)
 
 

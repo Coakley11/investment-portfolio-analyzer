@@ -165,6 +165,26 @@ class TestMonthlyContributionReasoning(unittest.TestCase):
         cushion = max(0.0, advice.surplus - advice.recommended_amount)
         self.assertIn(f"${cushion:,.0f}", advice.suggested_monthly_section)
 
+    def test_increase_contribution_paraphrase_matches_exact_recommendation(self) -> None:
+        exact_q = "How much should I contribute each month to my investments?"
+        paraphrase_q = "Should I increase my monthly investment contribution?"
+        ctx = _base_ctx(monthly_income=4_100, monthly_expenses=2_800, plan_monthly=500, job_stability="Stable")
+        self.assertTrue(is_monthly_contribution_question(paraphrase_q))
+        self.assertEqual(detect_investment_send_intent(paraphrase_q, ""), "allocation_advisor")
+
+        response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=paraphrase_q)
+        self.assertIn("alloc_monthly_contribution", response.applied_rule_ids)
+
+        snap = build_financial_snapshot(ctx, question=exact_q)
+        advice_exact = analyze_monthly_contribution(snap, question=exact_q)
+        advice_para = analyze_monthly_contribution(snap, question=paraphrase_q)
+        self.assertEqual(advice_exact.recommended_amount, advice_para.recommended_amount)
+        self.assertEqual(advice_para.recommended_amount, 700.0)
+        self.assertIn("uses about **38%**", advice_para.assessment)
+        self.assertIn("materially change", advice_para.assessment.lower())
+        self.assertNotIn("well below surplus capacity", advice_para.assessment.lower())
+        self.assertNotIn("job stability are included", response.confidence_note.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
