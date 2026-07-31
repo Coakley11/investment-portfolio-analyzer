@@ -1,30 +1,37 @@
-"""AMI submit must not overwrite planning-page applied portfolio value."""
+"""Widget-safe AMI submit and reboot persistence for applied plan portfolio value."""
 
 from __future__ import annotations
 
+import copy
 import unittest
 from unittest.mock import patch
 
 import portfolio_core as core
 
-from applied_math_context import apply_source_state_to_session, build_source_state
-from components.investment_planning import PLAN_MONTHLY_PROVIDED_KEY
-from components.ui_helpers import request_sidebar_portfolio_value
+from applied_math_context import build_source_state
+from components.investment_planning import PLAN_MONTHLY_PROVIDED_KEY, capture_investment_plan_persist_blob
+from components.ui_helpers import PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY, request_sidebar_portfolio_value
 from investment_ami.decision_support.modules import MODULE_ALLOCATION_ADVISOR
 from investment_ami.decision_support.pipeline import run_decision_support_module
 from investment_ami.decision_support.presentation import render_user_analyst_sections
-from investment_persistent_state import apply_investment_disk_state, build_investment_disk_state
+from investment_persistent_state import (
+    apply_investment_disk_state,
+    build_investment_disk_state,
+    global_settings_payload_from_session,
+)
 from planning_portfolio_value import (
     APPLIED_PLAN_PORTFOLIO_VALUE_KEY,
     effective_planning_portfolio_value_for_ami,
     get_applied_plan_portfolio_value,
-    prepare_session_for_investment_ami_submit,
+    initialize_sidebar_portfolio_value_before_widget,
+    mark_sidebar_portfolio_widget_instantiated,
     set_applied_plan_portfolio_value,
+    sidebar_portfolio_widget_instantiated,
 )
-from suite_analytical_question import execute_investment_ami_submit_pipeline
+from suite_analytical_question import build_submit_context, execute_investment_ami_submit_pipeline
 
 
-def _sample_plan(long_term: float = 58_451.0) -> core.InvestmentPlanResult:
+def _plan(long_term: float = 58_451.0) -> core.InvestmentPlanResult:
     return core.InvestmentPlanResult(
         total_available=100_000,
         suggested_emergency_reserve=20_000,
@@ -47,7 +54,12 @@ class _FakeSessionState(dict):
             raise AttributeError(name) from exc
 
     def __setattr__(self, name, value):
-        self[name] = value
+        if name == "sidebar_portfolio_value" and self.get("_sidebar_portfolio_value_widget_instantiated"):
+            raise RuntimeError("StreamlitAPIException: sidebar_portfolio_value widget already instantiated")
+        if name != "_sidebar_portfolio_value_widget_instantiated":
+            self[name] = value
+        else:
+            dict.__setitem__(self, name, value)
 
 
 class _FakeSt:
@@ -55,18 +67,9 @@ class _FakeSt:
         self.session_state = _FakeSessionState()
 
 
-def _assert_applied(ss: dict, expected: int) -> None:
-    assert get_applied_plan_portfolio_value(ss) == expected
-    assert ss.get("sidebar_portfolio_value") == expected
-    assert effective_planning_portfolio_value_for_ami(ss) == float(expected)
-
-
-class TestAppliedPlanPortfolioValueAmiSubmit(unittest.TestCase):
-    def test_apply_long_term_then_ami_pipeline_keeps_value(self) -> None:
-        st = _FakeSt()
-        ss = st.session_state
-        long_term = 58_451
-        ss.update(
+class TestAppliedPlanPortfolioWidgetAndPersistence(unittest.TestCase):
+    def _base_ss(self, *, sidebar: int = 100_000, applied: int | None = None) -> _FakeSessionState:
+        ss = _FakeSessionState(
             {
                 "investment_active_tab": "Portfolio Inputs",
                 "plan_total_cash": 100_000,
@@ -78,102 +81,86 @@ class TestAppliedPlanPortfolioValueAmiSubmit(unittest.TestCase):
                 "plan_risk": "Medium",
                 PLAN_MONTHLY_PROVIDED_KEY: False,
                 "investment_plan_generated": True,
-                "investment_plan": _sample_plan(long_term),
-                "sidebar_portfolio_value": 100_000,
-                "holdings_market_value_note": 100_000,
+                "investment_plan": _plan(applied or 58_451),
+                "sidebar_portfolio_value": sidebar,
             }
         )
-        set_applied_plan_portfolio_value(ss, long_term, source="long_term")
-        request_sidebar_portfolio_value(long_term, force=True)
-        prepare_session_for_investment_ami_submit(ss)
-        _assert_applied(ss, long_term)
+        if applied is not None:
+            set_applied_plan_portfolio_value(ss, applied, source="long_term")
+        return ss
 
-        question = "Is the amount I currently have invested appropriate?"
-
-        with patch("applied_math_return_insight.store_applied_math_insight", return_value="pv-1"), patch(
-            "suite_analytical_question.submit_analytical_question",
-            wraps=__import__(
-                "suite_analytical_question", fromlist=["submit_analytical_question"]
-            ).submit_analytical_question,
-        ), patch(
+    def test_a_no_sidebar_mutation_after_widget_instantiation(self) -> None:
+        st = _FakeSt()
+        ss = self._base_ss(applied=58_451)
+        st.session_state = ss
+        mark_sidebar_portfolio_widget_instantiated(ss)
+        sidebar_before = ss["sidebar_portfolio_value"]
+        with patch("applied_math_return_insight.store_applied_math_insight", return_value="w-1"), patch(
             "suite_analytical_question._upsert_applied_intelligence_resume",
-        ), patch(
-            "suite_analytical_question.build_submit_context",
-            wraps=__import__(
-                "suite_analytical_question", fromlist=["build_submit_context"]
-            ).build_submit_context,
-        ) as ctx_mock:
+        ):
             ok, err = execute_investment_ami_submit_pipeline(
                 st,
                 ss,
-                question=question,
+                question="Is the amount I currently have invested appropriate?",
                 source_page="Portfolio Inputs",
                 page_suffix="Portfolio_Inputs",
                 send_gen=0,
             )
-            ctx = ctx_mock.call_args.kwargs.get("session_state") or ss
-            _assert_applied(dict(ctx), long_term)
-
         self.assertTrue(ok, err)
-        _assert_applied(ss, long_term)
+        self.assertEqual(ss["sidebar_portfolio_value"], sidebar_before)
+        self.assertEqual(effective_planning_portfolio_value_for_ami(ss), 58_451.0)
 
-        ctx_arg = ctx_mock.call_args.kwargs.get("session_state") or ss
-        source_state = build_source_state("Portfolio Inputs", dict(ctx_arg))
-        self.assertEqual(source_state["filter_params"]["sidebar_portfolio_value"], long_term)
+    def test_b_apply_pending_before_widget(self) -> None:
+        ss = self._base_ss(sidebar=100_000, applied=None)
+        set_applied_plan_portfolio_value(ss, 58_451, source="long_term")
+        ss[PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY] = 58_451
+        self.assertFalse(sidebar_portfolio_widget_instantiated(ss))
+        initialize_sidebar_portfolio_value_before_widget(ss)
+        self.assertEqual(get_applied_plan_portfolio_value(ss), 58_451)
+        self.assertEqual(ss["sidebar_portfolio_value"], 58_451)
+        self.assertNotIn(PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY, ss)
 
-        stale_return = {
-            "source_app": "investment",
-            "source_page": "Portfolio Inputs",
-            "filter_params": {"sidebar_portfolio_value": 100_000},
-            "entity_params": {},
-            "widget_params": {},
-        }
-        apply_source_state_to_session(ss, stale_return)
-        _assert_applied(ss, long_term)
-
+    def test_c_reboot_persistence_precedence(self) -> None:
+        st = _FakeSt()
+        ss = self._base_ss(applied=58_451)
+        st.session_state = ss
         disk = build_investment_disk_state(st)
-        st2 = _FakeSt()
-        st2.session_state.update(
-            {
-                "sidebar_portfolio_value": long_term,
-                APPLIED_PLAN_PORTFOLIO_VALUE_KEY: long_term,
-                "investment_plan_applied_portfolio_value": long_term,
-                "investment_plan_applied_source": "long_term",
-            }
-        )
+        self.assertEqual(disk.get("applied_plan_portfolio_value"), 58_451)
+        self.assertEqual(disk.get("sidebar_portfolio_value"), 58_451)
         disk["sidebar_portfolio_value"] = 100_000
-        apply_investment_disk_state(st2, disk)
-        _assert_applied(st2.session_state, long_term)
+        fresh = _FakeSt()
+        fresh.session_state = _FakeSessionState()
+        apply_investment_disk_state(fresh, disk)
+        fss = fresh.session_state
+        self.assertEqual(get_applied_plan_portfolio_value(fss), 58_451)
+        initialize_sidebar_portfolio_value_before_widget(fss)
+        self.assertEqual(fss["sidebar_portfolio_value"], 58_451)
+        fresh2 = _FakeSt()
+        fresh2.session_state = copy.deepcopy(fss)
+        saved = build_investment_disk_state(fresh2)
+        self.assertEqual(saved.get("applied_plan_portfolio_value"), 58_451)
+        self.assertEqual(saved.get("sidebar_portfolio_value"), 58_451)
+        payload = global_settings_payload_from_session(fss)
+        self.assertEqual(payload.get("sidebar_portfolio_value"), 58_451)
 
-    def test_facts_used_shows_applied_not_holdings_sidebar(self) -> None:
-        ss = {
-            "plan_total_cash": 100_000,
-            "plan_emergency": 20_000,
-            "plan_near_term": 10_000,
-            "plan_debt": 5_000,
-            "plan_expenses": 5_000,
-            "plan_horizon": 20,
-            "plan_risk": "Medium",
-            PLAN_MONTHLY_PROVIDED_KEY: False,
-            "investment_plan_generated": True,
-            "investment_plan": _sample_plan(58_451),
-            "sidebar_portfolio_value": 100_000,
-            "applied_plan_portfolio_value": 58_451,
-            "investment_plan_applied_portfolio_value": 58_451,
-            "investment_plan_applied_source": "long_term",
-        }
-        ctx = dict(ss)
-        ctx["applied_plan_portfolio_value"] = 58_451
-        ctx["sidebar_portfolio_value"] = 58_451
+    def test_d_full_ami_flow_reads_canonical(self) -> None:
+        st = _FakeSt()
+        ss = self._base_ss(applied=58_451)
+        st.session_state = ss
+        initialize_sidebar_portfolio_value_before_widget(ss)
+        ctx = build_submit_context("investment", "Portfolio Inputs", ss)
+        self.assertEqual(effective_planning_portfolio_value_for_ami(ctx), 58_451.0)
         response = run_decision_support_module(
             MODULE_ALLOCATION_ADVISOR,
             ctx,
             question="Is the amount I currently have invested appropriate?",
         )
         sections = render_user_analyst_sections(response)
-        facts = sections.get("key_variables") or ""
-        self.assertIn("Portfolio value: $58,451", facts)
-        self.assertNotIn("Portfolio value: $100,000", facts)
+        self.assertIn("Portfolio value: $58,451", sections.get("key_variables") or "")
+        source_state = build_source_state("Portfolio Inputs", ss)
+        self.assertEqual(source_state["filter_params"]["sidebar_portfolio_value"], 58_451)
+        plan_blob = capture_investment_plan_persist_blob(ss)
+        self.assertEqual(plan_blob.get("applied_plan_portfolio_value"), 58_451)
 
 
 if __name__ == "__main__":

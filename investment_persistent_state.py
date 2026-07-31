@@ -424,6 +424,18 @@ def _normalize_global_settings_value(key: str, val: Any) -> Any:
     return copy.deepcopy(val) if val is not None else None
 
 
+def _resolved_sidebar_for_persist(ss: Any) -> Any:
+    try:
+        from planning_portfolio_value import resolve_persisted_sidebar_portfolio_value
+
+        resolved = resolve_persisted_sidebar_portfolio_value(ss)
+        if resolved is not None:
+            return resolved
+    except ImportError:
+        pass
+    return ss.get("sidebar_portfolio_value")
+
+
 def global_settings_payload_from_session(ss: Any) -> dict[str, Any]:
     """Normalized global settings snapshot for dirty detection and save traces."""
     start = ss.get("analysis_start_date")
@@ -432,7 +444,8 @@ def global_settings_payload_from_session(ss: Any) -> dict[str, Any]:
         "experience": ss.get(EXPERIENCE_KEY),
         "_suite_persisted_experience": ss.get(PERSISTED_EXPERIENCE_KEY),
         "sidebar_portfolio_value": _normalize_global_settings_value(
-            "sidebar_portfolio_value", ss.get("sidebar_portfolio_value")
+            "sidebar_portfolio_value",
+            _resolved_sidebar_for_persist(ss),
         ),
         "analysis_start_date": _normalize_global_settings_value("analysis_start_date", start),
         "analysis_end_date": _normalize_global_settings_value("analysis_end_date", end),
@@ -460,9 +473,14 @@ def seed_last_persisted_global_from_state(st: Any, state: dict[str, Any] | None)
 
 
 def ensure_sidebar_portfolio_value_default(st: Any) -> None:
-    ss = st.session_state
-    if "sidebar_portfolio_value" not in ss:
-        ss["sidebar_portfolio_value"] = PERSIST_FIELD_DEFAULTS["sidebar_portfolio_value"]
+    try:
+        from planning_portfolio_value import initialize_sidebar_portfolio_value_before_widget
+
+        initialize_sidebar_portfolio_value_before_widget(st.session_state)
+    except ImportError:
+        ss = st.session_state
+        if "sidebar_portfolio_value" not in ss:
+            ss["sidebar_portfolio_value"] = PERSIST_FIELD_DEFAULTS["sidebar_portfolio_value"]
 
 
 def ensure_risk_free_pct_default(st: Any) -> None:
@@ -1197,6 +1215,15 @@ def _snapshot_mode_debug(st: Any, *, saved: str | None = None) -> None:
 
 
 def _persist_scalar_value(ss: Any, key: str) -> Any:
+    if key == "sidebar_portfolio_value":
+        try:
+            from planning_portfolio_value import resolve_persisted_sidebar_portfolio_value
+
+            resolved = resolve_persisted_sidebar_portfolio_value(ss)
+            if resolved is not None:
+                return resolved
+        except ImportError:
+            pass
     if key in ss:
         val = ss[key]
         if isinstance(val, dt.date):
@@ -1369,6 +1396,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
                     has_explicit_applied_plan_portfolio_value,
                 )
 
+                blob_applied = state.get("applied_plan_portfolio_value")
+                if blob_applied is None:
+                    blob_applied = state.get("investment_plan_applied_portfolio_value")
+                blob_source = str(state.get("investment_plan_applied_source") or "").strip()
+                if blob_applied is not None and blob_source:
+                    st.session_state[key] = int(round(float(blob_applied)))
+                    continue
                 if has_explicit_applied_plan_portfolio_value(st.session_state):
                     applied = get_applied_plan_portfolio_value(st.session_state)
                     if applied is not None:
@@ -1441,6 +1475,16 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         apply_investment_plan_persist_blob(st, state.get(INVESTMENT_PLAN_PERSIST_KEY))
         bump_investment_plan_restore_generation(st.session_state)
         st.session_state.pop("plan_compare_return", None)
+    except ImportError:
+        pass
+
+    try:
+        from planning_portfolio_value import sync_portfolio_value_after_persistence_restore
+
+        sync_portfolio_value_after_persistence_restore(
+            st.session_state,
+            restore_source=str(st.session_state.get("_suite_persist_last_restore_source") or "disk"),
+        )
     except ImportError:
         pass
 

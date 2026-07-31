@@ -1172,7 +1172,13 @@ def render_sidebar() -> dict:
         ensure_sidebar_portfolio_value_default,
         notify_global_settings_change,
     )
+    from planning_portfolio_value import (
+        initialize_sidebar_portfolio_value_before_widget,
+        mark_sidebar_portfolio_widget_instantiated,
+    )
 
+    apply_pending_sidebar_portfolio_value()
+    initialize_sidebar_portfolio_value_before_widget(st.session_state)
     ensure_sidebar_portfolio_value_default(st)
 
     def _on_portfolio_value_widget_change() -> None:
@@ -1188,6 +1194,7 @@ def render_sidebar() -> dict:
         key="sidebar_portfolio_value",
         on_change=_on_portfolio_value_widget_change,
     )
+    mark_sidebar_portfolio_widget_instantiated(st.session_state)
 
     st.sidebar.divider()
     st.sidebar.markdown("### Portfolio Presets")

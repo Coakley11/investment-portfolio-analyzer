@@ -1570,12 +1570,6 @@ def execute_investment_ami_submit_pipeline(
 
     q = str(question or "").strip()
     page = str(source_page or "").strip()
-    try:
-        from planning_portfolio_value import prepare_session_for_investment_ami_submit
-
-        prepare_session_for_investment_ami_submit(ss)
-    except ImportError:
-        pass
     t_route = time.perf_counter()
     _log_stage("ROUTE", ss, page=page)
     submit_ctx = build_submit_context(

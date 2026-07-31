@@ -122,7 +122,19 @@ def apply_pending_scroll_to_target(st_obj: Any | None = None) -> None:
 
 def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> None:
     """Apply a deferred portfolio value update before the sidebar number_input is drawn."""
+    try:
+        from planning_portfolio_value import (
+            initialize_sidebar_portfolio_value_before_widget,
+            sidebar_portfolio_widget_instantiated,
+        )
+    except ImportError:
+        sidebar_portfolio_widget_instantiated = lambda _ss: False  # type: ignore[misc, assignment]
+        initialize_sidebar_portfolio_value_before_widget = lambda _ss: None  # type: ignore[misc, assignment]
+
+    if sidebar_portfolio_widget_instantiated(st.session_state):
+        return
     if PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY not in st.session_state:
+        initialize_sidebar_portfolio_value_before_widget(st.session_state)
         return
     if respect_user_edit and st.session_state.get("_suite_inv_portfolio_value_user_set"):
         st.session_state.pop(PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY, None)
@@ -130,12 +142,6 @@ def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> 
     st.session_state["sidebar_portfolio_value"] = st.session_state.pop(
         PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY
     )
-    try:
-        from planning_portfolio_value import reconcile_sidebar_to_applied_plan_portfolio_value
-
-        reconcile_sidebar_to_applied_plan_portfolio_value(st.session_state)
-    except ImportError:
-        pass
 
 
 def request_sidebar_portfolio_value(value: int | float, *, force: bool = False) -> None:

@@ -282,10 +282,16 @@ border-radius:8px;padding:0.75rem 1rem;margin:0.5rem 0 1rem 0;">
 def _apply_plan_portfolio_value(amount: float, *, source: str) -> None:
     from planning_portfolio_value import set_applied_plan_portfolio_value
 
+    set_applied_plan_portfolio_value(st.session_state, amount, source=source)
     request_sidebar_portfolio_value(amount, force=True)
     st.session_state.capital_deployed = True
-    set_applied_plan_portfolio_value(st.session_state, amount, source=source)
     maybe_autosave_investment_plan(st, source="plan_apply_portfolio_value")
+    try:
+        from investment_persistent_state import notify_global_settings_change
+
+        notify_global_settings_change(st, source="plan_apply_portfolio_value")
+    except ImportError:
+        pass
 
 
 def _render_portfolio_value_buttons(
@@ -849,8 +855,21 @@ def capture_investment_plan_persist_blob(session_state: Any) -> dict[str, Any]:
             plan_dict = dict(plan)
     return {
         "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+        "plan_total_cash": session_state.get("plan_total_cash"),
+        "plan_emergency": session_state.get("plan_emergency"),
+        "plan_near_term": session_state.get("plan_near_term"),
+        "plan_debt": session_state.get("plan_debt"),
+        "plan_expenses": session_state.get("plan_expenses"),
+        "plan_monthly": session_state.get("plan_monthly"),
+        "plan_monthly_provided": session_state.get(PLAN_MONTHLY_PROVIDED_KEY),
+        "plan_horizon": session_state.get("plan_horizon"),
+        "plan_risk": session_state.get("plan_risk"),
+        "investment_plan_generated": session_state.get("investment_plan_generated"),
         "investment_plan": plan_dict,
         "plan_compare_amounts_list": normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY)),
+        "applied_plan_portfolio_value": session_state.get("applied_plan_portfolio_value"),
+        "investment_plan_applied_portfolio_value": session_state.get("investment_plan_applied_portfolio_value"),
+        "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
     }
 
 
@@ -865,6 +884,33 @@ def apply_investment_plan_persist_blob(st: Any, blob: Any) -> None:
     if amounts:
         ss[PLAN_COMPARE_AMOUNTS_KEY] = list(amounts)
     ss.pop("plan_compare_return", None)
+    for plan_key in (
+        "plan_total_cash",
+        "plan_emergency",
+        "plan_near_term",
+        "plan_debt",
+        "plan_expenses",
+        "plan_monthly",
+        "plan_horizon",
+        "plan_risk",
+    ):
+        if plan_key in blob and blob.get(plan_key) is not None:
+            ss[plan_key] = blob[plan_key]
+    if PLAN_MONTHLY_PROVIDED_KEY in blob:
+        ss[PLAN_MONTHLY_PROVIDED_KEY] = bool(blob.get(PLAN_MONTHLY_PROVIDED_KEY))
+    if blob.get("investment_plan_generated"):
+        ss["investment_plan_generated"] = True
+    try:
+        from planning_portfolio_value import apply_applied_plan_from_persist_blob
+
+        apply_applied_plan_from_persist_blob(ss, blob)
+    except ImportError:
+        if blob.get("applied_plan_portfolio_value") is not None:
+            ss["applied_plan_portfolio_value"] = blob["applied_plan_portfolio_value"]
+        if blob.get("investment_plan_applied_portfolio_value") is not None:
+            ss["investment_plan_applied_portfolio_value"] = blob["investment_plan_applied_portfolio_value"]
+        if blob.get("investment_plan_applied_source"):
+            ss["investment_plan_applied_source"] = blob["investment_plan_applied_source"]
     plan_raw = blob.get("investment_plan")
     if plan_raw:
         try:
