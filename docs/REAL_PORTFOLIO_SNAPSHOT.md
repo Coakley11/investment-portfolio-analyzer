@@ -79,3 +79,16 @@ Primary performance label: **Unrealized gain or loss since purchase (cost basis)
 Product thresholds (not universal rules): single **stock** notable ≥10%, material ≥20%; broad-market ETFs reported separately from single-company flags.
 
 Tests: `tests/test_real_portfolio_performance_concentration.py`.
+
+## Phase C — drift and recommendation rules
+
+Pure functions on typed analyses (no session reads in the rule engine):
+
+- `analyze_real_portfolio_drift(snapshot, user_asset_class_targets=..., saved_objective_target=..., health_objective=...)`
+- `build_real_portfolio_recommendations(snapshot, performance, concentration, drift, ask_contribution_placement=...)`
+
+Target precedence: explicit user asset-class targets → saved objective buckets → aggregated ticker targets on snapshot → `health_objective` / `OBJECTIVE_ALLOCATIONS` (labeled inferred) → unavailable.
+
+Drift severity (pp): immaterial &lt;2; modest 2–&lt;5; material 5–&lt;10; substantial ≥10. Rebalance trigger requires valid target, complete pricing, and material drift or combined modest drifts (≥2 sleeves, ≥8 pp total).
+
+Tests: `tests/test_real_portfolio_recommendations.py`.
