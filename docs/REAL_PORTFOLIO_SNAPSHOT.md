@@ -66,3 +66,16 @@ else:
 ```
 
 Tests: `tests/test_real_portfolio_snapshot.py`.
+
+## Phase B — performance and concentration
+
+Pure functions on `RealPortfolioSnapshot` (no session, no `holdings_df`, no sidebar value):
+
+- `analyze_real_portfolio_performance(snapshot)` — unrealized gain/loss since purchase (cost basis); contributors ranked by **dollar** contribution, not percentage; `$CASH` excluded from security contributor lists.
+- `analyze_real_portfolio_concentration(snapshot, security_metadata=...)` — weights, top-1/3/5, HHI, effective positions (1/HHI), security-kind-aware observations.
+
+Primary performance label: **Unrealized gain or loss since purchase (cost basis)**. Flat band: |total return| &lt; **0.5%** when all prices present.
+
+Product thresholds (not universal rules): single **stock** notable ≥10%, material ≥20%; broad-market ETFs reported separately from single-company flags.
+
+Tests: `tests/test_real_portfolio_performance_concentration.py`.
