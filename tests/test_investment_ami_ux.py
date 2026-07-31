@@ -115,11 +115,17 @@ class TestInvestmentAmiUx(unittest.TestCase):
         st.session_state[SESSION_PENDING_KEY] = insight
         st.session_state["_ami_submit_render_insight_this_run"] = True
         st.session_state["_ami_last_submit_source_page"] = "Portfolio Analytics"
+        st.session_state["_suite_inv_persistence_bootstrapped"] = True
 
         with patch(
             "applied_math_return_insight.render_applied_math_insight_panel",
             return_value=True,
-        ) as mock_panel:
+        ) as mock_panel, patch(
+            "applied_math_return_insight.store_applied_math_insight",
+            return_value="inv-render-1",
+        ), patch(
+            "investment_persistent_state.autosave_investment_state",
+        ):
             ok = render_suite_applied_math_insight_for_page(
                 st,
                 source_app="investment",
@@ -127,7 +133,8 @@ class TestInvestmentAmiUx(unittest.TestCase):
             )
         self.assertTrue(ok)
         mock_panel.assert_called_once()
-        self.assertTrue(st.session_state.get("_ami_insight_render_success"))
+        self.assertEqual(st.session_state.get("active_applied_investment_insight_id"), "inv-render-1")
+        self.assertIsNone(st.session_state.get("_ami_insight_render_success"))
 
     def test_resolve_canonical_prefers_pending_over_cloud(self) -> None:
         from applied_math_return_insight import resolve_canonical_instant_insight

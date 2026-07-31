@@ -53,6 +53,8 @@ def record_ami_insight_lifecycle(session_state: dict[str, Any], step: str, **det
 INSIGHT_ITEM_TYPE = "applied_math_insight"
 AMI_INSIGHT_STORE_VERSION = "insight-store-v10"
 SESSION_PENDING_KEY = "_ami_pending_insight"
+ACTIVE_APPLIED_INVESTMENT_INSIGHT_ID_KEY = "active_applied_investment_insight_id"
+SELECTED_INVESTMENT_INSIGHT_ID_KEY = "selected_investment_insight_id"
 SESSION_RETURN_PAGE_KEY = "_ami_return_page"
 SESSION_RETURN_CONTEXT_KEY = "_ami_return_context"
 INSIGHT_DISMISSAL_ITEM_TYPE = "applied_math_insight_dismissal"
@@ -775,6 +777,230 @@ def _insight_from_persisted_full_session(app_key: str) -> dict[str, Any]:
     return {}
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _insight_recency_sort_key(blob: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Lexicographic recency — later ISO timestamps and higher revisions sort last (newest wins in max())."""
+    if not isinstance(blob, dict):
+        return ("", "", "", "")
+    rev = blob.get("insight_revision")
+    rev_s = f"{int(rev):012d}" if rev is not None and str(rev).strip().isdigit() else ""
+    for field in ("updated_at", "render_committed_at", "created_at", "scenario_refreshed_at"):
+        ts = str(blob.get(field) or "").strip()
+        if ts:
+            updated = ts
+            break
+    else:
+        updated = ""
+    build = str(blob.get("solver_build_id") or "")
+    iid = str(blob.get("insight_id") or "")
+    return (updated, rev_s, build, iid)
+
+
+def _active_applied_insight_id_from_state(state: dict[str, Any] | None) -> str:
+    if not isinstance(state, dict):
+        return ""
+    for key in (
+        ACTIVE_APPLIED_INVESTMENT_INSIGHT_ID_KEY,
+        SELECTED_INVESTMENT_INSIGHT_ID_KEY,
+        "_ami_pending_insight_id",
+    ):
+        iid = str(state.get(key) or "").strip()
+        if iid:
+            return iid
+    pending = state.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict):
+        return str(pending.get("insight_id") or "").strip()
+    return ""
+
+
+def resolve_active_applied_investment_insight_id(session_state: dict[str, Any]) -> str:
+    ss = session_state
+    for key in (
+        ACTIVE_APPLIED_INVESTMENT_INSIGHT_ID_KEY,
+        SELECTED_INVESTMENT_INSIGHT_ID_KEY,
+    ):
+        iid = str(ss.get(key) or "").strip()
+        if iid:
+            return iid
+    try:
+        from investment_ami_submit_runtime import PENDING_INSIGHT_ID_KEY
+
+        iid = str(ss.get(PENDING_INSIGHT_ID_KEY) or "").strip()
+        if iid:
+            return iid
+    except ImportError:
+        pass
+    pending = ss.get(SESSION_PENDING_KEY)
+    if isinstance(pending, dict):
+        return str(pending.get("insight_id") or "").strip()
+    return ""
+
+
+def _set_active_applied_investment_insight_ids(session_state: dict[str, Any], insight_id: str) -> None:
+    iid = str(insight_id or "").strip()
+    if not iid:
+        return
+    session_state[ACTIVE_APPLIED_INVESTMENT_INSIGHT_ID_KEY] = iid
+    session_state[SELECTED_INVESTMENT_INSIGHT_ID_KEY] = iid
+    try:
+        from investment_ami_submit_runtime import PENDING_INSIGHT_ID_KEY
+
+        session_state[PENDING_INSIGHT_ID_KEY] = iid
+    except ImportError:
+        pass
+    session_state["_ami_hydrated_insight_id"] = iid
+
+
+def load_insight_by_active_pointer(
+    st: Any,
+    app_key: str,
+    *,
+    session_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ss = session_state if session_state is not None else st.session_state
+    iid = resolve_active_applied_investment_insight_id(ss)
+    if not iid:
+        return {}
+    loaded = load_applied_math_insight(iid, source_app=app_key)
+    if loaded and not loaded.get("insight_id"):
+        loaded["insight_id"] = iid
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def commit_applied_investment_insight_after_render(
+    st: Any,
+    insight: AppliedMathInsight | dict[str, Any],
+    *,
+    source_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Durable handshake after a successful insight card render.
+
+    Persists the insight, sets active/selected pointers, saves workspace state,
+    then clears staging flags (not the pending blob used for display).
+    """
+    data = insight.to_dict() if isinstance(insight, AppliedMathInsight) else dict(insight)
+    iid = str(data.get("insight_id") or "").strip()
+    if not iid:
+        return {"ok": False, "error": "missing_insight_id", "insight_id": ""}
+
+    ss = st.session_state
+    now = _utc_now_iso()
+    try:
+        prev_rev = int(data.get("insight_revision") or 0)
+    except (TypeError, ValueError):
+        prev_rev = 0
+    data = dict(data)
+    data["insight_revision"] = prev_rev + 1
+    data["updated_at"] = now
+    data.setdefault("created_at", now)
+    data["render_committed_at"] = now
+
+    store_error = ""
+    stored_id = ""
+    try:
+        stored_id = store_applied_math_insight(
+            data,
+            st=st,
+            source_state=source_state if isinstance(source_state, dict) else None,
+        )
+        if not stored_id:
+            store_error = "store_applied_math_insight returned empty id"
+    except Exception as exc:
+        store_error = str(exc)
+        log.warning("commit_applied_investment_insight_after_render store failed: %s", exc)
+
+    if store_error:
+        ss["_ami_insight_commit_error"] = store_error
+        ss["_ami_insight_submit_status"] = {
+            "state": "error",
+            "message": (
+                "Applied Investment Insight rendered but could not be saved. "
+                "Your previous saved insight is still active. "
+                f"({store_error})"
+            ),
+        }
+        record_ami_insight_lifecycle(
+            ss,
+            "commit_applied_investment_insight_after_render",
+            ok=False,
+            error=store_error[:120],
+            insight_id=iid[:20],
+        )
+        return {"ok": False, "error": store_error, "insight_id": iid}
+
+    _set_active_applied_investment_insight_ids(ss, iid)
+    ss[SESSION_PENDING_KEY] = dict(data)
+    ss.pop("_ami_insight_commit_error", None)
+    try:
+        from investment_ami_submit_runtime import RENDER_REQUESTED_KEY
+
+        ss.pop(RENDER_REQUESTED_KEY, None)
+    except ImportError:
+        ss.pop("_ami_render_requested", None)
+    ss.pop("_ami_force_insight_render", None)
+    ss.pop("_ami_submit_render_insight_this_run", None)
+    ss.pop("_ami_insight_render_success", None)
+    status = ss.get("_ami_insight_submit_status")
+    if isinstance(status, dict) and str(status.get("state") or "").lower() == "processing":
+        ss["_ami_insight_submit_status"] = {"state": "success", "insight_id": iid}
+
+    try:
+        from investment_persistent_state import notify_pending_insight_change
+
+        notify_pending_insight_change(st, source="insight_store", trigger_save=True)
+    except Exception as exc:
+        log.warning("notify_pending_insight_change after insight render commit failed: %s", exc)
+
+    record_ami_insight_lifecycle(
+        ss,
+        "commit_applied_investment_insight_after_render",
+        ok=True,
+        insight_id=iid[:20],
+        revision=data.get("insight_revision"),
+    )
+    return {"ok": True, "error": "", "insight_id": iid}
+
+
+def _hydrate_session_from_insight_blob(
+    st: Any,
+    app_key: str,
+    blob: dict[str, Any],
+    *,
+    hydrate_source: str,
+    notify_autosave: bool = False,
+) -> bool:
+    if not isinstance(blob, dict) or not insight_has_displayable_content(blob):
+        return False
+    key = str(app_key or "").strip().lower()
+    ss = st.session_state
+    data = dict(blob)
+    iid = str(data.get("insight_id") or "").strip()
+    if iid:
+        _set_active_applied_investment_insight_ids(ss, iid)
+    ss[SESSION_PENDING_KEY] = data
+    source_page = _resolve_insight_source_page(data)
+    if source_page:
+        ss[SESSION_RETURN_PAGE_KEY] = source_page
+    if key == "investment":
+        _sync_investment_insight_tab_keys(st, key, insight=data)
+    ss["_ami_insight_hydrate_success"] = True
+    ss["_ami_insight_hydrate_source"] = hydrate_source
+    if iid:
+        ss["_ami_hydrated_insight_id"] = iid
+    if notify_autosave and key == "investment":
+        try:
+            from investment_persistent_state import notify_pending_insight_change
+
+            notify_pending_insight_change(st, source="insight_hydrate")
+        except Exception:
+            pass
+    return True
+
+
 def load_latest_applied_math_insight_for_app(
     source_app: str,
     *,
@@ -785,6 +1011,20 @@ def load_latest_applied_math_insight_for_app(
     if not app:
         return {}
     excluded = exclude_ids or set()
+
+    persisted = _insight_from_persisted_full_session(app)
+    active_iid = _active_applied_insight_id_from_state(persisted)
+    if active_iid and active_iid not in excluded:
+        loaded = load_applied_math_insight(active_iid, source_app=app)
+        if isinstance(loaded, dict) and loaded and insight_has_displayable_content(loaded):
+            out = dict(loaded)
+            out.setdefault("insight_id", active_iid)
+            out.setdefault("source_app", app)
+            out["_hydrate_source_hint"] = "active_applied_pointer"
+            return out
+
+    best: dict[str, Any] = {}
+    best_key: tuple[str, str, str, str] = ("", "", "", "")
     try:
         from suite_account import load_saved_items
 
@@ -805,14 +1045,33 @@ def load_latest_applied_math_insight_for_app(
                     continue
                 if payload_app and payload_app != app and app_key != app:
                     continue
-                if payload.get("conclusion") or payload.get("question"):
-                    out = dict(payload)
-                    out.setdefault("insight_id", iid)
-                    out.setdefault("source_app", app)
-                    return out
+                if not (payload.get("conclusion") or payload.get("question") or insight_has_displayable_content(payload)):
+                    continue
+                candidate = dict(payload)
+                candidate.setdefault("insight_id", iid)
+                candidate.setdefault("source_app", app)
+                row_updated = str(row.get("updated_at") or "").strip()
+                if row_updated and not candidate.get("updated_at"):
+                    candidate["updated_at"] = row_updated
+                key = _insight_recency_sort_key(candidate)
+                if key >= best_key:
+                    best = candidate
+                    best_key = key
     except Exception as exc:
         log.warning("load_latest_applied_math_insight_for_app failed: %s", exc)
-    return _insight_from_persisted_full_session(app)
+
+    if best:
+        best["_hydrate_source_hint"] = "newest_saved_item"
+        return best
+
+    if isinstance(persisted, dict) and persisted and insight_has_displayable_content(persisted):
+        out = dict(persisted)
+        out.setdefault("source_app", app)
+        if not out.get("insight_id"):
+            out["insight_id"] = _active_applied_insight_id_from_state(persisted)
+        out["_hydrate_source_hint"] = "full_session_blob"
+        return out
+    return {}
 
 
 def _get_dismissed_insight_ids(st: Any) -> set[str]:
@@ -1036,6 +1295,36 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
             _sync_investment_insight_tab_keys(st, key, insight=pending)
             return True
 
+    active_id = resolve_active_applied_investment_insight_id(ss)
+    if active_id and not _insight_is_dismissed(st, active_id):
+        active_blob = load_applied_math_insight(active_id, source_app=key)
+        if isinstance(active_blob, dict) and active_blob:
+            active_blob.setdefault("insight_id", active_id)
+            pending = _pending_insight_valid(st)
+            if not pending:
+                record_ami_insight_lifecycle(
+                    ss,
+                    "hydrate_set_pending",
+                    source="active_applied_pointer",
+                    insight_id=active_id[:20],
+                )
+                return _hydrate_session_from_insight_blob(
+                    st, key, active_blob, hydrate_source="active_applied_pointer"
+                )
+            pending_id = _pending_insight_id(st)
+            if pending_id != active_id or _insight_recency_sort_key(active_blob) > _insight_recency_sort_key(
+                pending
+            ):
+                record_ami_insight_lifecycle(
+                    ss,
+                    "hydrate_set_pending",
+                    source="active_applied_pointer_override",
+                    insight_id=active_id[:20],
+                )
+                return _hydrate_session_from_insight_blob(
+                    st, key, active_blob, hydrate_source="active_applied_pointer"
+                )
+
     pending = _pending_insight_valid(st)
     if pending:
         ss["_ami_insight_hydrate_success"] = True
@@ -1058,26 +1347,17 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
         record_ami_insight_lifecycle(
             ss,
             "hydrate_set_pending",
-            source="cloud_saved_items",
+            source=str(latest.get("_hydrate_source_hint") or "cloud_saved_items"),
             insight_id=str(latest.get("insight_id") or "")[:20],
         )
-        ss[SESSION_PENDING_KEY] = latest
-        source_page = _resolve_insight_source_page(latest)
-        if source_page:
-            ss[SESSION_RETURN_PAGE_KEY] = source_page
-        _sync_investment_insight_tab_keys(st, key, insight=latest)
-        ss["_ami_insight_hydrate_success"] = True
         hydrate_src = str(latest.get("_hydrate_source_hint") or "cloud_saved_items")
-        ss["_ami_insight_hydrate_source"] = hydrate_src
-        ss["_ami_hydrated_insight_id"] = str(latest.get("insight_id") or "").strip()
-        if key == "investment" and hydrate_src == "cloud_saved_items":
-            try:
-                from investment_persistent_state import notify_pending_insight_change
-
-                notify_pending_insight_change(st, source="insight_hydrate")
-            except Exception:
-                pass
-        return True
+        return _hydrate_session_from_insight_blob(
+            st,
+            key,
+            latest,
+            hydrate_source=hydrate_src,
+            notify_autosave=hydrate_src == "cloud_saved_items",
+        )
 
     ss["_ami_insight_hydrate_success"] = False
     ss["_ami_insight_hydrate_source"] = "none"
@@ -2301,8 +2581,15 @@ def render_applied_math_insight_panel(
                     key=f"ami_ds_plan_nav_{str(data.get('insight_id') or 'pending')[:12]}",
                     use_container_width=True,
                 ):
+                    commit_applied_investment_insight_after_render(st, data)
                     st.session_state["_pending_investment_tab"] = plan_tab
                     st.session_state["investment_active_tab"] = plan_tab
+                    try:
+                        from investment_persistent_state import notify_investment_tab_change
+
+                        notify_investment_tab_change(st, plan_tab, source="ds_plan_nav")
+                    except ImportError:
+                        pass
                     st.rerun()
             except ImportError:
                 pass
@@ -2434,21 +2721,19 @@ def render_suite_applied_math_insight_for_page(
         rendered=bool(rendered),
         skip_reason=st.session_state.get("_ami_insight_render_skipped_reason"),
     )
-    if rendered and app == "investment":
+    if rendered and app == "investment" and isinstance(insight, dict):
         st.session_state["_ami_insight_card_rendered"] = True
-        st.session_state.pop("_ami_insight_submit_status", None)
-        try:
-            from investment_ami_submit_runtime import RENDER_REQUESTED_KEY
+        commit = commit_applied_investment_insight_after_render(st, insight)
+        if not commit.get("ok"):
+            st.session_state["_ami_insight_render_success"] = False
+            rendered = False
+        else:
+            try:
+                from suite_cloud_state import _ami_resume_consumed_flag
 
-            st.session_state.pop(RENDER_REQUESTED_KEY, None)
-        except ImportError:
-            st.session_state.pop("_ami_render_requested", None)
-        try:
-            from suite_cloud_state import _ami_resume_consumed_flag
-
-            st.session_state[_ami_resume_consumed_flag(app)] = True
-        except Exception:
-            pass
+                st.session_state[_ami_resume_consumed_flag(app)] = True
+            except Exception:
+                pass
     try:
         if t_render is not None and log_stage_exit_fn is not None:
             log_stage_exit_fn(

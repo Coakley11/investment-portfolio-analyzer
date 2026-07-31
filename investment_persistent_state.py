@@ -35,6 +35,9 @@ _PORTFOLIO_PAGE_DIRTY_KEY = "_suite_inv_portfolio_page_dirty"
 _PORTFOLIO_VALUE_USER_SET_KEY = "_suite_inv_portfolio_value_user_set"
 _AMI_PERSIST_SESSION_KEYS = (
     "_ami_pending_insight",
+    "_ami_pending_insight_id",
+    "active_applied_investment_insight_id",
+    "selected_investment_insight_id",
     "_ami_dismissed_insight_ids",
     "_ami_dismissed_insight_at",
     "insight_source_tab",

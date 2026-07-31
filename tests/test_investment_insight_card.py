@@ -161,6 +161,7 @@ class TestInvestmentInsightCard(unittest.TestCase):
         st.session_state.update(
             {
                 SESSION_PENDING_KEY: {
+                    "insight_id": "test-overview-1",
                     "source_app": "investment",
                     "source_page": "Overview",
                     "conclusion": "Top holding is 45% of the portfolio.",
@@ -170,6 +171,7 @@ class TestInvestmentInsightCard(unittest.TestCase):
                 "_ami_submit_render_insight_this_run": True,
                 "_ami_insight_render_success": True,
                 "_ami_last_submit_source_page": "Overview",
+                "_suite_inv_persistence_bootstrapped": True,
             }
         )
 
@@ -179,6 +181,10 @@ class TestInvestmentInsightCard(unittest.TestCase):
 
         with unittest.mock.patch.object(ami, "load_latest_applied_math_insight_for_app", return_value=None), unittest.mock.patch.object(
             ami, "sync_dismissed_insights_from_cloud"
+        ), unittest.mock.patch.object(
+            ami, "store_applied_math_insight", return_value="test-overview-1"
+        ), unittest.mock.patch(
+            "investment_persistent_state.autosave_investment_state"
         ):
             rendered = render_suite_applied_math_insight_for_page(
                 st,
@@ -186,7 +192,7 @@ class TestInvestmentInsightCard(unittest.TestCase):
                 source_page="Overview",
             )
         self.assertTrue(rendered)
-        self.assertTrue(st.session_state.get("_ami_insight_render_success"))
+        self.assertIsNone(st.session_state.get("_ami_insight_render_success"))
         self.assertIsNone(st.session_state.get("_ami_insight_render_skipped_reason"))
 
     def test_hydrate_submit_rerun_skips_cloud_when_pending_missing(self) -> None:
