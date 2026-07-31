@@ -194,6 +194,18 @@ _BEGINNER_INVESTMENT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
+REAL_PORTFOLIO_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
+    ("direct_answer", "Assessment"),
+    ("portfolio_snapshot", "Portfolio Snapshot"),
+    ("performance_drivers", "What Is Driving Performance"),
+    ("allocation_concentration", "Allocation and Concentration"),
+    ("recommended_actions", "AMI's Suggestions"),
+    ("tradeoffs", "Risks and Trade-Offs"),
+    ("risk_notes", "Information Needed"),
+    ("methodology", "Confidence"),
+)
+
+
 DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("direct_answer", "Assessment"),
     ("key_variables", "Facts Used"),
@@ -208,14 +220,17 @@ DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 # Decision-support insight sections are narrative Markdown (currency, bold) — not LaTeX.
 DECISION_SUPPORT_PROSE_SECTION_KEYS: frozenset[str] = frozenset(
     key for key, _ in DECISION_SUPPORT_PAGE_SECTION_ORDER
-) | frozenset({"assumptions", "monthly_contribution_recommendation"})
+) | frozenset(key for key, _ in REAL_PORTFOLIO_PAGE_SECTION_ORDER) | frozenset(
+    {"assumptions", "monthly_contribution_recommendation"}
+)
 
 
 def insight_section_render_mode(section_key: str, sections: dict[str, Any] | None) -> str:
     """Return ``prose`` (st.markdown) or ``latex`` (st.latex) for a section body."""
     if not isinstance(sections, dict):
         return "prose"
-    if str(sections.get("insights_layout") or "") == "decision_support":
+    layout = str(sections.get("insights_layout") or "")
+    if layout in ("decision_support", "real_portfolio_advisor"):
         if section_key in DECISION_SUPPORT_PROSE_SECTION_KEYS:
             return "prose"
     return "prose"
@@ -250,7 +265,23 @@ def render_investment_page_insight_markdown(
     """Concise action-oriented insight card for the Investment app page."""
     if not isinstance(sections, dict) or not sections:
         return ""
-    if str(sections.get("insights_layout") or "") == "decision_support":
+    layout = str(sections.get("insights_layout") or "")
+    if layout == "real_portfolio_advisor":
+        parts: list[str] = []
+        module = str(sections.get("ami_module_name") or "Real Portfolio Advisor").strip()
+        qtext = str(sections.get("question_text") or "").strip()
+        if qtext:
+            parts.append(f"**Question**\n\n{escape_streamlit_markdown_prose(qtext)}")
+        parts.append(f"**Advisor:** {module}")
+        for key, label in REAL_PORTFOLIO_PAGE_SECTION_ORDER:
+            body = str(sections.get(key) or "").strip()
+            if body:
+                parts.append(f"**{label}**\n\n{escape_streamlit_markdown_prose(body)}")
+        disclaimer = str(sections.get("assumptions") or "").strip()
+        if disclaimer:
+            parts.append(escape_streamlit_markdown_prose(disclaimer))
+        return "\n\n".join(parts)
+    if layout == "decision_support":
         parts: list[str] = []
         for key, label in DECISION_SUPPORT_PAGE_SECTION_ORDER:
             body = str(sections.get(key) or "").strip()

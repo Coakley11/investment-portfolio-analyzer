@@ -2505,9 +2505,12 @@ def _resolve_insight_analyst_sections(data: dict[str, Any]) -> tuple[dict[str, A
         sections = dict(kn["analyst_sections"])
 
     problem = str(data.get("problem_type") or (kn or {}).get("problem_type") or "").strip()
-    is_ds_intent = problem in ("allocation_advisor", "cash_reserve_advisor")
+    is_ds_intent = problem in ("allocation_advisor", "cash_reserve_advisor", "real_portfolio_advisor")
 
-    if isinstance(sections, dict) and str(sections.get("insights_layout") or "") == "decision_support":
+    if isinstance(sections, dict) and str(sections.get("insights_layout") or "") in (
+        "decision_support",
+        "real_portfolio_advisor",
+    ):
         return sections, True, False
 
     conclusion = str(data.get("conclusion") or "")

@@ -2,3 +2,4 @@
 
 MODULE_ALLOCATION_ADVISOR = "allocation_advisor"
 MODULE_CASH_RESERVE = "cash_reserve_advisor"
+MODULE_REAL_PORTFOLIO = "real_portfolio_advisor"

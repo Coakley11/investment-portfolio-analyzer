@@ -135,6 +135,10 @@ def solve_phase2_or_structured(
         from investment_ami.pipeline.instant import run_instant_engine
 
         result = run_instant_engine("cash_reserve_advisor", ctx, beginner=beginner, question=question)
+    elif intent == "real_portfolio_advisor":
+        from investment_ami.pipeline.instant import run_instant_engine
+
+        result = run_instant_engine("real_portfolio_advisor", ctx, beginner=beginner, question=question)
     else:
         return None
     route = _route_for_intent(intent)

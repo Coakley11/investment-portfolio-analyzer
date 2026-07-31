@@ -113,6 +113,9 @@ def _optional_plan_context(session_state: Mapping[str, Any] | None, context: dic
             "plan_debt",
             "target_weights",
             "rebalance_drift",
+            "health_objective",
+            "portfolio_objective",
+            "investment_objective",
         ):
             if key in session_state and key not in merged:
                 merged[key] = session_state[key]
@@ -409,6 +412,12 @@ def build_real_portfolio_snapshot(
 
     plan_ctx = _optional_plan_context(session_state, context)
     risk = str(plan_ctx.get("plan_risk") or plan_ctx.get("risk_tolerance") or "").strip()
+    health_obj = str(
+        plan_ctx.get("health_objective")
+        or plan_ctx.get("portfolio_objective")
+        or plan_ctx.get("investment_objective")
+        or ""
+    ).strip()
     horizon = plan_ctx.get("plan_horizon")
     try:
         horizon_int = int(horizon) if horizon is not None else None
@@ -471,6 +480,7 @@ def build_real_portfolio_snapshot(
         monthly_contribution=monthly,
         reserves=reserves or None,
         near_term_needs=near_term_f,
+        health_objective=health_obj,
         data_quality_flags=tuple(portfolio_flags),
         holdings_df_mismatch_warning=mismatch,
         known_marked_securities_value=priced_market_total,

@@ -58,6 +58,7 @@ class RealPortfolioSnapshot:
     monthly_contribution: float | None = None
     reserves: dict[str, float] | None = None
     near_term_needs: float | None = None
+    health_objective: str = ""
     data_quality_flags: tuple[str, ...] = ()
     holdings_df_mismatch_warning: str | None = None
     known_marked_securities_value: float = 0.0

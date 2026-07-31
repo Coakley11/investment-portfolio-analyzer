@@ -410,19 +410,23 @@ def _decision_support_priority_intent(q_normalized: str, legacy_intent: str) -> 
     """Decision-support intents that must not fall through to analytical synthesis."""
     try:
         from investment_ami.decision_support.question_topics import (
+            is_cash_reserve_question,
             is_invested_amount_question,
             is_monthly_contribution_question,
+            is_real_portfolio_question,
         )
     except ImportError:
-        if legacy_intent in ("allocation_advisor", "cash_reserve_advisor"):
+        if legacy_intent in ("allocation_advisor", "cash_reserve_advisor", "real_portfolio_advisor"):
             return legacy_intent
         return None
     if is_monthly_contribution_question(q_normalized):
         return "allocation_advisor"
     if is_invested_amount_question(q_normalized):
         return "allocation_advisor"
-    if legacy_intent == "cash_reserve_advisor":
+    if is_cash_reserve_question(q_normalized) or legacy_intent == "cash_reserve_advisor":
         return "cash_reserve_advisor"
+    if is_real_portfolio_question(q_normalized):
+        return "real_portfolio_advisor"
     return None
 
 
@@ -487,7 +491,7 @@ def route_investment_response_mode(
     if ds_intent:
         matched.append(f"decision_support_priority:{ds_intent}")
         reasons.append(
-            "Decision-support question (monthly contribution, invested amount, or cash reserve) "
+            "Decision-support question (monthly contribution, invested amount, cash reserve, or real portfolio) "
             f"→ deterministic `{ds_intent}` before analytical synthesis."
         )
         return ModeRoutingDecision(
@@ -498,6 +502,19 @@ def route_investment_response_mode(
             matched_rules=tuple(matched),
             reasons=tuple(reasons),
             intent_classification=intent_dict,
+        )
+
+    if "recession" in q and any(m in q for m in ("market", "markets", "economy")) and "portfolio" not in q:
+        matched.append("analytical:macro_recession_markets")
+        reasons.append("Macro recession impact on markets (not a real-portfolio review) → analytical synthesis.")
+        return _analytical_decision(
+            tag="conditional_macro",
+            rule="analytical:recession_markets",
+            reasons=reasons,
+            matched=matched,
+            legacy=legacy,
+            deterministic_intent=legacy or "macro_recession",
+            intent_dict=intent_dict,
         )
 
     objective = _match_deterministic_objective(q)

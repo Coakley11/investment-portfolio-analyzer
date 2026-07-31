@@ -367,6 +367,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
         "allocation_recommendation": ("allocation_recommendation", "Allocation recommendation analyst"),
         "allocation_advisor": ("allocation_advisor", "Investment Allocation Advisor"),
         "cash_reserve_advisor": ("cash_reserve_advisor", "Cash Reserve Analyst"),
+        "real_portfolio_advisor": ("real_portfolio_advisor", "Real Portfolio Advisor"),
     }
     problem_type, model_name = labels.get(intent, ("investment_generic", "Investment analyst"))
     return InvestmentSolverRoute(
@@ -410,6 +411,7 @@ def _solve_instant_investment_insight_core(
         "risk_reduction",
         "allocation_advisor",
         "cash_reserve_advisor",
+        "real_portfolio_advisor",
     }
     if intent in phase2_intents:
         from investment_ami_phase2_solvers import solve_phase2_or_structured

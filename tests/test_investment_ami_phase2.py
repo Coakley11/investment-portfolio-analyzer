@@ -26,9 +26,10 @@ class TestInvestmentAmiPhase2(unittest.TestCase):
         solved = solve_instant_investment_insight("Is my portfolio too concentrated?", self._CTX)
         self.assertIsNotNone(solved)
         _, result = solved
+        self.assertEqual(result.problem_type, "real_portfolio_advisor")
         self.assertIn("direct_answer", result.analyst_sections)
-        self.assertIn("portfolio_analyst_view", result.analyst_sections)
-        self.assertIn("SCHD", result.analyst_sections["direct_answer"])
+        self.assertEqual(result.analyst_sections.get("insights_layout"), "real_portfolio_advisor")
+        self.assertIn("transaction-backed", result.short_answer.lower())
 
     def test_portfolio_risk_structured_depth(self) -> None:
         solved = solve_instant_investment_insight("What is my biggest portfolio risk?", self._CTX)

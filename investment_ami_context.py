@@ -78,6 +78,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "allocation_recommendation",
         "allocation_advisor",
         "cash_reserve_advisor",
+        "real_portfolio_advisor",
         "analytical_synthesis",
     }
 )
@@ -345,12 +346,15 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         from investment_ami.decision_support.question_topics import (
             is_invested_amount_question,
             is_monthly_contribution_question,
+            is_real_portfolio_question,
         )
 
         if is_monthly_contribution_question(q):
             return "allocation_advisor"
         if is_invested_amount_question(q):
             return "allocation_advisor"
+        if is_real_portfolio_question(q):
+            return "real_portfolio_advisor"
     except ImportError:
         pass
     if any(p in q for p in _CASH_RESERVE_ADVISOR_PHRASES):

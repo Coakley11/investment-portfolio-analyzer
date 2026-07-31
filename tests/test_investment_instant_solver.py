@@ -11,7 +11,7 @@ from investment_ami_instant_solver import solve_instant_investment_insight
 class TestInvestmentIntentRouting(unittest.TestCase):
     def test_concentration_question(self) -> None:
         q = "Is my portfolio too concentrated?"
-        self.assertEqual(detect_investment_send_intent(q, "Portfolio Health"), "portfolio_concentration")
+        self.assertEqual(detect_investment_send_intent(q, "Portfolio Health"), "real_portfolio_advisor")
 
     def test_rebalance_question(self) -> None:
         self.assertEqual(detect_investment_send_intent("Should I rebalance?", "Portfolio Health"), "allocation_recommendation")
@@ -40,9 +40,8 @@ class TestInvestmentInstantSolver(unittest.TestCase):
         solved = solve_instant_investment_insight("Is my portfolio too concentrated?", self._CTX)
         self.assertIsNotNone(solved)
         route, result = solved
-        self.assertEqual(route.problem_type, "portfolio_concentration")
-        self.assertIn("VOO", result.short_answer)
-        self.assertIn("40", result.short_answer)
+        self.assertEqual(route.problem_type, "real_portfolio_advisor")
+        self.assertIn("transaction-backed", result.short_answer.lower())
 
     def test_tech_exposure_answer(self) -> None:
         solved = solve_instant_investment_insight("Am I too exposed to tech?", self._CTX)

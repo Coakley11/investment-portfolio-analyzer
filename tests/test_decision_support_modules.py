@@ -76,10 +76,10 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         self.assertIn("30,000", joined)
         self.assertIn("42,000", joined)
 
-    def test_portfolio_questions_not_captured_by_decision_support(self) -> None:
+    def test_portfolio_questions_routing(self) -> None:
         self.assertEqual(
             detect_investment_send_intent("Is my portfolio too concentrated?", ""),
-            "portfolio_concentration",
+            "real_portfolio_advisor",
         )
         self.assertEqual(
             detect_investment_send_intent("What should I change in my portfolio?", ""),

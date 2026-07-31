@@ -198,6 +198,18 @@ _INTENT_SPECS: dict[str, dict[str, object]] = {
         "optional": frozenset({"investment_plan", "monthly_expenses", "plan_emergency"}),
         "follow_up": ("allocation_advisor",),
     },
+    "real_portfolio_advisor": {
+        "title": "Real portfolio advisor",
+        "category": AmiCategory.PORTFOLIO_ANALYSIS,
+        "description": "Transaction-backed performance, concentration, drift, and contribution placement.",
+        "engines": ("real_portfolio_advisor",),
+        "output_type": "recommendation",
+        "profile": "full",
+        "legacy": "decision_support",
+        "required": frozenset({"portfolio_transactions"}),
+        "optional": frozenset({"target_weights", "health_objective", "plan_monthly"}),
+        "follow_up": ("rebalance_allocation", "portfolio_concentration"),
+    },
     "analytical_synthesis": {
         "title": "Portfolio analytical synthesis",
         "category": AmiCategory.PORTFOLIO_ANALYSIS,

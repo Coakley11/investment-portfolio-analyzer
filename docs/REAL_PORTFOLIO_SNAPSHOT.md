@@ -92,3 +92,13 @@ Target precedence: explicit user asset-class targets → saved objective buckets
 Drift severity (pp): immaterial &lt;2; modest 2–&lt;5; material 5–&lt;10; substantial ≥10. Rebalance trigger requires valid target, complete pricing, and material drift or combined modest drifts (≥2 sleeves, ≥8 pp total).
 
 Tests: `tests/test_real_portfolio_recommendations.py`.
+
+## Phase D — AMI routing and presentation
+
+- Module: `real_portfolio_advisor` (`MODULE_REAL_PORTFOLIO`)
+- Pipeline: `run_real_portfolio_advisor()` → snapshot → performance → concentration → drift → recommendations → presentation
+- Routing precedence (mode router): monthly contribution → invested amount → cash reserve → **real portfolio** → objective metrics → synthesis
+- Layout: `insights_layout: real_portfolio_advisor` (Assessment, Portfolio Snapshot, performance drivers, allocation/concentration, suggestions, trade-offs, information needed, confidence)
+- No ledger: structured setup guidance only — no `holdings_df` / demo fallback
+
+Tests: `tests/test_real_portfolio_routing_and_presentation.py`.

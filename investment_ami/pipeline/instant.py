@@ -18,6 +18,7 @@ from investment_ami.engines.scenario_stress import get_scenario_stress_engine
 from investment_ami.engines.valuation import get_valuation_engine
 from investment_ami.engines.allocation_advisor import get_allocation_advisor_engine
 from investment_ami.engines.cash_reserve_advisor import get_cash_reserve_advisor_engine
+from investment_ami.engines.real_portfolio_advisor import get_real_portfolio_advisor_engine
 
 _concentration_engine = get_portfolio_concentration_engine()
 _risk_engine = get_portfolio_risk_engine()
@@ -48,6 +49,7 @@ INSTANT_ENGINE_REGISTRY: dict[str, Any] = {
     "macro_inflation": get_macroeconomic_engine("macro_inflation"),
     "allocation_advisor": get_allocation_advisor_engine(),
     "cash_reserve_advisor": get_cash_reserve_advisor_engine(),
+    "real_portfolio_advisor": get_real_portfolio_advisor_engine(),
 }
 
 
