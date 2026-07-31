@@ -662,6 +662,73 @@ def test_finalize_startup_holdings_restore_overrides_init_defaults(monkeypatch):
     assert st.session_state.get("startup_holdings_finalize_source") == "startup_post_init_cloud"
 
 
+def test_startup_holdings_restore_survives_second_rerun_autosave(monkeypatch):
+    """Cloud holdings restored at startup must not be replaced by defaults on the next rerun."""
+    import copy
+    import portfolio_core as core
+
+    cloud_state = {
+        "holdings_fingerprint": "BND:50.0:Bonds|VYM:50.0:Dividend ETF",
+        "portfolio_built": True,
+        "holdings_df": [
+            {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
+            {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
+        ],
+    }
+
+    def _fake_cloud_saved():
+        return cloud_state, "2026-06-11T18:00:00Z"
+
+    monkeypatch.setattr(ips, "_cloud_has_saved_portfolio", _fake_cloud_saved)
+
+    st = _FakeSt()
+    st.session_state.holdings_df = pd.DataFrame(core.DEFAULT_HOLDINGS)
+    st.session_state["default_holdings_applied"] = True
+    st.session_state["default_holdings_apply_reason"] = "init_holdings_no_saved_portfolio"
+
+    assert ips.finalize_startup_holdings_restore(st) is True
+    restored_tickers = set(st.session_state.holdings_df["Ticker"].tolist())
+    assert restored_tickers == {"BND", "VYM"}
+    assert st.session_state.get("default_holdings_applied") is False
+    assert st.session_state.get("startup_holdings_finalize_source") == "startup_post_init_cloud"
+    assert st.session_state.get("holdings_restore_source") == "startup_post_init_cloud"
+
+    # Second Streamlit rerun: init defaults hook + end-of-run autosave.
+    ips.finalize_init_holdings_defaults(st)
+    assert set(st.session_state.holdings_df["Ticker"].tolist()) == {"BND", "VYM"}
+    assert st.session_state.get("default_holdings_applied") is False
+
+    saved_payloads: list[dict] = []
+
+    def _fake_save_disk(app_id, payload):
+        saved_payloads.append(copy.deepcopy(payload))
+        return True
+
+    def _fake_save_cloud(app_id, payload, *, page="", summary=""):
+        saved_payloads.append(copy.deepcopy(payload))
+
+    def _fake_load_cloud(app_id):
+        return copy.deepcopy(cloud_state), "2026-06-11T18:00:00Z"
+
+    monkeypatch.setattr("suite_user_persistence.save_user_state", _fake_save_disk)
+    monkeypatch.setattr("suite_cloud_state.save_cloud_full_session", _fake_save_cloud)
+    monkeypatch.setattr("suite_cloud_state.load_cloud_full_session", _fake_load_cloud)
+    monkeypatch.setattr("suite_cloud_state.session_page_summary", lambda *a, **k: ("tab", "summary"))
+
+    st.session_state["experience"] = "Advanced Mode"
+    st.session_state[ips.PERSISTED_EXPERIENCE_KEY] = "Advanced Mode"
+
+    ips.autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
+    event = st.session_state["_suite_inv_debug_last_autosave_event"]
+    assert event["outcome"] != "blocked_default_holdings"
+    assert event.get("payload_holdings_row_count") == 2
+    assert saved_payloads, "expected persistence write on second rerun"
+    last_blob = saved_payloads[-1]
+    saved_tickers = {row["Ticker"] for row in last_blob.get("holdings_df") or []}
+    assert saved_tickers == {"BND", "VYM"}
+    assert "VTI" not in saved_tickers
+
+
 def test_finalize_init_holdings_defaults_prefers_cloud_over_factory(monkeypatch):
     st = _FakeSt()
     cloud_state = {

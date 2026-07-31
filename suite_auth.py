@@ -90,15 +90,8 @@ def current_auth_email(session_state: dict[str, Any]) -> str:
 
 
 def allowed_workspaces_for_user(external_user_id: str) -> tuple[str, ...]:
-    """Owned workspace(s) allowed for this account — one workspace unless admin."""
+    """Default owned workspace slug(s) for an external id (no session context)."""
     key = str(external_user_id or "").strip().lower()
-    try:
-        from suite_workspace_registry import admin_allowed_workspaces, is_admin_account
-
-        if is_admin_account(external_id=key):
-            return admin_allowed_workspaces(external_id=key)
-    except ImportError:
-        pass
     if key in _DEFAULT_ALLOWED_WORKSPACES:
         if key == "daniel":
             return _DEFAULT_ALLOWED_WORKSPACES[key]
@@ -130,7 +123,15 @@ def allowed_workspaces_for_session(session_state: dict[str, Any]) -> tuple[str, 
             return tuple(p["id"] for p in WORKSPACE_PRESETS)
         except ImportError:
             return ("daniel", "ariel", "guest", "test_user")
-    return allowed_workspaces_for_user(resolve_auth_external_id(session_state))
+    base = allowed_workspaces_for_user(resolve_auth_external_id(session_state))
+    try:
+        from suite_workspace_registry import admin_allowed_workspaces, is_admin_user
+
+        if is_admin_user(session_state=session_state):
+            return admin_allowed_workspaces(external_id=resolve_auth_external_id(session_state))
+    except ImportError:
+        pass
+    return base
 
 
 def _infer_external_id_from_email(email: str) -> str:
@@ -158,6 +159,7 @@ def enforce_workspace_ownership(session_state: dict[str, Any]) -> None:
         from suite_workspace_registry import (
             ensure_owned_workspace_for_session,
             get_owned_workspace_id,
+            load_persisted_workspace_for_account,
             workspace_access_allowed,
         )
 
@@ -172,6 +174,16 @@ def enforce_workspace_ownership(session_state: dict[str, Any]) -> None:
         if owned and active != owned and not workspace_access_allowed(active, session_state=session_state):
             set_active_workspace_id(st, owned)
             return
+        if owned and active != owned:
+            try:
+                persisted = normalize_workspace_id(
+                    load_persisted_workspace_for_account(session_state=session_state)
+                )
+            except Exception:
+                persisted = owned
+            if persisted != active or not workspace_access_allowed(active, session_state=session_state):
+                set_active_workspace_id(st, owned)
+                return
         if owned and len(allowed) == 1 and active != owned:
             set_active_workspace_id(st, owned)
             return

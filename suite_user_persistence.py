@@ -909,16 +909,32 @@ def restore_once(
     if disk_warn:
         st.session_state[_SESSION_INVALID_WARN_KEY] = disk_warn
 
-    skip_cloud = False
+    skip_restore_apply = False
     try:
-        from suite_cloud_state import has_resume_query_params
+        if str(app_id or "").strip() == "investment":
+            from applied_math_return_insight import investment_ami_return_allows_restore_skip
 
-        skip_cloud = has_resume_query_params(st, app_id)
+            skip_restore_apply = investment_ami_return_allows_restore_skip(st)
+        else:
+            from suite_cloud_state import has_resume_query_params
+
+            skip_restore_apply = has_resume_query_params(st, app_id)
     except ImportError:
         pass
 
-    if skip_cloud:
+    if skip_restore_apply:
         st.session_state["_suite_resume_insight_hydration_only"] = True
+        _set_restore_skip_reason(st, "resume query params — restore skipped")
+        _record_restore_debug_meta(
+            st,
+            app_id,
+            cloud_ts=None,
+            disk_ts=disk_ts,
+            pick_source="skipped",
+            pick_reason="resume query params",
+            local_dirty=local_dirty,
+        )
+        return False
 
     cloud_state: dict[str, Any] = {}
     cloud_ts: str | None = None

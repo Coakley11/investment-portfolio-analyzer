@@ -11,6 +11,33 @@ data/investment_user_state.json
 data/macro_snapshot_cache.json
 data/*activity_fallback.json
 data/*_activity_fallback.json
+data/market_data_cache/
+data/workspaces/
+data/suite_active_workspace.json
+data/_ux_macro_samples.txt
+# Generated benchmark run artifacts (tracked: docs/eval/B1_CRITIQUE_SCORECARD.md, docs/eval/runs/.gitkeep)
+docs/eval/b1_runs/
+docs/eval/runs/2026*.json
+docs/eval/runs/2026*.md
+docs/eval/ami_analytical_benchmark_latest.json
+docs/eval/ami_analytical_benchmark_latest.md
+docs/eval/benchmark_run_index.json
+docs/eval/BENCHMARK_RUN_HISTORY.md
+docs/eval/b1_critique_baseline_full.md
+# Local one-off agent probes (maintained scripts use unprefixed names under scripts/)
+scripts/_patch_*.py
+scripts/_debug_*.py
+scripts/_trace_*.py
+scripts/_verify_*.py
+scripts/_capture_*.py
+scripts/_fix_*.py
+scripts/_poll_*.py
+scripts/_runtime_*.py
+scripts/_ux_*.py
+_head_streamlit.py
+_opt_chunk.txt
+_tab_risk_snippet.txt
+_tmp_sup.py
 *.db
 *.sqlite
 *.sqlite3

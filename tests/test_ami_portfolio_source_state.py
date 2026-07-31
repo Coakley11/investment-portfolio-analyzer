@@ -96,12 +96,20 @@ class TestAmiPortfolioSourceState(unittest.TestCase):
         )
 
     def test_build_question_payload_enriches_from_cloud_when_session_empty(self) -> None:
+        from applied_math_context import enrich_investment_source_state_holdings
         from suite_analytical_question import build_question_payload
 
         cloud_records = [
             {"Ticker": "BND", "Weight (%)": 50.0, "Asset Type": "Bonds"},
             {"Ticker": "VYM", "Weight (%)": 50.0, "Asset Type": "Dividend ETF"},
         ]
+        session = {"investment_active_tab": "Portfolio Health"}
+        shell = {
+            "source_app": "investment",
+            "source_page": "Portfolio Health",
+            "entity_params": {"tab": "Portfolio Health"},
+            "widget_params": {},
+        }
         with patch(
             "suite_cloud_state.load_cloud_full_session",
             return_value=(
@@ -113,17 +121,12 @@ class TestAmiPortfolioSourceState(unittest.TestCase):
                 "2026-06-11T12:00:00",
             ),
         ):
+            enriched = enrich_investment_source_state_holdings(session, shell)
             payload = build_question_payload(
                 source_app="investment",
                 source_page="Portfolio Health",
                 question="What is my portfolio risk?",
-                source_state={
-                    "source_app": "investment",
-                    "source_page": "Portfolio Health",
-                    "entity_params": {"tab": "Portfolio Health"},
-                    "widget_params": {},
-                },
-                session_state={"investment_active_tab": "Portfolio Health"},
+                source_state=enriched,
             )
         ent = payload["source_state"]["entity_params"]
         self.assertIn("holdings_df", ent)

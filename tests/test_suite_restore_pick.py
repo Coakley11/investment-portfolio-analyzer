@@ -20,10 +20,23 @@ class TestRestorePick(unittest.TestCase):
             {"experience": "Advanced Mode"},
             "2026-06-03T11:00:00+00:00",
             local_dirty=False,
+            cloud_first=False,
         )
         self.assertEqual(picked.source, "cloud")
         self.assertEqual(picked.state["experience"], "Beginner Mode")
         self.assertEqual(picked.reason, "cloud newer")
+
+    def test_cloud_first_prefers_cloud_when_both_present(self) -> None:
+        picked = pick_restore_session(
+            {"experience": "Beginner Mode"},
+            "2026-06-03T10:00:00+00:00",
+            {"experience": "Advanced Mode"},
+            "2026-06-03T12:00:00+00:00",
+            local_dirty=False,
+            cloud_first=True,
+        )
+        self.assertEqual(picked.source, "cloud")
+        self.assertEqual(picked.reason, "cloud-first workspace sync")
 
     def test_disk_newer_wins_when_not_dirty(self) -> None:
         picked = pick_restore_session(
@@ -32,6 +45,7 @@ class TestRestorePick(unittest.TestCase):
             {"experience": "Advanced Mode"},
             "2026-06-03T12:00:00+00:00",
             local_dirty=False,
+            cloud_first=False,
         )
         self.assertEqual(picked.source, "disk")
         self.assertEqual(picked.state["experience"], "Advanced Mode")
@@ -44,6 +58,7 @@ class TestRestorePick(unittest.TestCase):
             {"experience": "Advanced Mode"},
             ts,
             local_dirty=False,
+            cloud_first=False,
         )
         self.assertEqual(picked.source, "cloud")
         self.assertEqual(picked.reason, "tie → cloud")

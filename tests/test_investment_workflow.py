@@ -102,9 +102,9 @@ class TestInvalidateWorkflow(unittest.TestCase):
     def test_developer_access_query_param(self) -> None:
         st = _FakeSt()
         st.query_params = {"dev": "1"}
-        with patch("suite_workspace.is_developer_workspace", return_value=True):
+        with patch("suite_workspace.is_admin_session", return_value=True):
             self.assertTrue(developer_access_available(st))
-        with patch("suite_workspace.is_developer_workspace", return_value=False):
+        with patch("suite_workspace.is_admin_session", return_value=False):
             self.assertFalse(developer_access_available(st))
 
     def test_developer_diagnostics_requires_can_show(self) -> None:

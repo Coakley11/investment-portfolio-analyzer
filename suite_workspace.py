@@ -356,9 +356,11 @@ def init_suite_workspace(st: Any) -> str:
         incoming = normalize_workspace_id(from_url)
         allowed_incoming = True
         try:
-            from suite_workspace_registry import workspace_access_allowed
+            from suite_auth import is_auth_enabled, is_authenticated
+            from suite_workspace_registry import workspace_url_bootstrap_allowed
 
-            allowed_incoming = workspace_access_allowed(incoming, session_state=st.session_state)
+            if is_auth_enabled() and is_authenticated(st.session_state):
+                allowed_incoming = workspace_url_bootstrap_allowed(incoming, session_state=st.session_state)
         except ImportError:
             pass
         current = normalize_workspace_id(

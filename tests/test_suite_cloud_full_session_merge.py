@@ -14,6 +14,15 @@ def _active_app(monkeypatch):
     monkeypatch.setattr(storage, "ACTIVE_APP_KEYS", frozenset({"investment"}))
 
 
+def _metrics_get_rows(prior_metrics: dict):
+    def _fake_request(method, table, **kwargs):
+        if method.upper() == "GET" and table == storage._TABLE_STATE:
+            return [{"metrics": prior_metrics}]
+        return []
+
+    return _fake_request
+
+
 def test_merge_state_metrics_preserves_full_session_when_incoming_omits_it():
     portfolio_session = {
         "holdings_df": [{"Ticker": "BND", "Allocation": 50}, {"Ticker": "VYM", "Allocation": 50}],
@@ -30,7 +39,10 @@ def test_merge_state_metrics_preserves_full_session_when_incoming_omits_it():
         "conclusion": "test",
     }
 
-    with patch.object(storage, "load_current_states", return_value={"investment": {"metrics": prior}}):
+    with (
+        patch.object(storage, "_cloud_user_id", return_value="user-1"),
+        patch.object(storage, "_request", side_effect=_metrics_get_rows(prior)),
+    ):
         merged = storage._merge_state_metrics("investment", insight_blob)
 
     assert merged["full_session"] == portfolio_session
@@ -42,7 +54,10 @@ def test_merge_state_metrics_replaces_full_session_when_incoming_includes_it():
     prior = {"full_session": {"old": True}, "other": 1}
     incoming = {"full_session": {"holdings_df": [], "portfolio_built": True}}
 
-    with patch.object(storage, "load_current_states", return_value={"investment": {"metrics": prior}}):
+    with (
+        patch.object(storage, "_cloud_user_id", return_value="user-1"),
+        patch.object(storage, "_request", side_effect=_metrics_get_rows(prior)),
+    ):
         merged = storage._merge_state_metrics("investment", incoming)
 
     assert merged["full_session"] == incoming["full_session"]
@@ -73,12 +88,13 @@ def test_save_current_state_merges_metrics_before_post():
     captured: dict = {}
 
     def _fake_request(method, table, **kwargs):
+        if method.upper() == "GET" and table == storage._TABLE_STATE:
+            return [{"metrics": prior}]
         if table == storage._TABLE_STATE:
             captured["body"] = kwargs.get("json_body") or {}
         return []
 
     with (
-        patch.object(storage, "load_current_states", return_value={"investment": {"metrics": prior}}),
         patch.object(storage, "_cloud_user_id", return_value="user-1"),
         patch.object(storage, "_request", side_effect=_fake_request),
         patch.object(storage, "normalize_app_key", return_value="investment"),

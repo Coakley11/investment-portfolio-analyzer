@@ -269,12 +269,33 @@ def list_owned_workspace_ids(*, session_state: dict[str, Any] | None = None) -> 
 
 
 def workspace_access_allowed(workspace_id: str, *, session_state: dict[str, Any] | None = None) -> bool:
-    """Reject cross-account workspace access (stale URL/session keys)."""
+    """True when the session may use this workspace (owned slug or verified admin preset)."""
     from suite_workspace import normalize_workspace_id
 
     wid = normalize_workspace_id(workspace_id)
-    allowed = frozenset(list_owned_workspace_ids(session_state=session_state))
-    return wid in allowed
+    owned = normalize_workspace_id(get_owned_workspace_id(session_state) or "")
+    if owned and wid == owned:
+        return True
+    if not isinstance(session_state, dict):
+        return False
+    try:
+        from suite_auth import is_auth_enabled, is_authenticated, resolve_auth_external_id
+
+        if is_auth_enabled() and is_authenticated(session_state) and is_admin_user(session_state=session_state):
+            presets = frozenset(admin_allowed_workspaces(external_id=resolve_auth_external_id(session_state)))
+            return wid in presets
+    except ImportError:
+        pass
+    return False
+
+
+def workspace_url_bootstrap_allowed(workspace_id: str, *, session_state: dict[str, Any] | None = None) -> bool:
+    """``?suite_workspace=`` may only select the signed-in account's owned workspace."""
+    from suite_workspace import normalize_workspace_id
+
+    wid = normalize_workspace_id(workspace_id)
+    owned = normalize_workspace_id(get_owned_workspace_id(session_state) or "")
+    return bool(owned) and wid == owned
 
 
 def _account_context(session_state: dict[str, Any]) -> dict[str, str]:
@@ -387,7 +408,7 @@ def load_persisted_workspace_for_account(*, session_state: dict[str, Any] | None
     Account-owned workspace resolution. Reads the per-account file directly and
     never calls back into ``load_persisted_workspace_id`` (avoids recursion).
     """
-    from suite_workspace import normalize_workspace_id, _load_legacy_persisted_workspace_id, _read_json
+    from suite_workspace import DEFAULT_WORKSPACE_ID, normalize_workspace_id, _load_legacy_persisted_workspace_id, _read_json
 
     owner_user_id = ""
     try:
@@ -412,6 +433,7 @@ def load_persisted_workspace_for_account(*, session_state: dict[str, Any] | None
         owned = get_owned_workspace_id(session_state)
         if owned:
             return owned
+        return normalize_workspace_id(ctx.get("owner_external_id") or "") or DEFAULT_WORKSPACE_ID
 
     # No account owner: fall back to the legacy global file directly (no callback).
     return _load_legacy_persisted_workspace_id()

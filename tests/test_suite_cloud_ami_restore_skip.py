@@ -65,6 +65,15 @@ class TestSuiteCloudAmiRestoreSkip(unittest.TestCase):
         self.assertIn("suite_ami_insight", list_workspace_restore_blocking_query_params(st, "investment"))
         self.assertIn("_skip_page_restore_for", st.session_state)
 
+    def test_blocking_params_alias_matches_query_param_helper(self) -> None:
+        from suite_cloud_state import list_workspace_restore_blocking_params
+
+        st = _FakeSt({"suite_ami_insight": "live-id"})
+        self.assertEqual(
+            list_workspace_restore_blocking_params(st, "investment"),
+            list_workspace_restore_blocking_query_params(st, "investment"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
