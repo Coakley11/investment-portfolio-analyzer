@@ -119,6 +119,137 @@ class TestInvestmentAmiSubmitTwoRerun(unittest.TestCase):
         self.assertTrue(rendered)
         self.assertFalse(ss.get("_ami_render_requested"))
 
+    def test_full_pipeline_with_investment_plan_result(self) -> None:
+        import portfolio_core as core
+        from components.investment_planning import PLAN_MONTHLY_PROVIDED_KEY
+        from investment_persistent_state import apply_investment_disk_state, build_investment_disk_state
+        from suite_analytical_question import execute_investment_ami_submit_pipeline
+
+        st = _FakeSt()
+        ss = st.session_state
+        ss.update(
+            {
+                "plan_total_cash": 120_000,
+                "plan_emergency": 25_000,
+                "plan_near_term": 10_000,
+                "plan_debt": 5_000,
+                "plan_expenses": 8_000,
+                "plan_horizon": 20,
+                "plan_risk": "Medium",
+                PLAN_MONTHLY_PROVIDED_KEY: False,
+                "investment_plan_generated": True,
+                "investment_plan": core.InvestmentPlanResult(
+                    total_available=120_000,
+                    suggested_emergency_reserve=25_000,
+                    short_term_cash_amount=10_000,
+                    debt_reserve=5_000,
+                    amount_potentially_investable=80_000,
+                    long_term_suggested=68_000,
+                    short_term_investable=12_000,
+                    monthly_contribution=0,
+                    summary_lines=[],
+                    educational_notes=[],
+                ),
+                "sidebar_portfolio_value": 75_000,
+            }
+        )
+        question = "Is the amount I currently have invested appropriate?"
+
+        with patch("applied_math_return_insight.store_applied_math_insight", return_value="inv-plan-1"), patch(
+            "suite_analytical_question.submit_analytical_question",
+            wraps=__import__("suite_analytical_question", fromlist=["submit_analytical_question"]).submit_analytical_question,
+        ) as submit_mock, patch(
+            "suite_analytical_question._upsert_applied_intelligence_resume",
+        ):
+            ok, err = execute_investment_ami_submit_pipeline(
+                st,
+                ss,
+                question=question,
+                source_page="Portfolio Inputs",
+                page_suffix="Portfolio_Inputs",
+                send_gen=0,
+            )
+
+        self.assertTrue(ok, err)
+        self.assertIn(SESSION_PENDING_KEY, ss)
+        self.assertTrue(ss.get("_ami_render_requested"))
+        submit_mock.assert_called_once()
+        metrics_ctx = submit_mock.call_args.kwargs.get("context") or {}
+        self.assertIsInstance(metrics_ctx.get("investment_plan"), dict)
+        log = ss.get("_ami_submit_pipeline_log") or []
+        stages = [e.get("stage") for e in log if e.get("entered")]
+        for stage in ("ROUTE", "SOLVE", "STAGE", "SAVE"):
+            self.assertIn(stage, stages)
+
+        disk = build_investment_disk_state(st)
+        st2 = _FakeSt()
+        apply_investment_disk_state(st2, disk)
+        restored = st2.session_state.get(SESSION_PENDING_KEY)
+        self.assertIsInstance(restored, dict)
+        self.assertTrue(restored.get("conclusion") or restored.get("question"))
+
+    def test_pipeline_exception_sets_error_not_processing(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        queue_investment_ami_submit(
+            ss,
+            question="Is the amount I currently have invested appropriate?",
+            source_page="Portfolio Inputs",
+            page_suffix="Portfolio_Inputs",
+            send_gen=0,
+        )
+        with patch(
+            "suite_analytical_question.execute_investment_ami_submit_pipeline",
+            side_effect=RuntimeError("SAVE failed"),
+        ):
+            process_investment_ami_submit_queue(st)
+        self.assertEqual(ss["_ami_insight_submit_status"]["state"], "error")
+        self.assertNotEqual(ss["_ami_insight_submit_status"]["state"], "processing")
+
+    def test_json_serialization_failure_sets_error_not_stuck(self) -> None:
+        st = _FakeSt()
+        ss = st.session_state
+        ss.update(
+            {
+                "plan_total_cash": 120_000,
+                "plan_emergency": 25_000,
+                "plan_near_term": 10_000,
+                "plan_debt": 5_000,
+                "plan_expenses": 8_000,
+                "plan_horizon": 20,
+                "plan_risk": "Medium",
+                "investment_plan_generated": True,
+                "investment_plan": __import__("portfolio_core").InvestmentPlanResult(
+                    total_available=120_000,
+                    suggested_emergency_reserve=25_000,
+                    short_term_cash_amount=10_000,
+                    debt_reserve=5_000,
+                    amount_potentially_investable=80_000,
+                    long_term_suggested=68_000,
+                    short_term_investable=12_000,
+                    monthly_contribution=0,
+                    summary_lines=[],
+                    educational_notes=[],
+                ),
+                "sidebar_portfolio_value": 75_000,
+            }
+        )
+        queue_investment_ami_submit(
+            ss,
+            question="Is the amount I currently have invested appropriate?",
+            source_page="Portfolio Inputs",
+            page_suffix="Portfolio_Inputs",
+            send_gen=0,
+        )
+        with patch("applied_math_return_insight.store_applied_math_insight", return_value="inv-ser-1"), patch(
+            "json_safe.ensure_json_safe",
+            side_effect=TypeError("Object of type Bad is not JSON serializable"),
+        ):
+            process_investment_ami_submit_queue(st)
+        self.assertEqual(ss["_ami_insight_submit_status"]["state"], "error")
+        self.assertIn("TypeError", str(ss["_ami_insight_submit_status"].get("message") or ""))
+        self.assertNotIn(SUBMIT_QUEUE_KEY, ss)
+
 
 if __name__ == "__main__":
     unittest.main()

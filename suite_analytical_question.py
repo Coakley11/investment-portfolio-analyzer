@@ -383,6 +383,8 @@ def _parse_context_from_resume_subtitle(subtitle: str) -> dict[str, Any]:
 
 def _store_question_context_blob(payload: dict[str, Any]) -> None:
     """Persist full context server-side keyed by question_id (survives URL truncation)."""
+    from json_safe import ensure_json_safe, json_safe_context
+
     qid = str(payload.get("question_id") or "").strip()
     if not qid:
         return
@@ -392,8 +394,8 @@ def _store_question_context_blob(payload: dict[str, Any]) -> None:
         "source_app": payload.get("source_app"),
         "source_page": payload.get("source_page"),
         "quant_area": payload.get("quant_area"),
-        "context": dict(payload.get("context") or {}),
-        "source_state": dict(payload.get("source_state") or {}),
+        "context": json_safe_context(dict(payload.get("context") or {})),
+        "source_state": ensure_json_safe(dict(payload.get("source_state") or {})),
     }
     try:
         from suite_account import remember_saved_item
@@ -620,8 +622,10 @@ def analytical_question_continue_copy(payload: dict[str, Any]) -> tuple[str, str
 
 def analytical_question_storage_subtitle(payload: dict[str, Any]) -> str:
     """Resume-item subtitle for storage/rebuild — question only on CC cards; context stays in metrics/URL."""
+    from json_safe import json_safe_context
+
     question = str(payload.get("question") or "").strip()
-    ctx = dict(payload.get("context") or {})
+    ctx = json_safe_context(dict(payload.get("context") or {}))
     ctx_json = json.dumps(ctx, ensure_ascii=False) if ctx else ""
     if ctx_json:
         return f"{question}\n__ctx_json__:{ctx_json[:_CTX_JSON_SUBTITLE_LIMIT]}"
@@ -630,7 +634,9 @@ def analytical_question_storage_subtitle(payload: dict[str, Any]) -> str:
 
 def metrics_for_applied_math_resume(payload: dict[str, Any]) -> dict[str, Any]:
     """Metrics bundle for deep links into Applied Intelligence."""
-    ctx = dict(payload.get("context") or {})
+    from json_safe import json_safe_context
+
+    ctx = json_safe_context(dict(payload.get("context") or {}))
     ctx_lines = format_context_lines(ctx)
     metrics = {
         "question": payload.get("question"),
@@ -890,6 +896,13 @@ def build_submit_context(
         extra = context_extra
     if extra:
         ctx = merge_analytical_context(ctx, extra)
+    if str(source_app or "").strip().lower() == "investment":
+        try:
+            from applied_math_context import _merge_investment_plan_into_context
+
+            _merge_investment_plan_into_context(session_state, ctx)
+        except Exception:
+            pass
     return ctx
 
 

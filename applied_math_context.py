@@ -279,7 +279,12 @@ def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict
         ctx["plan_monthly"] = session_state.get("plan_monthly")
     plan = session_state.get("investment_plan")
     if plan is not None:
-        ctx["investment_plan"] = plan
+        try:
+            from json_safe import investment_plan_result_to_dict
+
+            ctx["investment_plan"] = investment_plan_result_to_dict(plan)
+        except TypeError:
+            ctx.pop("investment_plan", None)
 
 
 def _enrich_investment_ami_analytics(
