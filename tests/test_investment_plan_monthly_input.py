@@ -87,7 +87,8 @@ def test_investing_enough_uses_explicit_zero():
         ctx,
         question="Am I investing enough?",
     )
-    assert "$0" in response.assessment
+    combined = response.assessment + " " + " ".join(response.observations)
+    assert "$0" in combined
 
 
 def test_invested_amount_assessment_ignores_unknown_monthly():

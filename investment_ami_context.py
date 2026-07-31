@@ -274,6 +274,9 @@ _CASH_RESERVE_ADVISOR_PHRASES = (
 
 _ALLOCATION_ADVISOR_PHRASES = (
     "how much should i invest",
+    "how much should i contribute",
+    "contribute each month",
+    "contribution each month",
     "invest this month",
     "investing enough",
     "invested appropriate",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from investment_ami.decision_support.monthly_contribution_advisor import analyze_monthly_contribution
 from investment_ami.decision_support.question_topics import is_invested_amount_question, is_monthly_contribution_question
 
 from investment_ami.decision_support.models import DecisionSupportResponse, FinancialSnapshot, ReasoningFinding
@@ -295,6 +296,26 @@ def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list
         )
         return items
 
+    if is_monthly_contribution_question(q):
+        items = []
+        if snapshot.monthly_income is None:
+            items.append("Monthly after-tax income")
+        if snapshot.monthly_expenses is None and snapshot.question_expense_after is None:
+            items.append("Monthly essential expenses")
+        if not snapshot.monthly_contribution_known:
+            items.append("Current monthly contribution (optional field on How Much Should I Invest?)")
+        if not snapshot.job_stability:
+            items.append("Job or income stability")
+        items.extend(
+            [
+                "Employer retirement match (if any)",
+                "Retirement and other long-term goals",
+                "Expected large future expenses",
+                "Debt or obligations set aside in your plan",
+            ]
+        )
+        return items
+
     items = []
     if snapshot.monthly_income is None:
         items.append("Monthly after-tax income")
@@ -314,58 +335,8 @@ def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list
     return items
 
 
-def _investing_enough_assessment(snapshot: FinancialSnapshot) -> str:
-    if snapshot.monthly_contribution_known and snapshot.monthly_contribution == 0:
-        contrib = "Your current stated monthly investment is **$0**."
-    elif snapshot.monthly_contribution is not None and snapshot.monthly_contribution > 0:
-        contrib = f"Your stated current monthly investment is **{_money(snapshot.monthly_contribution)}**."
-    elif not snapshot.monthly_contribution_known:
-        contrib = "Your current monthly investment was left blank (unknown)."
-    else:
-        contrib = "Your current monthly investment could not be read from your plan."
-
-    missing_income_exp = snapshot.monthly_income is None and snapshot.monthly_expenses is None
-    if missing_income_exp:
-        base = (
-            "AMI cannot yet determine whether you are investing enough because "
-            f"{contrib.rstrip('.').lower()} and monthly income and expenses are not available."
-        )
-    elif snapshot.monthly_income is None or snapshot.monthly_expenses is None:
-        base = (
-            f"{contrib} Without both monthly income and expenses, AMI cannot compare your contribution "
-            "to your monthly surplus."
-        )
-    else:
-        surplus = snapshot.monthly_income - snapshot.monthly_expenses
-        if surplus <= 0:
-            base = (
-                f"{contrib} Your stated income and expenses show no positive monthly surplus, "
-                "so additional investing may need to come from existing cash rather than paycheck flow."
-            )
-        elif snapshot.monthly_contribution is not None and snapshot.monthly_contribution > surplus:
-            base = (
-                f"{contrib} That exceeds your stated monthly surplus "
-                f"({_money(surplus)}), so it may not be sustainable without drawing down cash."
-            )
-        elif snapshot.monthly_contribution is not None and snapshot.monthly_contribution == 0:
-            base = (
-                f"{contrib} You may still deploy lump-sum cash up to your "
-                f"potentially investable amount"
-                + (f" (**{_money(snapshot.investable_amount)}**)" if snapshot.investable_amount else "")
-                + ", but AMI cannot judge monthly pace without a non-zero contribution or income/expense data."
-            )
-        else:
-            base = (
-                f"{contrib} Based on your stated surplus ({_money(surplus)}), "
-                "your contribution appears sustainable relative to income and expenses, "
-                "subject to emergency fund and near-term cash needs."
-            )
-    if snapshot.investable_amount is not None and snapshot.investable_amount > 0:
-        base += (
-            f" Your plan shows about **{_money(snapshot.investable_amount)}** potentially investable "
-            "after reserves."
-        )
-    return base
+def _monthly_contribution_assessment(snapshot: FinancialSnapshot, question: str) -> str:
+    return analyze_monthly_contribution(snapshot, question=question).assessment
 
 
 def build_assessment(
@@ -375,10 +346,12 @@ def build_assessment(
     findings: list[ReasoningFinding],
 ) -> str:
     q = question.lower()
+    if is_monthly_contribution_question(q):
+        return _monthly_contribution_assessment(snapshot, question)
     if is_invested_amount_question(q):
         return _invested_amount_assessment(snapshot)
-    if is_monthly_contribution_question(q) or ("investing enough" in q and "invested" not in q):
-        return _investing_enough_assessment(snapshot)
+    if "investing enough" in q and "invested" not in q:
+        return _monthly_contribution_assessment(snapshot, question)
     if "lost my job" in q or "lose my job" in q:
         for f in findings:
             if f.rule_id == "cash_job_loss":
@@ -418,6 +391,8 @@ def resolve_confidence(
     question: str = "",
 ) -> tuple[str, int, str]:
     q = question.lower()
+    if is_monthly_contribution_question(q):
+        return _resolve_confidence_monthly_contribution(snapshot, information_needed)
     if is_invested_amount_question(q):
         return _resolve_confidence_invested_amount(snapshot, information_needed)
     missing = len(information_needed)
@@ -460,6 +435,29 @@ def _resolve_confidence_invested_amount(
             "and monthly cash flow are included."
         )
     return "medium", pct, " ".join(note_parts)
+
+
+def _resolve_confidence_monthly_contribution(
+    snapshot: FinancialSnapshot,
+    information_needed: list[str],
+) -> tuple[str, int, str]:
+    has_plan = bool(snapshot.to_facts_dict())
+    has_cashflow = snapshot.monthly_income is not None and snapshot.monthly_expenses is not None
+    pct = 68 if has_cashflow and has_plan else (62 if has_plan else 50)
+    parts = [
+        "Confidence is **moderate** regarding alignment with your **entered plan** "
+        f"(about **{pct if has_plan else 50}%**)."
+    ]
+    if not has_cashflow:
+        parts.append(
+            "Confidence is **low** regarding the **exact recommended monthly contribution** until "
+            "monthly after-tax income and essential expenses are available."
+        )
+    elif information_needed:
+        parts.append(
+            "Confidence may increase after employer match, retirement goals, and job stability are included."
+        )
+    return "medium", pct, " ".join(parts)
 
 
 def _confidence_rationale(snapshot: FinancialSnapshot, information_needed: list[str]) -> str:
@@ -533,11 +531,23 @@ def finalize_decision_support_response(
         snapshot, information_needed, question=question
     )
     observations = build_observations(findings)
-    if is_invested_amount_question(question):
+    monthly_section = ""
+    if is_monthly_contribution_question(question):
+        advice = analyze_monthly_contribution(snapshot, question=question)
+        if advice.observations:
+            observations = advice.observations
+        if advice.trade_offs:
+            trade_offs = advice.trade_offs
+        else:
+            trade_offs = build_trade_offs(findings)
+        monthly_section = advice.suggested_monthly_section
+    elif is_invested_amount_question(question):
         plan_obs = build_invested_amount_observations(snapshot)
         if plan_obs:
             observations = plan_obs
-    trade_offs = build_trade_offs(findings)
+        trade_offs = build_trade_offs(findings)
+    else:
+        trade_offs = build_trade_offs(findings)
     next_steps = build_suggested_next_steps(snapshot, findings, information_needed)
 
     info_block = ""
@@ -561,6 +571,7 @@ def finalize_decision_support_response(
         confidence_pct=confidence_pct,
         confidence_note=confidence_note,
         information_needed_markdown=info_block,
+        monthly_contribution_recommendation=monthly_section,
     )
 
 
@@ -591,6 +602,7 @@ def render_user_analyst_sections(response: DecisionSupportResponse) -> dict[str,
         "portfolio_analyst_view": "\n".join(f"- {o}" for o in response.observations)
         if response.observations
         else "- No additional observations.",
+        "monthly_contribution_recommendation": response.monthly_contribution_recommendation,
         "recommended_actions": response.suggested_actions[0] if response.suggested_actions else "",
         "tradeoffs": "\n".join(f"- {t}" for t in response.trade_offs) if response.trade_offs else "",
         "risk_notes": response.information_needed_markdown,

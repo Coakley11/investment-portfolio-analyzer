@@ -28,6 +28,7 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         "plan_risk": "moderate",
         "investment_plan_generated": True,
         "monthly_expenses": 5_000,
+        "monthly_income": 9_000,
     }
 
     def test_allocation_monthly_question_applies_rules(self) -> None:
@@ -140,8 +141,10 @@ class DecisionSupportPipelineTests(unittest.TestCase):
             question="Am I investing enough?",
         )
         self.assertTrue(
-            response.assessment.lower().startswith("ami cannot")
+            response.assessment.lower().startswith("based on your entered")
+            or response.assessment.lower().startswith("ami cannot")
             or "monthly investment" in response.assessment.lower()
+            or "suggested" in response.assessment.lower()
         )
 
     def test_plan_session_reaches_snapshot_via_applied_math_context(self) -> None:

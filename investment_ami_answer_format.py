@@ -198,6 +198,7 @@ DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("direct_answer", "Assessment"),
     ("key_variables", "Facts Used"),
     ("portfolio_analyst_view", "What AMI Observes"),
+    ("monthly_contribution_recommendation", "Suggested Monthly Contribution"),
     ("recommended_actions", "Suggested Next Steps"),
     ("tradeoffs", "Trade-Offs"),
     ("risk_notes", "Information Needed"),
@@ -207,7 +208,7 @@ DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 # Decision-support insight sections are narrative Markdown (currency, bold) — not LaTeX.
 DECISION_SUPPORT_PROSE_SECTION_KEYS: frozenset[str] = frozenset(
     key for key, _ in DECISION_SUPPORT_PAGE_SECTION_ORDER
-) | frozenset({"assumptions"})
+) | frozenset({"assumptions", "monthly_contribution_recommendation"})
 
 
 def insight_section_render_mode(section_key: str, sections: dict[str, Any] | None) -> str:

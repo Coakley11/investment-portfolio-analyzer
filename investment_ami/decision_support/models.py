@@ -93,3 +93,4 @@ class DecisionSupportResponse:
     confidence_pct: int = 65
     confidence_note: str = ""
     information_needed_markdown: str = ""
+    monthly_contribution_recommendation: str = ""
