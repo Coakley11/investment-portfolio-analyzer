@@ -21,6 +21,22 @@ INVESTED_AMOUNT_PHRASES: tuple[str, ...] = (
     "is my current invested",
     "how much should be invested",
     "invested vs",
+    "portfolio investment reasonable",
+    "investment reasonable",
+    "reasonable given my financial",
+    "financial situation",
+    "investing a reasonable amount",
+    "reasonable amount",
+    "investment level make sense",
+    "current investment level",
+    "portfolio too large",
+    "portfolio too small",
+    "too large or too small",
+    "make sense for my situation",
+    "does my current investment",
+    "is my portfolio investment",
+    "investment appropriate",
+    "invested level",
 )
 
 
@@ -30,8 +46,15 @@ def is_invested_amount_question(question: str) -> bool:
         return False
     if any(p in q for p in INVESTED_AMOUNT_PHRASES):
         return True
-    if "invested" in q and any(w in q for w in ("appropriate", "enough", "too little", "too much")):
+    if "invested" in q and any(w in q for w in ("appropriate", "enough", "too little", "too much", "reasonable")):
         return True
+    if "portfolio" in q and "invest" in q and any(
+        w in q for w in ("reasonable", "appropriate", "too much", "too little", "make sense", "large", "small")
+    ):
+        return True
+    if "investment" in q and any(w in q for w in ("reasonable", "appropriate", "make sense")):
+        if any(w in q for w in ("amount", "level", "portfolio", "situation", "financial")):
+            return True
     return False
 
 

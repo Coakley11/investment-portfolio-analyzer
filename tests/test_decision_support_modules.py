@@ -210,8 +210,9 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=q)
         self.assertIn("alloc_invested_amount", response.applied_rule_ids)
         self.assertNotIn("alloc_monthly_contribution", response.applied_rule_ids)
-        self.assertIn("approximately", response.assessment.lower())
-        self.assertIn("not direct substitutes", response.assessment.lower())
+        self.assertIn("conclusion (plan consistency)", response.assessment.lower())
+        self.assertIn("full financial situation", response.assessment.lower())
+        self.assertNotIn("reviewed your saved plan inputs", response.assessment.lower())
         self.assertNotIn("vs plan context", response.assessment.lower())
         self.assertNotIn("contribution assessment", response.assessment.lower())
         visible = user_visible_markdown(response).lower()
@@ -219,8 +220,69 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         self.assertNotIn("placeholder", visible)
         self.assertIn("58,451", response.assessment)
         obs = " ".join(response.observations)
+        self.assertNotIn("no additional observations", obs.lower())
         self.assertIn("100,000", obs)
-        self.assertIn("Suggested long-term deployment", obs)
+
+    def test_portfolio_reasonableness_paraphrases_route_to_invested_amount(self) -> None:
+        from investment_ami.decision_support.question_topics import is_invested_amount_question
+
+        paraphrases = (
+            "Is the amount I currently have invested appropriate?",
+            "Is my portfolio investment reasonable given my financial situation?",
+            "Am I investing a reasonable amount?",
+            "Does my current investment level make sense?",
+            "Is my portfolio too large or too small for my situation?",
+        )
+        for q in paraphrases:
+            with self.subTest(q=q):
+                self.assertTrue(is_invested_amount_question(q))
+                self.assertEqual(detect_investment_send_intent(q, ""), "allocation_advisor")
+
+    def test_portfolio_investment_reasonable_given_financial_situation(self) -> None:
+        q = "is my portfolio investment reasonable given my financial situation?"
+        self.assertEqual(detect_investment_send_intent(q, ""), "allocation_advisor")
+        ctx = {
+            "plan_total_cash": 88_765,
+            "plan_emergency": 7_654,
+            "plan_near_term": 12_345,
+            "plan_debt": 0,
+            "plan_expenses": 0,
+            "plan_horizon": 22,
+            "plan_risk": "Medium",
+            "investment_plan_generated": True,
+            "plan_monthly_provided": False,
+            "sidebar_portfolio_value": 58_451,
+        }
+        plan = core.InvestmentPlanResult(
+            total_available=88_765,
+            suggested_emergency_reserve=7_654,
+            short_term_cash_amount=12_345,
+            debt_reserve=0,
+            amount_potentially_investable=68_766,
+            long_term_suggested=58_451,
+            short_term_investable=10_315,
+            monthly_contribution=0,
+            summary_lines=[],
+            educational_notes=[],
+        )
+        ctx["investment_plan"] = plan
+        response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=q)
+        self.assertIn("alloc_invested_amount", response.applied_rule_ids)
+        lower_assessment = response.assessment.lower()
+        self.assertIn("conclusion (plan consistency)", lower_assessment)
+        self.assertNotIn("reviewed your saved plan inputs", lower_assessment)
+        self.assertIn("58,451", response.assessment)
+        self.assertIn("internally consistent", lower_assessment)
+        self.assertIn("overall suitability", lower_assessment)
+        self.assertTrue(response.information_needed)
+        obs_text = " ".join(response.observations).lower()
+        self.assertNotIn("no additional observations", obs_text)
+        self.assertIn("matches", obs_text)
+        self.assertIn("30,314", " ".join(response.observations))
+        self.assertIn("moderate", response.confidence_note.lower())
+        self.assertIn("low", response.confidence_note.lower())
+        sections = render_user_analyst_sections(response)
+        self.assertNotIn("No additional observations", sections.get("portfolio_analyst_view", ""))
 
     def test_invested_amount_rendered_sections(self) -> None:
         q = "Am I underinvested given my plan?"

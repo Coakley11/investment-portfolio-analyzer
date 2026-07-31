@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from investment_ami.decision_support.question_topics import is_invested_amount_question, is_monthly_contribution_question
 
 from investment_ami.decision_support.models import DecisionSupportResponse, FinancialSnapshot, ReasoningFinding
@@ -28,6 +30,222 @@ _FACT_LABELS: dict[str, str] = {
 
 def _money(x: float) -> str:
     return f"${x:,.0f}"
+
+
+def _deploy_match_tolerance(reference: float) -> float:
+    return max(500.0, 0.005 * abs(reference))
+
+
+def _invested_amount_plan_verdict(
+    snapshot: FinancialSnapshot,
+) -> tuple[str, str]:
+    """Return (category, short_label) for plan-internal consistency."""
+    pv = snapshot.portfolio_value
+    target = snapshot.long_term_suggested
+    investable = snapshot.investable_amount
+
+    if pv is None:
+        return (
+            "insufficient",
+            "Insufficient information to judge consistency with your entered plan (portfolio value missing).",
+        )
+    if target is None and investable is None:
+        return (
+            "insufficient",
+            "Insufficient information to judge consistency with your entered plan (deployment targets missing).",
+        )
+
+    if target is not None:
+        tol = _deploy_match_tolerance(target)
+        if abs(float(pv) - float(target)) <= tol:
+            return (
+                "internally_consistent",
+                "Internally consistent with the entered plan, but not enough information to judge overall suitability.",
+            )
+        if pv > float(target) + tol:
+            if investable is not None and pv > float(investable) + tol:
+                return (
+                    "potentially_aggressive",
+                    "Potentially too aggressive relative to the entered plan's suggested long-term deployment and investable cash.",
+                )
+            return (
+                "potentially_aggressive",
+                "Potentially above the plan's suggested long-term deployment amount — verify whether extra dollars sit in cash outside this portfolio.",
+            )
+        return (
+            "potentially_conservative",
+            "Potentially below the plan's suggested long-term deployment — you may be holding more in reserves or undeployed cash than the long-term slice implies.",
+        )
+
+    if investable is not None:
+        tol = _deploy_match_tolerance(investable)
+        if abs(float(pv) - float(investable)) <= tol:
+            return (
+                "internally_consistent",
+                "Roughly aligned with potentially investable cash after reserves, but overall suitability still depends on income, net worth, and goals.",
+            )
+    return (
+        "insufficient",
+        "Insufficient information to judge consistency with the entered plan.",
+    )
+
+
+def _invested_amount_assessment(snapshot: FinancialSnapshot) -> str:
+    pv = snapshot.portfolio_value
+    target = snapshot.long_term_suggested
+    investable = snapshot.investable_amount
+    emergency = snapshot.emergency_fund_target
+    near_term = snapshot.near_term_cash_needs
+    debt = snapshot.debt_obligations or 0.0
+    horizon = snapshot.horizon_years
+    risk = snapshot.risk_tolerance or "not specified"
+
+    category, conclusion_label = _invested_amount_plan_verdict(snapshot)
+
+    if pv is None:
+        return (
+            "AMI cannot judge whether your invested amount is appropriate without a current **portfolio value**. "
+            "Set portfolio value in the sidebar or complete your holdings, then re-ask this question."
+        )
+
+    opening = (
+        "Based on the planning inputs available, your **applied portfolio amount** of "
+        f"**{_money(pv)}**"
+    )
+    if target is not None:
+        if abs(float(pv) - float(target)) <= _deploy_match_tolerance(target):
+            opening += (
+                f" is **consistent** with the app's suggested long-term deployment amount of **{_money(target)}**."
+            )
+        else:
+            opening += (
+                f" compares to the app's suggested long-term deployment amount of **{_money(target)}** "
+                f"(difference about **{_money(abs(float(pv) - float(target)))}**)."
+            )
+    elif investable is not None:
+        opening += (
+            f" compares to about **{_money(investable)}** potentially investable after reserves in your plan."
+        )
+    else:
+        opening += "."
+
+    parts: list[str] = [opening]
+
+    reserve_bits: list[str] = []
+    if emergency:
+        reserve_bits.append(f"**{_money(emergency)}** for emergencies")
+    if near_term:
+        reserve_bits.append(f"**{_money(near_term)}** for near-term needs")
+    if debt:
+        reserve_bits.append(f"**{_money(debt)}** reserved for debt")
+    if reserve_bits:
+        parts.append(
+            "You have separately reserved "
+            + " and ".join(reserve_bits)
+            + ", which reduces the risk of having to sell investments for foreseeable expenses."
+        )
+
+    if category == "internally_consistent" and horizon:
+        parts.append(
+            f"On the information currently available, the amount appears **internally consistent** "
+            f"with your cash plan, **{horizon}-year** horizon, and **{risk}** risk tolerance."
+        )
+    elif horizon:
+        parts.append(
+            f"Given your **{horizon}-year** horizon and **{risk}** risk tolerance, "
+            "compare reserves and deployment targets before changing the invested amount."
+        )
+
+    parts.append(f"**Conclusion (plan consistency):** {conclusion_label}")
+
+    parts.append(
+        "AMI **cannot** determine whether it is appropriate relative to your **full financial situation** "
+        "until **monthly income**, **essential expenses**, **job stability**, **total net worth**, and "
+        "**outside retirement assets** are included."
+    )
+
+    return " ".join(parts)
+
+
+def build_invested_amount_observations(snapshot: FinancialSnapshot) -> list[str]:
+    """Plan-derived observations; never empty when meaningful plan facts exist."""
+    facts = snapshot.to_facts_dict()
+    if not facts:
+        return []
+
+    out: list[str] = []
+    pv = snapshot.portfolio_value
+    target = snapshot.long_term_suggested
+    total = snapshot.total_available_cash
+    investable = snapshot.investable_amount
+    emergency = snapshot.emergency_fund_target or 0.0
+    near_term = snapshot.near_term_cash_needs or 0.0
+    debt = snapshot.debt_obligations or 0.0
+    expenses = snapshot.planned_large_expenses or 0.0
+    horizon = snapshot.horizon_years
+    risk = snapshot.risk_tolerance
+
+    if pv is not None and target is not None:
+        tol = _deploy_match_tolerance(target)
+        if abs(float(pv) - float(target)) <= tol:
+            out.append(
+                "Applied portfolio value **exactly matches** (within rounding) the recommended long-term deployment amount."
+            )
+        else:
+            out.append(
+                f"Applied portfolio value **{_money(pv)}** differs from the recommended long-term amount "
+                f"**{_money(target)}** by about **{_money(abs(float(pv) - float(target)))}**."
+            )
+
+    if total is not None and target is not None:
+        not_long_term = float(total) - float(target)
+        if not_long_term > 0:
+            out.append(
+                f"About **{_money(not_long_term)}** of the original **{_money(total)}** is **not** assigned to long-term deployment."
+            )
+            earmarked: list[str] = []
+            if emergency > 0:
+                earmarked.append(f"**{_money(emergency)}** for emergencies")
+            if near_term > 0:
+                earmarked.append(f"**{_money(near_term)}** for near-term needs")
+            if debt > 0:
+                earmarked.append(f"**{_money(debt)}** for debt reserves")
+            if expenses > 0:
+                earmarked.append(f"**{_money(expenses)}** for planned large expenses")
+            if earmarked:
+                out.append(
+                    "Of that protected/non-deployed long-term amount, "
+                    + ", ".join(earmarked)
+                    + "."
+                )
+            labeled_reserve = emergency + near_term + debt + expenses
+            remainder = not_long_term - labeled_reserve
+            if remainder > 500 and investable is not None and target is not None:
+                out.append(
+                    f"Roughly **{_money(remainder)}** remains outside the long-term deployment slice "
+                    "(for example shorter-term investable cash or unallocated liquidity)."
+                )
+
+    if total is not None and investable is not None and investable < total - 500:
+        out.append(
+            "The plan therefore **preserves liquidity** rather than investing all available cash."
+        )
+
+    if horizon:
+        out.append(
+            f"A **{horizon}-year** horizon supports long-term market exposure."
+        )
+    if risk:
+        out.append(
+            f"**{risk.title()}** risk tolerance argues against treating all remaining cash as aggressive-growth capital."
+        )
+
+    if snapshot.monthly_income is None or snapshot.monthly_expenses is None:
+        out.append(
+            "The conclusion is **provisional** because monthly cash flow and total net worth are unknown."
+        )
+
+    return out
 
 
 def _format_fact_line(key: str, value: Any) -> str:
@@ -150,48 +368,6 @@ def _investing_enough_assessment(snapshot: FinancialSnapshot) -> str:
     return base
 
 
-def _invested_amount_assessment(snapshot: FinancialSnapshot) -> str:
-    pv = snapshot.portfolio_value
-    target = snapshot.long_term_suggested
-    investable = snapshot.investable_amount
-
-    if pv is None:
-        return (
-            "AMI cannot judge whether your **invested amount** is appropriate without a "
-            "current **portfolio value**. Set portfolio value in the sidebar or complete your holdings."
-        )
-
-    parts: list[str] = [
-        f"Your current portfolio is approximately **{_money(pv)}**.",
-    ]
-    if investable is not None:
-        parts.append(
-            f"Potentially investable cash after reserves (from your plan): **{_money(investable)}**."
-        )
-    if target is not None:
-        parts.append(
-            f"Separately, based on the cash-planning inputs you entered, about **{_money(target)}** "
-            "of your available cash could be allocated toward long-term investing after preserving "
-            "emergency and near-term reserves."
-        )
-        diff = abs(float(pv) - float(target))
-        parts.append(
-            f"The difference between current portfolio value and suggested long-term deployment "
-            f"from available cash is **{_money(diff)}**."
-        )
-        parts.append(
-            "These figures are **not direct substitutes**, so AMI cannot conclude that you are "
-            "overinvested merely because portfolio value exceeds the suggested long-term deployment amount."
-        )
-    elif investable is not None:
-        parts.append(
-            "Without a long-term deployment target from your plan, AMI can only compare portfolio value "
-            "to investable cash after reserves — not whether the invested total is appropriate on its own."
-        )
-
-    return " ".join(parts)
-
-
 def build_assessment(
     *,
     question: str,
@@ -238,7 +414,12 @@ def build_assessment(
 def resolve_confidence(
     snapshot: FinancialSnapshot,
     information_needed: list[str],
+    *,
+    question: str = "",
 ) -> tuple[str, int, str]:
+    q = question.lower()
+    if is_invested_amount_question(q):
+        return _resolve_confidence_invested_amount(snapshot, information_needed)
     missing = len(information_needed)
     if missing >= 4:
         return "low", 55, _confidence_rationale(snapshot, information_needed)
@@ -247,6 +428,38 @@ def resolve_confidence(
     if missing == 1:
         return "medium", 72, _confidence_rationale(snapshot, information_needed)
     return "medium", 78, "Key plan inputs and cash-flow fields are available."
+
+
+def _resolve_confidence_invested_amount(
+    snapshot: FinancialSnapshot,
+    information_needed: list[str],
+) -> tuple[str, int, str]:
+    has_plan = bool(snapshot.portfolio_value is not None and snapshot.to_facts_dict())
+    life_gaps = sum(
+        1
+        for flag in (
+            snapshot.monthly_income is None,
+            snapshot.monthly_expenses is None,
+            not snapshot.job_stability,
+        )
+        if flag
+    )
+    pct = 65 if has_plan else 50
+    note_parts = [
+        "Confidence is **moderate** regarding consistency with the **entered plan** "
+        f"(about **{pct}%**) when portfolio value and deployment targets are present."
+    ]
+    if life_gaps >= 2:
+        note_parts.append(
+            "Confidence is **low** regarding suitability relative to your **complete financial life** "
+            "because income, expenses, and/or job stability are still missing."
+        )
+    elif information_needed:
+        note_parts.append(
+            "Confidence is **low** for overall suitability until net worth, outside retirement assets, "
+            "and monthly cash flow are included."
+        )
+    return "medium", pct, " ".join(note_parts)
 
 
 def _confidence_rationale(snapshot: FinancialSnapshot, information_needed: list[str]) -> str:
@@ -316,8 +529,14 @@ def finalize_decision_support_response(
     facts = build_facts_used(snapshot)
     information_needed = build_information_needed(snapshot, question)
     assessment = build_assessment(question=question, snapshot=snapshot, findings=findings)
-    confidence_label, confidence_pct, confidence_note = resolve_confidence(snapshot, information_needed)
+    confidence_label, confidence_pct, confidence_note = resolve_confidence(
+        snapshot, information_needed, question=question
+    )
     observations = build_observations(findings)
+    if is_invested_amount_question(question):
+        plan_obs = build_invested_amount_observations(snapshot)
+        if plan_obs:
+            observations = plan_obs
     trade_offs = build_trade_offs(findings)
     next_steps = build_suggested_next_steps(snapshot, findings, information_needed)
 
