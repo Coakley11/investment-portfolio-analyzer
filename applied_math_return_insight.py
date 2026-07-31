@@ -702,9 +702,10 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
     """
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
+    render_requested = bool(ss.get("_ami_render_requested"))
     pending = ss.get(SESSION_PENDING_KEY)
     has_pending = isinstance(pending, dict) and insight_has_displayable_content(pending)
-    if submit_flag and has_pending:
+    if (submit_flag or render_requested) and has_pending:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
         record_ami_insight_lifecycle(
@@ -719,7 +720,7 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
             "state": "error",
             "message": "AMI finished but no insight was staged. Submit again or check diagnostics.",
         }
-    if bool(ss.get("_ami_force_insight_render")) and has_pending:
+    if bool(ss.get("_ami_force_insight_render") or render_requested) and has_pending:
         ss.pop("_ami_insight_render_success", None)
         record_ami_insight_lifecycle(
             ss,
@@ -1003,6 +1004,19 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
         ss["_ami_insight_hydrate_source"] = "submit_staged_missing_pending"
         return True
 
+    try:
+        from investment_ami_submit_runtime import protect_pending_insight_during_submit
+
+        if key == "investment" and protect_pending_insight_during_submit(ss):
+            pending = _pending_insight_valid(st)
+            if pending:
+                ss["_ami_insight_hydrate_success"] = True
+                ss["_ami_insight_hydrate_source"] = "submit_in_flight_protected"
+                _sync_investment_insight_tab_keys(st, key, insight=pending)
+                return True
+    except ImportError:
+        pass
+
     sync_dismissed_insights_from_cloud(st, key)
 
     url_iid = insight_return_query_id(st)
@@ -1032,6 +1046,15 @@ def hydrate_applied_math_insight_for_session(st: Any, app_key: str) -> bool:
     dismissed = _get_dismissed_insight_ids(st)
     latest = load_latest_applied_math_insight_for_app(key, exclude_ids=dismissed)
     if latest:
+        try:
+            from investment_ami_submit_runtime import protect_pending_insight_during_submit
+
+            if key == "investment" and protect_pending_insight_during_submit(ss):
+                pending = _pending_insight_valid(st)
+                if pending:
+                    return True
+        except ImportError:
+            pass
         record_ami_insight_lifecycle(
             ss,
             "hydrate_set_pending",
@@ -2321,12 +2344,26 @@ def render_suite_applied_math_insight_for_page(
     if app == "investment":
         hydrate_applied_math_insight_for_session(st, app)
 
+    t_render = None
+    log_stage_exit_fn = None
     record_ami_insight_lifecycle(
         st.session_state,
         "render_suite_applied_math_insight_for_page_enter",
         source_app=app,
         source_page=str(source_page or ""),
     )
+    try:
+        import time
+
+        from investment_ami_submit_runtime import _log_stage, _log_stage_exit
+
+        t_render = time.perf_counter()
+        log_stage_exit_fn = _log_stage_exit
+        insight_peek = st.session_state.get(SESSION_PENDING_KEY)
+        pending_id = str((insight_peek or {}).get("insight_id") or "")[:20] if isinstance(insight_peek, dict) else ""
+        _log_stage("RENDER_ENTER", st.session_state, page=str(source_page or ""), insight_id=pending_id)
+    except Exception:
+        pass
     insight = st.session_state.get(SESSION_PENDING_KEY)
     pending_exists = isinstance(insight, dict) and insight_has_displayable_content(insight)
     cloud_exists = insight_exists_in_cloud(app) if app == "investment" else False
@@ -2400,11 +2437,27 @@ def render_suite_applied_math_insight_for_page(
     if rendered and app == "investment":
         st.session_state["_ami_insight_card_rendered"] = True
         try:
+            from investment_ami_submit_runtime import RENDER_REQUESTED_KEY
+
+            st.session_state.pop(RENDER_REQUESTED_KEY, None)
+        except ImportError:
+            st.session_state.pop("_ami_render_requested", None)
+        try:
             from suite_cloud_state import _ami_resume_consumed_flag
 
             st.session_state[_ami_resume_consumed_flag(app)] = True
         except Exception:
             pass
+    try:
+        if t_render is not None and log_stage_exit_fn is not None:
+            log_stage_exit_fn(
+                "RENDER_COMPLETE",
+                st.session_state,
+                t_render,
+                exc="" if rendered else str(st.session_state.get("_ami_insight_render_skipped_reason") or ""),
+            )
+    except Exception:
+        pass
     return rendered
 
 
@@ -2468,6 +2521,17 @@ def render_return_to_source_button(
 def render_ami_insight_submit_feedback(st: Any, *, insight_rendered: bool = False) -> None:
     """Surface AMI submit processing, success, and error states in the main app area."""
     ss = st.session_state
+    try:
+        from investment_ami_submit_runtime import submit_processing_timed_out
+
+        if submit_processing_timed_out(ss):
+            ss["_ami_insight_submit_status"] = {
+                "state": "error",
+                "message": "AMI timed out while analyzing your question. Try again or check diagnostics.",
+            }
+    except ImportError:
+        pass
+
     status = ss.get("_ami_insight_submit_status")
     if not isinstance(status, dict):
         return
@@ -2484,4 +2548,9 @@ def render_ami_insight_submit_feedback(st: Any, *, insight_rendered: bool = Fals
         if insight_rendered:
             st.success("Applied Investment Insight is ready below.")
             ss.pop("_ami_insight_submit_status", None)
+        else:
+            st.warning(
+                "Applied Investment Insight was generated but the card has not rendered yet. "
+                "See diagnostics below or refresh once."
+            )
         return

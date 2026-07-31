@@ -48,6 +48,7 @@ class _FakeSt:
         self.markdown = MagicMock()
         self.info = MagicMock()
         self.success = MagicMock()
+        self.warning = MagicMock()
         self.error = MagicMock()
         self.caption = MagicMock()
         self.columns = MagicMock(return_value=[MagicMock(), MagicMock()])
@@ -143,6 +144,12 @@ class TestDecisionSupportSubmitE2E(unittest.TestCase):
         ss["_ami_insight_submit_status"] = {"state": "success"}
         render_ami_insight_submit_feedback(st, insight_rendered=True)
         st.success.assert_called()
+        st.warning.assert_not_called()
+
+        st.warning.reset_mock()
+        ss["_ami_insight_submit_status"] = {"state": "success"}
+        render_ami_insight_submit_feedback(st, insight_rendered=False)
+        st.warning.assert_called()
 
     def test_pending_insight_survives_disk_roundtrip(self) -> None:
         import applied_math_return_insight as ami

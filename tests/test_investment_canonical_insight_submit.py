@@ -81,18 +81,8 @@ class TestInvestmentCanonicalSubmit(unittest.TestCase):
         st.sidebar.text_area.return_value = "What happens if rates rise?"
 
         with patch(
-            "suite_analytical_question._stage_investment_instant_insight",
-            return_value=True,
-        ) as stage_mock, patch(
-            "suite_analytical_question.submit_analytical_question",
-            return_value={"duplicate": False, "question_id": "q-1"},
-        ) as submit_mock, patch(
-            "suite_analytical_question.build_applied_math_resume_url",
-            return_value="https://example.test/ami",
-        ), patch(
-            "applied_math_return_insight.render_suite_applied_math_insight_for_page",
-            return_value=True,
-        ):
+            "investment_ami_submit_runtime.queue_investment_ami_submit",
+        ) as queue_mock, patch.object(st, "rerun") as rerun_mock:
             render_analyze_with_applied_math_sidebar(
                 st,
                 source_app="investment",
@@ -100,13 +90,9 @@ class TestInvestmentCanonicalSubmit(unittest.TestCase):
                 session_state=ss,
             )
 
-        stage_mock.assert_called_once()
-        submit_mock.assert_called_once()
-        self.assertIsNotNone(submit_mock.call_args.kwargs.get("pre_payload"))
-        self.assertEqual(
-            submit_mock.call_args.kwargs["pre_payload"].get("question"),
-            "What happens if rates rise?",
-        )
+        queue_mock.assert_called_once()
+        rerun_mock.assert_called_once()
+        self.assertEqual(queue_mock.call_args.kwargs.get("question"), "What happens if rates rise?")
 
 
 if __name__ == "__main__":

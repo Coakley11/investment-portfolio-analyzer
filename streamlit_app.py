@@ -1931,6 +1931,12 @@ if pp.is_demo_mode(st) and not pp.demo_applied(st, "portfolio"):
 
 settings = render_sidebar()
 beginner_mode = is_beginner_mode(settings)
+try:
+    from investment_ami_submit_runtime import process_investment_ami_submit_queue
+
+    process_investment_ami_submit_queue(st)
+except Exception as _ami_submit_queue_exc:
+    st.session_state["_ami_submit_queue_error"] = repr(_ami_submit_queue_exc)
 if beginner_mode:
     ensure_beginner_macro_defaults()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
@@ -1993,6 +1999,11 @@ except ImportError:
     except Exception:
         pass
 _active_tab = st.session_state["investment_active_tab"]
+
+if st.session_state.get("_ami_render_requested") and isinstance(
+    st.session_state.get("_ami_pending_insight"), dict
+):
+    st.caption("⏳ Pending Applied Investment Insight — rendering on this page…")
 
 from suite_analytical_question import render_suite_applied_math_insight
 

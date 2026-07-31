@@ -1653,12 +1653,18 @@ def render_persistence_trace_sidebar(st: Any, *, persistence_ok: bool | None = N
         )
 
 
-AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "temp-2026-07-28-diag-module-id"
+AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD = "ami-submit-queue-v1"
 
 
 def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:
     """Session snapshot for Cloud slider-rerun debugging (copy/paste)."""
-    from applied_math_return_insight import AMI_INSIGHT_LIFECYCLE_LOG_KEY, SESSION_PENDING_KEY
+    from applied_math_return_insight import (
+        AMI_INSIGHT_LIFECYCLE_LOG_KEY,
+        INSIGHT_ELIGIBLE_PAGES,
+        SESSION_PENDING_KEY,
+        insight_has_displayable_content,
+        insight_page_scope_decision,
+    )
 
     ss = st.session_state
     pending = ss.get(SESSION_PENDING_KEY)
@@ -1666,21 +1672,71 @@ def collect_ami_insight_lifecycle_runtime_snapshot(st: Any) -> dict[str, Any]:
     log_buf = ss.get(AMI_INSIGHT_LIFECYCLE_LOG_KEY)
     if not isinstance(log_buf, list):
         log_buf = []
+    active_tab = str(ss.get("investment_active_tab") or "")
+    scope = (
+        insight_page_scope_decision("investment", active_tab, pending_dict)
+        if isinstance(pending_dict, dict)
+        else {}
+    )
+    sections = pending_dict.get("analyst_sections") if isinstance(pending_dict, dict) else None
+    if not isinstance(sections, dict) and isinstance(pending_dict, dict):
+        kn = pending_dict.get("key_numbers")
+        if isinstance(kn, dict):
+            sections = kn.get("analyst_sections")
+    deploy_commit = "unknown"
+    try:
+        from suite_deploy_marker import resolve_git_commit_short
+
+        deploy_commit = resolve_git_commit_short()
+    except Exception:
+        pass
+    try:
+        from investment_ami_instant_solver import INVESTMENT_AMI_BUILD_ID
+    except ImportError:
+        INVESTMENT_AMI_BUILD_ID = "unknown"
+    try:
+        from investment_ami_submit_runtime import SUBMIT_PIPELINE_LOG_KEY
+
+        pipeline_log = ss.get(SUBMIT_PIPELINE_LOG_KEY)
+    except ImportError:
+        pipeline_log = None
+    diag = ss.get("_ami_investment_submit_diagnostics") or {}
     return {
         "diag_build": AMI_INSIGHT_LIFECYCLE_RUNTIME_DIAG_BUILD,
+        "deploy_commit": deploy_commit,
+        "investment_ami_build_id": INVESTMENT_AMI_BUILD_ID,
         "render_pass": ss.get("_pr1_render_pass"),
         "_ami_insight_lifecycle_log": copy.deepcopy(log_buf[-15:]),
+        "_ami_submit_pipeline_log": copy.deepcopy(pipeline_log[-12:]) if isinstance(pipeline_log, list) else pipeline_log,
         SESSION_PENDING_KEY: copy.deepcopy(pending_dict) if pending_dict else pending,
         "pending_insight_complete": bool(
-            isinstance(pending_dict, dict) and bool(pending_dict.get("conclusion"))
+            isinstance(pending_dict, dict) and insight_has_displayable_content(pending_dict)
         ),
+        "_ami_insight_submit_status": ss.get("_ami_insight_submit_status"),
+        "_ami_investment_submit_diagnostics": dict(diag) if isinstance(diag, dict) else diag,
+        "instant_solved": diag.get("instant_solved") if isinstance(diag, dict) else None,
+        "intent_route": diag.get("detected_intent") if isinstance(diag, dict) else None,
+        "_ami_pending_insight_id": ss.get("_ami_pending_insight_id"),
+        "_ami_render_requested": ss.get("_ami_render_requested"),
+        "insights_layout": (sections or {}).get("insights_layout") if isinstance(sections, dict) else None,
+        "analyst_sections_count": len(sections) if isinstance(sections, dict) else 0,
+        "insight_has_displayable_content": insight_has_displayable_content(pending_dict),
+        "investment_insight_main_render_needed_preview": bool(
+            ss.get("_ami_render_requested")
+            or ss.get("_ami_force_insight_render")
+            or ss.get("_ami_submit_render_insight_this_run")
+            or not ss.get("_ami_insight_render_success")
+        ),
+        "insight_page_scope": scope,
+        "insight_eligible_pages_investment": sorted(INSIGHT_ELIGIBLE_PAGES.get("investment", frozenset())),
         "_ami_insight_render_success": ss.get("_ami_insight_render_success"),
         "_ami_insight_hydrate_source": ss.get("_ami_insight_hydrate_source"),
         "_ami_insight_render_skipped_reason": ss.get("_ami_insight_render_skipped_reason"),
         "_ami_last_submit_source_page": ss.get("_ami_last_submit_source_page"),
-        "investment_active_tab": ss.get("investment_active_tab"),
+        "investment_active_tab": active_tab,
         "_ami_force_insight_render": ss.get("_ami_force_insight_render"),
         "_ami_submit_render_insight_this_run": ss.get("_ami_submit_render_insight_this_run"),
+        "_ami_investment_submit_queue": ss.get("_ami_investment_submit_queue"),
     }
 
 
