@@ -927,6 +927,7 @@ def finalize_startup_holdings_restore(st: Any) -> bool:
         st,
         cloud_state,
         source="startup_post_init_cloud",
+        allow_without_cloud_pick=True,
     )
     ss["startup_holdings_finalize_source"] = (
         "startup_post_init_cloud" if aligned else "startup_post_init_cloud_failed"

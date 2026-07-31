@@ -47,7 +47,11 @@ _RESUME_QUERY_KEYS: dict[str, tuple[str, ...]] = {
         "suite_draft_room",
         "suite_draft_section",
     ),
-    "investment": ("suite_page",),
+    "investment": (
+        "suite_page",
+        "suite_ami_insight",
+        "suite_ai_question_id",
+    ),
     "nba": ("suite_resume", "suite_page", "suite_team"),
     "future_lens": (
         "suite_resume",
@@ -93,6 +97,11 @@ _WORKSPACE_RESTORE_BLOCKING_QUERY_KEYS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_INVESTMENT_WORKSPACE_RESTORE_BLOCKERS: tuple[str, ...] = (
+    "suite_ami_insight",
+    "suite_ai_question_id",
+)
+
 
 def _workspace_restore_blocking_keys(app_key: str) -> tuple[str, ...]:
     key = _normalize_resume_app_key(app_key)
@@ -135,8 +144,15 @@ def list_active_resume_query_params(st: Any, app_key: str) -> list[str]:
 def list_workspace_restore_blocking_query_params(st: Any, app_key: str) -> list[str]:
     """URL params that block cloud workspace restore (return/AMI navigation, not song hydrate)."""
     key = _normalize_resume_app_key(app_key)
+    if key == "investment":
+        return [name for name in _INVESTMENT_WORKSPACE_RESTORE_BLOCKERS if _qp_get(st, name)]
     params = _workspace_restore_blocking_keys(key)
     return [name for name in params if _qp_get(st, name)]
+
+
+def list_workspace_restore_blocking_params(st: Any, app_key: str) -> list[str]:
+    """Backward-compatible alias for ``list_workspace_restore_blocking_query_params``."""
+    return list_workspace_restore_blocking_query_params(st, app_key)
 
 
 def _ami_return_url_active(st: Any, app_key: str) -> bool:
@@ -169,6 +185,11 @@ _STALE_RESUME_SESSION_FLAGS: tuple[str, ...] = (
     "ami_return_force_active_page",
     "ami_return_forced_page",
     "_ami_insight_return_preserve",
+    "_ami_return_context",
+    "_ami_return_page",
+    "_ami_pending_insight",
+    "_ami_hydrated_insight_id",
+    "_suite_holdings_fp",
 )
 
 
@@ -201,6 +222,65 @@ def reconcile_stale_resume_session_flags(st: Any, app_key: str) -> list[str]:
     return cleared
 
 
+def collect_investment_url_query_params(st: Any) -> dict[str, str]:
+    """Snapshot Investment resume/AMI query params currently on the URL."""
+    params = _RESUME_QUERY_KEYS.get("investment", ())
+    out: dict[str, str] = {}
+    for name in params:
+        val = _qp_get(st, name)
+        if val:
+            out[name] = val
+    return out
+
+
+def detect_stale_ami_session_flags(st: Any, app_key: str = "investment") -> list[str]:
+    """Session flags that imply a prior AMI return when the URL is not live."""
+    ss = st.session_state
+    detected: list[str] = []
+    for flag in _STALE_RESUME_SESSION_FLAGS:
+        if flag in ss:
+            detected.append(flag)
+    key = _normalize_resume_app_key(app_key)
+    committed = f"_ami_page_restore_committed_{key}"
+    if committed in ss:
+        detected.append(committed)
+    return detected
+
+
+def purge_stale_investment_ami_restore_blockers(
+    st: Any,
+    app_key: str = "investment",
+) -> dict[str, Any]:
+    """
+    Emergency purge: when URL has no AMI restore blockers, clear deferred-tab flags
+    so ``restore_once`` can run on normal reboot.
+    """
+    blockers = list_workspace_restore_blocking_query_params(st, app_key)
+    stale_detected = detect_stale_ami_session_flags(st, app_key)
+    cleared: list[str] = []
+    if not blockers:
+        cleared.extend(reconcile_stale_resume_session_flags(st, app_key))
+        ss = st.session_state
+        for extra in (
+            "_suite_resume_insight_hydration_only",
+            f"_ami_page_restore_committed_{_normalize_resume_app_key(app_key)}",
+        ):
+            if extra in ss:
+                ss.pop(extra, None)
+                cleared.append(extra)
+    diag: dict[str, Any] = {
+        "current_url_query_params": collect_investment_url_query_params(st) or None,
+        "has_suite_ami_insight": bool(_qp_get(st, "suite_ami_insight")),
+        "has_suite_ai_question_id": bool(_qp_get(st, "suite_ai_question_id")),
+        "stale_ami_flags_detected": stale_detected or None,
+        "stale_ami_flags_cleared": cleared or None,
+        "restore_blocker_flags": blockers or None,
+    }
+    for key, val in diag.items():
+        st.session_state[key] = val
+    return diag
+
+
 def should_skip_workspace_restore_for_resume(
     st: Any,
     app_key: str,
@@ -219,6 +299,9 @@ def should_skip_workspace_restore_for_resume(
         return False
     if reconcile_first:
         reconcile_stale_resume_session_flags(st, app_key)
+    key = _normalize_resume_app_key(app_key)
+    if key == "investment":
+        return bool(list_workspace_restore_blocking_query_params(st, app_key))
     if list_workspace_restore_blocking_query_params(st, app_key):
         return True
     try:
