@@ -115,6 +115,29 @@ class MarketDataProvider:
 
         return _dedupe(cache_key, _load)
 
+    def get_spot_quote_freshness(self, symbol: str) -> tuple[float | None, str, float | None]:
+        """
+        Latest quote with cache metadata.
+
+        Returns (price, source, stored_at_unix). ``stored_at_unix`` is when the quote
+        entered the session cache or was fetched live — not an exchange timestamp.
+        """
+        sym = yf_raw.normalize_symbol(symbol)
+        if not sym or sym in yf_raw._SKIP_SPOT:
+            return None, "", None
+        cache_key = f"spot|{sym}"
+        cached, stored_at = _session_get_with_meta(cache_key, cfg.SPOT_PRICE_TTL_SECONDS)
+        if cached is not None and isinstance(cached, tuple):
+            px, src = cached[0], str(cached[1] or "")
+            if px is not None and float(px) > 0:
+                record_hit(layer="session", kind="spot", bytes_saved=cfg.ESTIMATED_BYTES_PER_YAHOO_CALL)
+                return float(px), src, stored_at
+        px, src = self.get_latest_quote(sym)
+        if px is None:
+            return None, src or "", None
+        _, stored_at = _session_get_with_meta(cache_key, cfg.SPOT_PRICE_TTL_SECONDS)
+        return px, src or "", stored_at
+
     def get_latest_quotes(self, symbols: list[str]) -> dict[str, tuple[float | None, str]]:
         syms = [yf_raw.normalize_symbol(s) for s in symbols if str(s).strip()]
         syms = [s for s in dict.fromkeys(syms) if s and s not in yf_raw._SKIP_SPOT]
@@ -324,6 +347,12 @@ def _fallback_bucket() -> dict[str, Any]:
 
 
 def _session_get(key: str, ttl_seconds: float) -> Any | None:
+    value, _stored = _session_get_with_meta(key, ttl_seconds)
+    return value
+
+
+def _session_get_with_meta(key: str, ttl_seconds: float) -> tuple[Any | None, float | None]:
+    """Return cached value and stored_at unix timestamp when present."""
     now = time.time()
     for bucket in (_session_bucket(), _fallback_bucket()):
         if bucket is None:
@@ -333,12 +362,15 @@ def _session_get(key: str, ttl_seconds: float) -> Any | None:
             continue
         exp = float(entry.get("expires", 0))
         if exp >= now:
-            return entry.get("value")
-    return None
+            stored = entry.get("stored_at")
+            stored_at = float(stored) if stored is not None else None
+            return entry.get("value"), stored_at
+    return None, None
 
 
 def _session_set(key: str, value: Any, ttl_seconds: float) -> None:
-    entry = {"expires": time.time() + ttl_seconds, "value": value}
+    now = time.time()
+    entry = {"expires": now + ttl_seconds, "value": value, "stored_at": now}
     bucket = _session_bucket()
     if bucket is not None:
         bucket[key] = entry
