@@ -7,7 +7,10 @@ import unittest
 from investment_ami.decision_support.modules import MODULE_ALLOCATION_ADVISOR
 from investment_ami.decision_support.monthly_contribution_advisor import analyze_monthly_contribution
 from investment_ami.decision_support.pipeline import run_decision_support_module
-from investment_ami.decision_support.presentation import render_user_analyst_sections
+from investment_ami.decision_support.presentation import (
+    build_suggested_next_steps,
+    render_user_analyst_sections,
+)
 from investment_ami.decision_support.question_topics import is_monthly_contribution_question
 from investment_ami.decision_support.snapshot import build_financial_snapshot
 from investment_ami_answer_format import render_investment_page_insight_markdown
@@ -117,6 +120,50 @@ class TestMonthlyContributionReasoning(unittest.TestCase):
         )
         self.assertIn("low", response.confidence_note.lower())
         self.assertIn("exact", response.confidence_note.lower())
+
+    def test_next_steps_skip_stale_income_prompt_when_cashflow_present(self) -> None:
+        q = "How much should I contribute each month to my investments?"
+        ctx = _base_ctx(monthly_income=4_100, monthly_expenses=2_800, plan_monthly=500)
+        response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=q)
+        snap = build_financial_snapshot(ctx, question=q)
+        steps = build_suggested_next_steps(snap, list(response.findings), response.information_needed)
+        self.assertNotIn("Enter **monthly income**", steps)
+        self.assertIn("comfortable over several months", steps)
+        sections = render_user_analyst_sections(response)
+        body = render_investment_page_insight_markdown(sections)
+        self.assertNotIn("Enter **monthly income** and **monthly essential expenses**", body)
+
+    def test_no_remaining_gap_language_when_portfolio_matches_deployment_target(self) -> None:
+        from dataclasses import replace
+
+        ctx = _base_ctx(
+            monthly_income=4_100,
+            monthly_expenses=2_800,
+            plan_monthly=500,
+            plan_horizon=22,
+            sidebar_portfolio_value=58_451,
+        )
+        snap = build_financial_snapshot(ctx, question="How much should I contribute each month?")
+        snap = replace(snap, long_term_suggested=58_451.0, portfolio_value=58_451.0, horizon_years=22)
+        advice = analyze_monthly_contribution(snap, question="How much should I contribute each month?")
+        obs_text = " ".join(advice.observations).lower()
+        self.assertNotIn("close any remaining gap", obs_text)
+        self.assertNotIn("remaining gap", obs_text)
+        self.assertIn("already matches", obs_text)
+
+    def test_suggested_contribution_includes_surplus_breakdown_and_cushion(self) -> None:
+        ctx = _base_ctx(monthly_income=4_100, monthly_expenses=2_800, plan_monthly=500)
+        snap = build_financial_snapshot(ctx, question="How much should I contribute each month?")
+        advice = analyze_monthly_contribution(snap, question="How much should I contribute each month?")
+        section = advice.suggested_monthly_section.lower()
+        self.assertIn("estimated monthly surplus", section)
+        self.assertIn("remaining monthly cushion", section)
+        self.assertIn("upper contribution guardrail", section)
+        self.assertIn("ami recommends approximately", section)
+        assert advice.surplus is not None
+        assert advice.recommended_amount is not None
+        cushion = max(0.0, advice.surplus - advice.recommended_amount)
+        self.assertIn(f"${cushion:,.0f}", advice.suggested_monthly_section)
 
 
 if __name__ == "__main__":

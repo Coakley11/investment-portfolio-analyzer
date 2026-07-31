@@ -34,6 +34,79 @@ def _surplus_deploy_fraction(snapshot: FinancialSnapshot) -> float:
     return 0.75
 
 
+def _portfolio_matches_deployment_target(snapshot: FinancialSnapshot) -> bool:
+    pv = snapshot.portfolio_value
+    target = snapshot.long_term_suggested
+    if pv is None or target is None:
+        return False
+    target_f = float(target)
+    return abs(float(pv) - target_f) <= max(500.0, 0.01 * target_f)
+
+
+def _long_term_horizon_observation(snapshot: FinancialSnapshot) -> str | None:
+    if not snapshot.long_term_suggested or not snapshot.horizon_years:
+        return None
+    years = snapshot.horizon_years
+    target = float(snapshot.long_term_suggested)
+    pv = snapshot.portfolio_value
+    if pv is not None and _portfolio_matches_deployment_target(snapshot):
+        return (
+            f"A **{years}-year** investment horizon supports consistent long-term investing. "
+            "Even though your current portfolio already matches your entered long-term deployment target, "
+            "ongoing monthly contributions can support future portfolio growth and evolving financial goals."
+        )
+    if pv is not None and target > float(pv) + max(500.0, 0.01 * target):
+        gap = target - float(pv)
+        return (
+            f"A **{years}-year** horizon and long-term deployment target of **{_money(target)}** "
+            f"(portfolio **{_money(pv)}**) imply steady contributions can help close a deployment gap "
+            f"of about **{_money(gap)}**."
+        )
+    return (
+        f"A **{years}-year** horizon and long-term deployment target of **{_money(target)}** "
+        "support steady contributions alongside ongoing wealth accumulation."
+    )
+
+
+def _format_precise_suggested_section(
+    snapshot: FinancialSnapshot,
+    *,
+    surplus: float,
+    contrib: float | None,
+    recommended: float,
+    deploy_cap: float,
+    reason: str,
+) -> str:
+    income = float(snapshot.monthly_income or 0)
+    expenses = float(snapshot.monthly_expenses or 0)
+    cushion = max(0.0, surplus - recommended)
+    lines = [
+        f"**Suggested monthly contribution:** **{_money(recommended)}**",
+        "",
+        f"- Monthly after-tax income: **{_money(income)}**",
+        f"- Monthly essential expenses: **{_money(expenses)}**",
+        f"- Estimated monthly surplus: **{_money(surplus)}**",
+    ]
+    if contrib is not None:
+        lines.append(f"- Current contribution: **{_money(contrib)}**")
+    else:
+        lines.append("- Current contribution: **not entered**")
+    lines.extend(
+        [
+            f"- Suggested contribution: **{_money(recommended)}**",
+            f"- Remaining monthly cushion: approximately **{_money(cushion)}**",
+            f"- Upper contribution guardrail: approximately **{_money(deploy_cap)}**",
+            "",
+            f"AMI recommends approximately **{_money(recommended)}** per month because it increases "
+            f"long-term investing while preserving roughly **{_money(cushion)}** of monthly flexibility "
+            "for irregular expenses, changing cash flow, and unexpected costs.",
+        ]
+    )
+    if reason:
+        lines.extend(["", f"**Additional context:** {reason}"])
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class MonthlyContributionAdvice:
     assessment: str
@@ -89,11 +162,9 @@ def analyze_monthly_contribution(snapshot: FinancialSnapshot, *, question: str =
             f"Near-term cash needs of **{_money(snapshot.near_term_cash_needs)}** argue for caution before "
             "raising monthly investing."
         )
-    if snapshot.long_term_suggested and snapshot.horizon_years:
-        observations.append(
-            f"A **{snapshot.horizon_years}-year** horizon and long-term deployment target of "
-            f"**{_money(snapshot.long_term_suggested)}** imply steady contributions help close any remaining gap."
-        )
+    horizon_obs = _long_term_horizon_observation(snapshot)
+    if horizon_obs:
+        observations.append(horizon_obs)
     if not snapshot.job_stability:
         observations.append("Job stability was not provided — AMI treats surplus deployment more conservatively.")
     elif str(snapshot.job_stability).lower() in ("unstable", "low", "uncertain"):
@@ -212,10 +283,13 @@ def analyze_monthly_contribution(snapshot: FinancialSnapshot, *, question: str =
             " This is **moderately confident** for plan consistency; refine as income, expenses, or job stability change."
         )
 
-    suggested = (
-        f"**Suggested monthly contribution:** **{_money(recommended)}**\n\n"
-        f"**Why:** {reason}\n\n"
-        f"Upper guardrail from surplus (after liquidity caution): about **{_money(deploy_cap)}** per month."
+    suggested = _format_precise_suggested_section(
+        snapshot,
+        surplus=surplus,
+        contrib=contrib,
+        recommended=recommended,
+        deploy_cap=deploy_cap,
+        reason=reason,
     )
 
     return MonthlyContributionAdvice(

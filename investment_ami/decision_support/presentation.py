@@ -485,12 +485,29 @@ def build_suggested_next_steps(
     information_needed: list[str],
 ) -> str:
     steps: list[str] = []
-    if information_needed:
+    q = (snapshot.question or "").lower()
+    missing_cashflow = snapshot.monthly_income is None or (
+        snapshot.monthly_expenses is None and snapshot.question_expense_after is None
+    )
+    if missing_cashflow:
         steps.append(
             "Enter **monthly income** and **monthly essential expenses** on "
             "**How Much Should I Invest?** AMI will then estimate your monthly surplus, "
             "compare it to your contribution, and check whether investing more would "
             "pull emergency reserves below your target."
+        )
+    elif is_monthly_contribution_question(q):
+        steps.extend(
+            [
+                "Review whether the recommended monthly contribution is comfortable over several months.",
+                "Increase contributions **gradually** if your remaining monthly cushion proves sustainable.",
+                "Revisit the recommendation after major income or expense changes.",
+            ]
+        )
+    elif information_needed:
+        steps.append(
+            "Add the missing plan or cash-flow inputs listed under **Information Needed**, "
+            "then re-ask this question for a sharper answer."
         )
     for f in findings:
         if f.rule_id == "alloc_baseline_context":
