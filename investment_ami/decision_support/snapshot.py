@@ -53,8 +53,8 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
     near_term = _float_or_none(ctx.get("plan_near_term") or ctx.get("money_needed_1_2_years"))
     debt = _float_or_none(ctx.get("plan_debt") or ctx.get("debt_obligations"))
     expenses = _float_or_none(ctx.get("plan_expenses") or ctx.get("planned_large_expenses"))
-    monthly = _float_or_none(ctx.get("plan_monthly") if "plan_monthly" in ctx else ctx.get("monthly_contribution"))
-    monthly_known = "plan_monthly" in ctx or bool(ctx.get("investment_plan_generated"))
+    monthly = _float_or_none(ctx.get("plan_monthly") if ctx.get("plan_monthly_provided") else None)
+    monthly_known = bool(ctx.get("plan_monthly_provided"))
     horizon = _int_or_none(ctx.get("plan_horizon") or ctx.get("horizon_years"))
     risk = str(ctx.get("plan_risk") or ctx.get("risk_tolerance") or "").strip()
     pv = _float_or_none(ctx.get("sidebar_portfolio_value") or ctx.get("initial_value"))
@@ -65,7 +65,6 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
     long_term: float | None = None
     plan = ctx.get("investment_plan")
     if plan is not None:
-        monthly_known = True
         total = total or _plan_attr(plan, "total_available")
         emergency = emergency or _plan_attr(plan, "suggested_emergency_reserve")
         near_term = near_term or _plan_attr(plan, "money_needed_1_2_years")
@@ -73,7 +72,7 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
         expenses = expenses or _plan_attr(plan, "planned_large_expenses")
         investable = _plan_attr(plan, "amount_potentially_investable")
         long_term = _plan_attr(plan, "long_term_suggested")
-        if monthly is None:
+        if monthly is None and monthly_known:
             monthly = _plan_attr(plan, "monthly_contribution")
 
     if investable is None and total is not None:
@@ -100,7 +99,7 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
         emergency_fund_actual=emergency,
         monthly_income=income,
         monthly_expenses=effective_expenses,
-        monthly_contribution=monthly if monthly_known or monthly is not None else None,
+        monthly_contribution=monthly if monthly_known else None,
         monthly_contribution_known=monthly_known,
         debt_obligations=debt,
         debt_interest_rate_pct=debt_rate,

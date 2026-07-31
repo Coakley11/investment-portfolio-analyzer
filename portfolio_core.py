@@ -2309,8 +2309,13 @@ def compute_investment_plan(
     horizon_years: int,
     risk_tolerance: str,
     monthly_contribution: float = 0.0,
+    *,
+    current_monthly_investment: float | None = None,
 ) -> InvestmentPlanResult:
     """Educational estimate of how much cash may be available to invest."""
+    current = current_monthly_investment
+    if current is None and monthly_contribution > 0:
+        current = float(monthly_contribution)
     emergency = max(0.0, float(emergency_fund_needed))
     near_term = max(0.0, float(money_needed_1_2_years))
     planned_exp = max(0.0, float(planned_large_expenses))
@@ -2341,11 +2346,20 @@ def compute_investment_plan(
         f"Long-term sleeve ({pct_label} of investable): ${long_term:,.0f}",
         f"Conservative / short-term reserve ({safer_label} of investable): ${short_term_inv:,.0f}",
     ]
-    if monthly_contribution > 0:
-        summary.append(f"Optional monthly contribution noted: ${monthly_contribution:,.0f}/month")
+    if current is not None and current > 0:
+        summary.append(
+            f"Current monthly investment noted: ${current:,.0f}/month (not a recommendation)"
+        )
+    elif current is not None and current <= 0:
+        summary.append(
+            "Current monthly investment noted: $0/month "
+            "(no regular monthly investments entered; not a recommendation)"
+        )
 
     notes = [
         "Investable amount = total cash − emergency − near-term needs − planned expenses − debt obligations.",
+        "One-time investable cash and recurring monthly investments are separate; "
+        "this plan does not divide available cash by 12 to infer a monthly amount.",
         f"Long-term vs safer split uses {pct_label} / {safer_label} of the investable amount "
         f"(from horizon {horizon_years}y and {risk_tolerance} risk tolerance).",
         "Consider keeping short-term needs in cash or T-bill style assets — educational estimate only.",
@@ -2359,7 +2373,7 @@ def compute_investment_plan(
         amount_potentially_investable=investable,
         long_term_suggested=float(long_term),
         short_term_investable=float(short_term_inv),
-        monthly_contribution=float(monthly_contribution),
+        monthly_contribution=float(current if current is not None else 0.0),
         summary_lines=summary,
         educational_notes=notes,
         money_needed_1_2_years=near_term,

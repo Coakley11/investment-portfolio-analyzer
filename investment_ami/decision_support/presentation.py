@@ -11,7 +11,7 @@ _FACT_LABELS: dict[str, str] = {
     "emergency_fund_target": "Emergency fund target",
     "monthly_income": "Monthly income",
     "monthly_expenses": "Monthly expenses",
-    "monthly_contribution": "Monthly contribution",
+    "monthly_contribution": "Current monthly investment (optional)",
     "debt_obligations": "Debt or obligations reserve",
     "debt_interest_rate_pct": "Debt interest rate",
     "near_term_cash_needs": "Near-term cash needs (1–2 years)",
@@ -45,7 +45,7 @@ def build_facts_used(snapshot: FinancialSnapshot) -> list[str]:
     lines: list[str] = []
     for key, value in snapshot.to_facts_dict().items():
         if key == "monthly_contribution" and snapshot.monthly_contribution_known and value == 0:
-            lines.append("- Monthly contribution: $0 (entered in your plan)")
+            lines.append("- Current monthly investment: $0 (entered in your plan — not a recommendation)")
             continue
         lines.append(_format_fact_line(key, value))
     return lines
@@ -73,7 +73,7 @@ def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list
     if snapshot.monthly_expenses is None and snapshot.question_expense_after is None:
         items.append("Monthly essential expenses")
     if not snapshot.monthly_contribution_known and is_monthly_contribution_question(q):
-        items.append("Current monthly contribution (from How Much Should I Invest?)")
+        items.append("Current monthly investment (optional field on How Much Should I Invest?)")
     if not snapshot.job_stability:
         items.append("Job or income stability")
     if "invest enough" in q or "contribut" in q:
@@ -88,13 +88,13 @@ def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list
 
 def _investing_enough_assessment(snapshot: FinancialSnapshot) -> str:
     if snapshot.monthly_contribution_known and snapshot.monthly_contribution == 0:
-        contrib = "Your current stated monthly contribution is **$0**."
+        contrib = "Your current stated monthly investment is **$0**."
     elif snapshot.monthly_contribution is not None and snapshot.monthly_contribution > 0:
-        contrib = f"Your stated monthly contribution is **{_money(snapshot.monthly_contribution)}**."
+        contrib = f"Your stated current monthly investment is **{_money(snapshot.monthly_contribution)}**."
     elif not snapshot.monthly_contribution_known:
-        contrib = "Your monthly contribution is not available from your saved plan."
+        contrib = "Your current monthly investment was left blank (unknown)."
     else:
-        contrib = "Your monthly contribution could not be read from your plan."
+        contrib = "Your current monthly investment could not be read from your plan."
 
     missing_income_exp = snapshot.monthly_income is None and snapshot.monthly_expenses is None
     if missing_income_exp:
@@ -254,7 +254,7 @@ def _confidence_rationale(snapshot: FinancialSnapshot, information_needed: list[
     if not snapshot.job_stability:
         parts.append("job stability")
     if not snapshot.monthly_contribution_known:
-        parts.append("monthly contribution from your plan")
+        parts.append("monthly investment from your plan")
     if not parts and information_needed:
         parts = [information_needed[0].lower()]
     if parts:

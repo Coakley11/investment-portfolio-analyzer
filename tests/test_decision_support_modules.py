@@ -23,6 +23,7 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         "plan_debt": 5_000,
         "plan_expenses": 8_000,
         "plan_monthly": 2_000,
+        "plan_monthly_provided": True,
         "plan_horizon": 20,
         "plan_risk": "moderate",
         "investment_plan_generated": True,
@@ -122,6 +123,7 @@ class DecisionSupportPipelineTests(unittest.TestCase):
     def test_explicit_zero_monthly_contribution(self) -> None:
         ctx = dict(self._CTX)
         ctx["plan_monthly"] = 0
+        ctx["plan_monthly_provided"] = True
         response = run_decision_support_module(
             MODULE_ALLOCATION_ADVISOR,
             ctx,
@@ -137,7 +139,10 @@ class DecisionSupportPipelineTests(unittest.TestCase):
             dict(self._CTX),
             question="Am I investing enough?",
         )
-        self.assertTrue(response.assessment.lower().startswith("ami cannot") or "stated monthly" in response.assessment.lower())
+        self.assertTrue(
+            response.assessment.lower().startswith("ami cannot")
+            or "monthly investment" in response.assessment.lower()
+        )
 
     def test_plan_session_reaches_snapshot_via_applied_math_context(self) -> None:
         plan = core.InvestmentPlanResult(
@@ -162,6 +167,7 @@ class DecisionSupportPipelineTests(unittest.TestCase):
             "plan_debt": 5_000,
             "plan_expenses": 8_000,
             "plan_monthly": 0,
+            "plan_monthly_provided": True,
             "plan_horizon": 20,
             "plan_risk": "moderate",
             "investment_plan_generated": True,

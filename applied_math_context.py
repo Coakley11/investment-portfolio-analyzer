@@ -254,13 +254,16 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
 
 def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict[str, Any]) -> None:
     """Expose How Much Should I Invest session inputs to AMI decision support."""
+    try:
+        from components.investment_planning import PLAN_MONTHLY_PROVIDED_KEY
+    except ImportError:
+        PLAN_MONTHLY_PROVIDED_KEY = "plan_monthly_provided"  # noqa: N806
     for key in (
         "plan_total_cash",
         "plan_emergency",
         "plan_near_term",
         "plan_debt",
         "plan_expenses",
-        "plan_monthly",
         "plan_horizon",
         "plan_risk",
     ):
@@ -270,6 +273,10 @@ def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict
         ctx["sidebar_portfolio_value"] = session_state["sidebar_portfolio_value"]
     if session_state.get("investment_plan_generated"):
         ctx["investment_plan_generated"] = True
+    if session_state.get(PLAN_MONTHLY_PROVIDED_KEY) is not None:
+        ctx["plan_monthly_provided"] = bool(session_state.get(PLAN_MONTHLY_PROVIDED_KEY))
+    if session_state.get(PLAN_MONTHLY_PROVIDED_KEY):
+        ctx["plan_monthly"] = session_state.get("plan_monthly")
     plan = session_state.get("investment_plan")
     if plan is not None:
         ctx["investment_plan"] = plan

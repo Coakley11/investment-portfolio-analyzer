@@ -20,6 +20,15 @@ CONSERVATIVE_ALLOCATION_HELP = (
     "Often held in bonds, T-bills, or cash-like assets until you deploy it."
 )
 
+CURRENT_MONTHLY_INVESTMENT_LABEL = "Current monthly investment (optional)"
+CURRENT_MONTHLY_INVESTMENT_HELP = (
+    "If you already invest money regularly each month, enter that current amount here. "
+    "This is not the recommended amount. AMI can later compare your current contribution "
+    "with a suggested contribution based on income, expenses, reserves, and goals. "
+    "Leave blank if unknown, or enter $0 if you currently make no regular monthly investments."
+)
+PLAN_MONTHLY_PROVIDED_KEY = "plan_monthly_provided"
+
 # Dict keys from older callers / fallbacks mapped to InvestmentPlanResult fields.
 _PLAN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "total_available": ("total_available", "total_cash"),
@@ -67,6 +76,59 @@ def coerce_plan_integer(value: Any, fallback: int) -> int:
         return max(0, int(float(cleaned)))
     except (TypeError, ValueError):
         return fb
+
+
+def parse_current_monthly_investment_input(raw: Any) -> tuple[float | None, bool, str | None]:
+    """
+    Parse the optional current monthly investment field.
+
+    Returns (amount, user_provided, error_message).
+    Blank → (None, False, None). Valid ``0`` → (0.0, True, None).
+    Invalid input → (None, False, error_message) — caller should keep prior session values.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None, False, None
+    cleaned = text.replace(",", "").replace("$", "").replace(" ", "")
+    if not cleaned:
+        return None, False, None
+    try:
+        amount = float(cleaned)
+    except (TypeError, ValueError):
+        return (
+            None,
+            False,
+            "Enter a valid dollar amount, leave blank if unknown, or enter 0 if you invest nothing monthly.",
+        )
+    if amount < 0:
+        return None, False, "Current monthly investment cannot be negative. Enter 0 or a positive amount."
+    if amount > 500_000:
+        return None, False, "Enter an amount up to $500,000/month, or leave blank if unknown."
+    return amount, True, None
+
+
+def format_current_monthly_investment_for_widget(session_state: Any) -> str:
+    if not session_state.get(PLAN_MONTHLY_PROVIDED_KEY):
+        return ""
+    return str(int(coerce_plan_integer(session_state.get("plan_monthly"), 0)))
+
+
+def current_monthly_investment_for_plan(session_state: Any) -> float | None:
+    """Amount the user entered, or None if left blank (unknown)."""
+    if not session_state.get(PLAN_MONTHLY_PROVIDED_KEY):
+        return None
+    return float(coerce_plan_integer(session_state.get("plan_monthly"), 0))
+
+
+def _current_monthly_investment_summary_line(amount: float | None) -> str | None:
+    if amount is None:
+        return None
+    if amount <= 0:
+        return (
+            "Current monthly investment noted: $0/month "
+            "(no regular monthly investments entered; not a recommendation)"
+        )
+    return f"Current monthly investment noted: {_money(amount)}/month (not a recommendation)"
 
 
 def _money(x: float) -> str:
@@ -537,7 +599,7 @@ def _fallback_investment_plan(
     planned_large_expenses: float,
     horizon_years: int,
     risk_tolerance: str,
-    monthly_contribution: float,
+    monthly_contribution: float | None,
 ) -> core.InvestmentPlanResult:
     """Local fallback when portfolio_core.compute_investment_plan is unavailable."""
     emergency = max(0.0, emergency_fund_needed)
@@ -562,8 +624,11 @@ def _fallback_investment_plan(
         f"Long-term sleeve ({long_pct * 100:.0f}%): {_money(long_term)}",
         f"Safer sleeve ({safer_pct * 100:.0f}%): {_money(short_inv)}",
     ]
-    if monthly_contribution > 0:
-        summary.append(f"Optional monthly contribution noted: {_money(monthly_contribution)}/month")
+    line = _current_monthly_investment_summary_line(monthly_contribution)
+    if line:
+        summary.append(line)
+
+    stored_monthly = float(monthly_contribution) if monthly_contribution is not None else 0.0
 
     return core.InvestmentPlanResult(
         total_available=total,
@@ -573,7 +638,7 @@ def _fallback_investment_plan(
         amount_potentially_investable=investable,
         long_term_suggested=float(long_term),
         short_term_investable=float(short_inv),
-        monthly_contribution=float(monthly_contribution),
+        monthly_contribution=stored_monthly,
         summary_lines=summary,
         educational_notes=[
             "Simplified on-page estimate (core planner unavailable).",
@@ -595,7 +660,7 @@ def _compute_investment_plan_safe(
     planned_large_expenses: float,
     horizon_years: int,
     risk_tolerance: str,
-    monthly_contribution: float,
+    monthly_contribution: float | None,
 ) -> core.InvestmentPlanResult:
     """Call portfolio_core.compute_investment_plan with defensive fallbacks."""
     kwargs = {
@@ -606,7 +671,7 @@ def _compute_investment_plan_safe(
         "planned_large_expenses": planned_large_expenses,
         "horizon_years": horizon_years,
         "risk_tolerance": risk_tolerance,
-        "monthly_contribution": monthly_contribution,
+        "current_monthly_investment": monthly_contribution,
     }
     compute_fn = getattr(core, "compute_investment_plan", None)
     if callable(compute_fn):
@@ -689,14 +754,23 @@ def render_how_much_to_invest(
                 step=1_000,
                 key=f"{key_prefix}_plan_expenses",
             )
-            monthly = st.number_input(
-                "Monthly contribution (optional) ($)",
-                min_value=0,
-                max_value=500_000,
-                value=plan_integer_from_session("plan_monthly", 0),
-                step=100,
-                key=f"{key_prefix}_plan_monthly",
+            monthly = st.text_input(
+                f"{CURRENT_MONTHLY_INVESTMENT_LABEL} ($)",
+                value=format_current_monthly_investment_for_widget(st.session_state),
+                help=CURRENT_MONTHLY_INVESTMENT_HELP,
+                placeholder="Leave blank if unknown",
+                key=f"{key_prefix}_plan_monthly_text",
             )
+            parsed_monthly, monthly_provided, monthly_error = parse_current_monthly_investment_input(
+                monthly
+            )
+            if monthly_error:
+                st.warning(monthly_error)
+            elif monthly_provided:
+                st.session_state[PLAN_MONTHLY_PROVIDED_KEY] = True
+                st.session_state.plan_monthly = int(round(float(parsed_monthly or 0)))
+            else:
+                st.session_state[PLAN_MONTHLY_PROVIDED_KEY] = False
         r1, r2 = st.columns(2)
         with r1:
             horizon = st.slider(
@@ -732,7 +806,7 @@ def render_how_much_to_invest(
         planned_large_expenses=float(expenses),
         horizon_years=int(horizon),
         risk_tolerance=risk,
-        monthly_contribution=float(monthly),
+        monthly_contribution=current_monthly_investment_for_plan(st.session_state),
     )
     st.session_state.investment_plan = plan
 
