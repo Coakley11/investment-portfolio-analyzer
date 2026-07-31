@@ -86,11 +86,21 @@ class InvestedAmountAppropriateRule:
         investable = snapshot.investable_amount
         obs_parts: list[str] = []
         if pv is not None:
-            obs_parts.append(f"Portfolio value **{_money(pv)}** vs plan context.")
-        if target is not None:
-            obs_parts.append(f"Suggested long-term deployment **{_money(target)}**.")
+            obs_parts.append(f"Current portfolio value: **{_money(pv)}**.")
         if investable is not None:
-            obs_parts.append(f"Potentially investable after reserves **{_money(investable)}**.")
+            obs_parts.append(
+                f"Potentially investable cash after reserves: **{_money(investable)}**."
+            )
+        if target is not None:
+            obs_parts.append(
+                f"Suggested long-term deployment from available cash: **{_money(target)}**."
+            )
+            if pv is not None:
+                diff = abs(float(pv) - float(target))
+                obs_parts.append(
+                    f"Difference between portfolio value and suggested deployment (not a target portfolio size): "
+                    f"**{_money(diff)}**."
+                )
         reserve_note = []
         if snapshot.emergency_fund_target:
             reserve_note.append(f"emergency **{_money(snapshot.emergency_fund_target)}**")
@@ -106,18 +116,14 @@ class InvestedAmountAppropriateRule:
             obs_parts.append(f"Horizon: **{snapshot.horizon_years} years**.")
 
         action = (
-            "Compare portfolio value to the plan's long-term suggested amount and remaining investable cash; "
-            "fund reserves before increasing market exposure."
+            "Clarify whether available cash sits inside or outside the portfolio value you entered, "
+            "then compare reserves, net worth, and goals — portfolio value and suggested long-term deployment "
+            "from cash planning answer different questions."
         )
-        if pv is not None and target is not None and pv < target * 0.85:
+        if pv is not None and investable is not None and investable > (pv or 0) + 5000:
             action = (
-                "Consider deploying additional cash toward long-term investments in line with your risk tolerance, "
-                "without reducing emergency or near-term reserves."
-            )
-        elif pv is not None and investable is not None and investable > (pv or 0) + 5000:
-            action = (
-                "You may be holding more uninvested cash than the plan suggests — stage investing in tranches "
-                "while keeping obligated reserves liquid."
+                "You may still have material cash beyond what is reflected in portfolio value — "
+                "stage long-term investing in tranches while keeping obligated reserves liquid."
             )
 
         return ReasoningFinding(

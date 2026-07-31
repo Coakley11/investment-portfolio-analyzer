@@ -2436,6 +2436,7 @@ def render_suite_applied_math_insight_for_page(
     )
     if rendered and app == "investment":
         st.session_state["_ami_insight_card_rendered"] = True
+        st.session_state.pop("_ami_insight_submit_status", None)
         try:
             from investment_ami_submit_runtime import RENDER_REQUESTED_KEY
 
@@ -2546,7 +2547,6 @@ def render_ami_insight_submit_feedback(st: Any, *, insight_rendered: bool = Fals
         return
     if state == "success":
         if insight_rendered:
-            st.success("Applied Investment Insight is ready below.")
             ss.pop("_ami_insight_submit_status", None)
         else:
             st.warning(

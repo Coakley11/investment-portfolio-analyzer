@@ -65,6 +65,16 @@ def build_information_needed(snapshot: FinancialSnapshot, question: str) -> list
             items.append("Risk tolerance from your plan")
         if snapshot.horizon_years is None:
             items.append("Investment time horizon from your plan")
+        items.extend(
+            [
+                "Whether available cash is included in or separate from the portfolio value you entered",
+                "Total net worth across accounts (not just this portfolio)",
+                "Monthly income and essential expenses",
+                "Retirement and other long-term assets outside this portfolio",
+                "Upcoming liabilities and large purchases",
+                "Target split between invested assets and liquid cash",
+            ]
+        )
         return items
 
     items = []
@@ -144,7 +154,6 @@ def _invested_amount_assessment(snapshot: FinancialSnapshot) -> str:
     pv = snapshot.portfolio_value
     target = snapshot.long_term_suggested
     investable = snapshot.investable_amount
-    cash = snapshot.total_available_cash
 
     if pv is None:
         return (
@@ -152,35 +161,33 @@ def _invested_amount_assessment(snapshot: FinancialSnapshot) -> str:
             "current **portfolio value**. Set portfolio value in the sidebar or complete your holdings."
         )
 
-    parts: list[str] = [f"Your current portfolio is about **{_money(pv)}**."]
-
-    if target is not None and target > 0:
-        if pv < target * 0.85:
-            parts.append(
-                f"That is **below** your plan's suggested long-term deployment "
-                f"(**{_money(target)}**) — you may be **underinvested** relative to cash available after reserves."
-            )
-        elif pv > target * 1.15:
-            parts.append(
-                f"That is **above** the suggested long-term amount (**{_money(target)}**) — "
-                "confirm emergency fund, near-term needs, and debt reserves are fully covered before adding risk."
-            )
-        else:
-            parts.append(
-                f"That is **broadly in line** with your plan's suggested long-term amount (**{_money(target)}**)."
-            )
-
-    if investable is not None and cash is not None:
-        uninvested = max(0.0, investable - min(pv, investable))
-        if investable > pv + 5000:
-            parts.append(
-                f"You still show about **{_money(investable)}** potentially investable after reserves "
-                f"vs **{_money(pv)}** deployed — you may be **holding excess cash** relative to the plan."
-            )
-        elif uninvested <= 5000 and investable > 0:
-            parts.append(
-                "Most of the plan's investable cushion appears deployed; focus next on contribution pace and rebalancing."
-            )
+    parts: list[str] = [
+        f"Your current portfolio is approximately **{_money(pv)}**.",
+    ]
+    if investable is not None:
+        parts.append(
+            f"Potentially investable cash after reserves (from your plan): **{_money(investable)}**."
+        )
+    if target is not None:
+        parts.append(
+            f"Separately, based on the cash-planning inputs you entered, about **{_money(target)}** "
+            "of your available cash could be allocated toward long-term investing after preserving "
+            "emergency and near-term reserves."
+        )
+        diff = abs(float(pv) - float(target))
+        parts.append(
+            f"The difference between current portfolio value and suggested long-term deployment "
+            f"from available cash is **{_money(diff)}**."
+        )
+        parts.append(
+            "These figures are **not direct substitutes**, so AMI cannot conclude that you are "
+            "overinvested merely because portfolio value exceeds the suggested long-term deployment amount."
+        )
+    elif investable is not None:
+        parts.append(
+            "Without a long-term deployment target from your plan, AMI can only compare portfolio value "
+            "to investable cash after reserves — not whether the invested total is appropriate on its own."
+        )
 
     return " ".join(parts)
 
@@ -193,9 +200,6 @@ def build_assessment(
 ) -> str:
     q = question.lower()
     if is_invested_amount_question(q):
-        for f in findings:
-            if f.rule_id == "alloc_invested_amount":
-                return f.observation.split(".")[0] + "." if f.observation else _invested_amount_assessment(snapshot)
         return _invested_amount_assessment(snapshot)
     if is_monthly_contribution_question(q) or ("investing enough" in q and "invested" not in q):
         return _investing_enough_assessment(snapshot)

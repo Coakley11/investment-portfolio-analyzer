@@ -192,16 +192,35 @@ class DecisionSupportPipelineTests(unittest.TestCase):
         )
         self.assertEqual(detect_investment_send_intent(q, ""), "allocation_advisor")
         ctx = dict(self._CTX)
-        ctx["sidebar_portfolio_value"] = 45_000
+        ctx["sidebar_portfolio_value"] = 100_000
         ctx["investment_plan_generated"] = True
+        plan = core.InvestmentPlanResult(
+            total_available=120_000,
+            suggested_emergency_reserve=30_000,
+            short_term_cash_amount=10_000,
+            debt_reserve=5_000,
+            amount_potentially_investable=67_000,
+            long_term_suggested=58_451,
+            short_term_investable=8_549,
+            monthly_contribution=2_000,
+            summary_lines=[],
+            educational_notes=[],
+        )
+        ctx["investment_plan"] = plan
         response = run_decision_support_module(MODULE_ALLOCATION_ADVISOR, ctx, question=q)
         self.assertIn("alloc_invested_amount", response.applied_rule_ids)
         self.assertNotIn("alloc_monthly_contribution", response.applied_rule_ids)
-        self.assertIn("portfolio", response.assessment.lower())
+        self.assertIn("approximately", response.assessment.lower())
+        self.assertIn("not direct substitutes", response.assessment.lower())
+        self.assertNotIn("vs plan context", response.assessment.lower())
         self.assertNotIn("contribution assessment", response.assessment.lower())
         visible = user_visible_markdown(response).lower()
         self.assertNotIn("framework ds-v1", visible)
         self.assertNotIn("placeholder", visible)
+        self.assertIn("58,451", response.assessment)
+        obs = " ".join(response.observations)
+        self.assertIn("100,000", obs)
+        self.assertIn("Suggested long-term deployment", obs)
 
     def test_invested_amount_rendered_sections(self) -> None:
         q = "Am I underinvested given my plan?"

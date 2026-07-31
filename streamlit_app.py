@@ -2000,11 +2000,6 @@ except ImportError:
         pass
 _active_tab = st.session_state["investment_active_tab"]
 
-if st.session_state.get("_ami_render_requested") and isinstance(
-    st.session_state.get("_ami_pending_insight"), dict
-):
-    st.caption("⏳ Pending Applied Investment Insight — rendering on this page…")
-
 from suite_analytical_question import render_suite_applied_math_insight
 
 try:
@@ -2030,6 +2025,13 @@ elif investment_insight_main_render_needed is None:
     _insight_rendered = bool(
         render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
     )
+
+if (
+    st.session_state.get("_ami_render_requested")
+    and isinstance(st.session_state.get("_ami_pending_insight"), dict)
+    and not _insight_rendered
+):
+    st.caption("⏳ Pending Applied Investment Insight — rendering on this page…")
 
 if render_ami_insight_submit_feedback:
     render_ami_insight_submit_feedback(st, insight_rendered=_insight_rendered)

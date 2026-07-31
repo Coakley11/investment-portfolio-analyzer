@@ -204,6 +204,41 @@ DECISION_SUPPORT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("methodology", "Confidence"),
 )
 
+# Decision-support insight sections are narrative Markdown (currency, bold) — not LaTeX.
+DECISION_SUPPORT_PROSE_SECTION_KEYS: frozenset[str] = frozenset(
+    key for key, _ in DECISION_SUPPORT_PAGE_SECTION_ORDER
+) | frozenset({"assumptions"})
+
+
+def insight_section_render_mode(section_key: str, sections: dict[str, Any] | None) -> str:
+    """Return ``prose`` (st.markdown) or ``latex`` (st.latex) for a section body."""
+    if not isinstance(sections, dict):
+        return "prose"
+    if str(sections.get("insights_layout") or "") == "decision_support":
+        if section_key in DECISION_SUPPORT_PROSE_SECTION_KEYS:
+            return "prose"
+    return "prose"
+
+
+def escape_streamlit_markdown_prose(text: str) -> str:
+    """
+    Escape ``$`` so Streamlit Markdown does not treat currency as inline LaTeX.
+
+    Use for narrative AMI sections only — not for fields rendered with ``st.latex``.
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "$" and (i == 0 or text[i - 1] != "\\"):
+            out.append("\\$")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
 
 def render_investment_page_insight_markdown(
     sections: dict[str, Any] | None,
@@ -219,10 +254,11 @@ def render_investment_page_insight_markdown(
         for key, label in DECISION_SUPPORT_PAGE_SECTION_ORDER:
             body = str(sections.get(key) or "").strip()
             if body:
-                parts.append(f"**{label}**\n\n{body}")
+                safe_body = escape_streamlit_markdown_prose(body)
+                parts.append(f"**{label}**\n\n{safe_body}")
         disclaimer = str(sections.get("assumptions") or "").strip()
         if disclaimer:
-            parts.append(disclaimer)
+            parts.append(escape_streamlit_markdown_prose(disclaimer))
         return "\n\n".join(parts)
     order = _BEGINNER_INVESTMENT_PAGE_SECTION_ORDER if beginner else INVESTMENT_PAGE_SECTION_ORDER
     parts: list[str] = []

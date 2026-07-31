@@ -143,8 +143,21 @@ class TestDecisionSupportSubmitE2E(unittest.TestCase):
 
         ss["_ami_insight_submit_status"] = {"state": "success"}
         render_ami_insight_submit_feedback(st, insight_rendered=True)
-        st.success.assert_called()
+        st.success.assert_not_called()
         st.warning.assert_not_called()
+        self.assertIsNone(ss.get("_ami_insight_submit_status"))
+
+    def test_successful_render_does_not_emit_ready_below_message(self) -> None:
+        import applied_math_return_insight as ami
+
+        st = _FakeSt()
+        ss = self._base_session()
+        st.session_state = ss
+        ss["_ami_insight_submit_status"] = {"state": "success", "insight_id": "x1"}
+        ami.render_ami_insight_submit_feedback(st, insight_rendered=True)
+        st.success.assert_not_called()
+        combined = " ".join(str(c) for c in st.success.call_args_list)
+        self.assertNotIn("Applied Investment Insight is ready below", combined)
 
         st.warning.reset_mock()
         ss["_ami_insight_submit_status"] = {"state": "success"}
