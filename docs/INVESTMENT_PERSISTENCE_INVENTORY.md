@@ -34,10 +34,13 @@ Legend: **Y** = durable, **Partial** = some keys only, **N** = session-only / at
 5. **Schema**: `investment-plan-v1` in `investment_plan_persist` (legacy `investment-plan-v0` accepted on read).
 6. **Status UI**: “Changes saved.” / warning on failure without deleting prior cloud state.
 
+## Beginner vs advanced widget keys
+
+Both modes read and write the **same canonical session keys** (`plan_total_cash`, `plan_horizon`, `plan_risk`, `plan_compare_amounts_list`, etc.). Streamlit widget keys differ by prefix (`invest_plan_beginner_*` vs `invest_plan_advanced_*`); on workspace restore, `seed_plan_widget_keys_from_canonical()` copies canonical values into the active prefix before widgets render so modes do not diverge.
+
 ## Remaining gaps
 
-- Beginner vs advanced **widget key prefixes** (`invest_plan_beginner_*` vs `invest_plan_advanced_*`): canonical session keys are shared; widget keys remain mode-specific (Streamlit limitation).
-- **Plan compare chart return** (`plan_compare_return`): scalar key exists; recomputation on hydrate not automatic.
+- **Plan compare projections** (`plan_compare_return`): session-only, cleared on hydrate; recomputed when portfolio analytics run (not persisted).
 - **Macro live snapshots** and **MC cached summaries**: session-only by design (large / stale quickly).
 - **Tab-local UI** (expanders open, scroll position): not persisted.
 

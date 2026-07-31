@@ -34,6 +34,16 @@ PLAN_MONTHLY_PROVIDED_KEY = "plan_monthly_provided"
 PLAN_COMPARE_AMOUNTS_KEY = "plan_compare_amounts_list"
 INVESTMENT_PLAN_PERSIST_SCHEMA = "investment-plan-v1"
 PLAN_RISK_OPTIONS = ("Low", "Medium", "High")
+# Canonical session keys shared by beginner (`invest_plan_beginner_*`) and advanced widgets.
+PLAN_CANONICAL_SCALAR_KEYS = (
+    "plan_total_cash",
+    "plan_emergency",
+    "plan_near_term",
+    "plan_debt",
+    "plan_expenses",
+    "plan_horizon",
+)
+INVESTMENT_PLAN_RESTORE_GEN_KEY = "_investment_plan_restore_gen"
 
 # Dict keys from older callers / fallbacks mapped to InvestmentPlanResult fields.
 _PLAN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -397,8 +407,8 @@ def _render_compare_investment_amounts(
         st.rerun()
 
     compare_amounts = normalize_compare_amounts(st.session_state.get(list_key))
-    if compare_amounts and st.session_state.get("plan_compare_return") is not None:
-        ann_ret = float(st.session_state["plan_compare_return"])
+    ann_ret = resolve_plan_compare_annual_return(st.session_state)
+    if compare_amounts and ann_ret is not None:
         st.markdown("**Projected change in one year (model)**")
         rows = []
         for amt in compare_amounts:
@@ -717,6 +727,60 @@ def _compute_investment_plan_safe(
     return _fallback_investment_plan(**kwargs)
 
 
+def resolve_plan_compare_annual_return(session_state: Any) -> float | None:
+    """
+    Derived comparison metric — recomputed when portfolio analytics run.
+
+    Not persisted; hydrated sessions clear stale values until analytics refresh.
+    """
+    raw = session_state.get("plan_compare_return")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def bump_investment_plan_restore_generation(session_state: Any) -> int:
+    gen = int(session_state.get(INVESTMENT_PLAN_RESTORE_GEN_KEY) or 0) + 1
+    session_state[INVESTMENT_PLAN_RESTORE_GEN_KEY] = gen
+    return gen
+
+
+def seed_plan_widget_keys_from_canonical(session_state: Any, *, key_prefix: str) -> None:
+    """
+    Copy canonical plan session keys into Streamlit widget keys for this mode prefix.
+
+    Beginner and advanced UIs use different widget keys but one persistent model.
+    """
+    restore_gen = session_state.get(INVESTMENT_PLAN_RESTORE_GEN_KEY)
+    seeded_gen = session_state.get(f"{key_prefix}_plan_widgets_seeded_gen")
+    if restore_gen is not None and seeded_gen == restore_gen:
+        return
+    if restore_gen is None and session_state.get(f"{key_prefix}_plan_widgets_seeded"):
+        return
+
+    for field in PLAN_CANONICAL_SCALAR_KEYS:
+        if field not in session_state:
+            continue
+        wkey = f"{key_prefix}_{field}"
+        session_state[wkey] = coerce_plan_integer(session_state.get(field), 0)
+
+    risk = str(session_state.get("plan_risk") or "Medium").strip()
+    if risk not in PLAN_RISK_OPTIONS:
+        risk = "Medium"
+    session_state[f"{key_prefix}_plan_risk"] = risk
+    session_state[f"{key_prefix}_plan_monthly_text"] = format_current_monthly_investment_for_widget(
+        session_state
+    )
+    seed_plan_compare_list_from_canonical(session_state, list_key=f"{key_prefix}_compare_amounts_list")
+
+    session_state[f"{key_prefix}_plan_widgets_seeded"] = True
+    if restore_gen is not None:
+        session_state[f"{key_prefix}_plan_widgets_seeded_gen"] = restore_gen
+
+
 def _plan_risk_index(session_state: Any) -> int:
     val = str(session_state.get("plan_risk") or "Medium").strip()
     if val not in PLAN_RISK_OPTIONS:
@@ -767,7 +831,6 @@ def investment_plan_persist_fingerprint(session_state: Any) -> str:
         "plan_compare_amounts_list": normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY)),
         "investment_plan_applied_portfolio_value": session_state.get("investment_plan_applied_portfolio_value"),
         "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
-        "plan_compare_return": session_state.get("plan_compare_return"),
     }
     raw = json.dumps(blob, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -799,6 +862,7 @@ def apply_investment_plan_persist_blob(st: Any, blob: Any) -> None:
     amounts = normalize_compare_amounts(blob.get("plan_compare_amounts_list"))
     if amounts:
         ss[PLAN_COMPARE_AMOUNTS_KEY] = list(amounts)
+    ss.pop("plan_compare_return", None)
     plan_raw = blob.get("investment_plan")
     if plan_raw:
         try:
@@ -848,6 +912,7 @@ def render_how_much_to_invest(
     st.markdown(f"#### {title}")
     st.caption(lead)
     render_investment_plan_save_status(st)
+    seed_plan_widget_keys_from_canonical(st.session_state, key_prefix=key_prefix)
 
     with st.expander("Adjust your numbers" if beginner else "Inputs", expanded=not beginner):
         c1, c2 = st.columns(2)

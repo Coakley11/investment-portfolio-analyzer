@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 
 from applied_math_return_insight import (
     SESSION_PENDING_KEY,
+    _resolve_insight_analyst_sections,
     hydrate_applied_math_insight_for_session,
     insight_has_displayable_content,
     insight_page_scope_decision,
     investment_insight_main_render_needed,
     render_applied_math_insight_panel,
+    render_ami_insight_submit_feedback,
     render_suite_applied_math_insight_for_page,
 )
 from suite_analytical_question import (
@@ -45,6 +47,8 @@ class _FakeSt:
         self.container = MagicMock(return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()))
         self.markdown = MagicMock()
         self.info = MagicMock()
+        self.success = MagicMock()
+        self.error = MagicMock()
         self.caption = MagicMock()
         self.columns = MagicMock(return_value=[MagicMock(), MagicMock()])
         self.button = MagicMock(return_value=False)
@@ -120,6 +124,60 @@ class TestDecisionSupportSubmitE2E(unittest.TestCase):
                 self.assertTrue(rendered, ss.get("_ami_insight_render_skipped_reason"))
                 panel = render_applied_math_insight_panel(st, source_app="investment", insight=pending)
                 self.assertTrue(panel)
+                sections, is_ds, legacy_stale = _resolve_insight_analyst_sections(pending)
+                self.assertFalse(legacy_stale, pending.get("conclusion"))
+                self.assertTrue(is_ds, sections)
+                self.assertIsInstance(sections, dict)
+                self.assertEqual(str((sections or {}).get("insights_layout") or ""), "decision_support")
+
+    def test_submit_success_and_processing_status_messages(self) -> None:
+        import applied_math_return_insight as ami
+
+        st = _FakeSt()
+        ss = self._base_session()
+        st.session_state = ss
+        ss["_ami_insight_submit_status"] = {"state": "processing"}
+        render_ami_insight_submit_feedback(st, insight_rendered=False)
+        st.info.assert_called()
+
+        ss["_ami_insight_submit_status"] = {"state": "success"}
+        render_ami_insight_submit_feedback(st, insight_rendered=True)
+        st.success.assert_called()
+
+    def test_pending_insight_survives_disk_roundtrip(self) -> None:
+        import applied_math_return_insight as ami
+
+        from investment_persistent_state import apply_investment_disk_state, build_investment_disk_state
+
+        st = _FakeSt()
+        ss = self._base_session()
+        st.session_state = ss
+        page = "Portfolio Inputs"
+        q = QUESTIONS[0]
+        ctx = build_submit_context("investment", page, ss)
+        pre = build_question_payload(
+            source_app="investment", source_page=page, question=q, context=ctx
+        )
+        with patch.object(ami, "store_applied_math_insight", return_value={"ok": True}):
+            self.assertTrue(
+                _stage_investment_instant_insight(
+                    st,
+                    ss,
+                    question=q,
+                    source_app="investment",
+                    source_page=page,
+                    submit_ctx=ctx,
+                    submit_source_state={},
+                    pre_payload=pre,
+                )
+            )
+        disk = build_investment_disk_state(st)
+        st2 = _FakeSt()
+        apply_investment_disk_state(st2, disk)
+        pending = st2.session_state.get(SESSION_PENDING_KEY)
+        self.assertIsInstance(pending, dict)
+        self.assertTrue(insight_has_displayable_content(pending))
+        self.assertEqual(str(pending.get("question") or ""), q)
 
     def test_stage_failure_surfaces_error_status(self) -> None:
         st = _FakeSt()

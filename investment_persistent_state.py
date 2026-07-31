@@ -109,7 +109,6 @@ _PERSIST_SCALAR_KEYS = (
     "investment_plan_generated",
     "investment_plan_applied_portfolio_value",
     "investment_plan_applied_source",
-    "plan_compare_return",
     "visited_explain",
     "visited_risk",
     "visited_forward",
@@ -167,7 +166,6 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "investment_plan_generated": False,
     "investment_plan_applied_portfolio_value": None,
     "investment_plan_applied_source": None,
-    "plan_compare_return": None,
     "visited_explain": False,
     "visited_risk": False,
     "visited_forward": False,
@@ -1409,9 +1407,11 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         pass
 
     try:
-        from components.investment_planning import apply_investment_plan_persist_blob
+        from components.investment_planning import apply_investment_plan_persist_blob, bump_investment_plan_restore_generation
 
         apply_investment_plan_persist_blob(st, state.get(INVESTMENT_PLAN_PERSIST_KEY))
+        bump_investment_plan_restore_generation(st.session_state)
+        st.session_state.pop("plan_compare_return", None)
     except ImportError:
         pass
 

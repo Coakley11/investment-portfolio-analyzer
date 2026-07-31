@@ -11,13 +11,17 @@ import portfolio_core as core
 
 from components.investment_planning import (
     INVESTMENT_PLAN_PERSIST_SCHEMA,
+    INVESTMENT_PLAN_RESTORE_GEN_KEY,
     PLAN_COMPARE_AMOUNTS_KEY,
     PLAN_MONTHLY_PROVIDED_KEY,
     apply_investment_plan_persist_blob,
+    bump_investment_plan_restore_generation,
     capture_investment_plan_persist_blob,
     investment_plan_persist_fingerprint,
     parse_current_monthly_investment_input,
+    resolve_plan_compare_annual_return,
     sanitize_plan_session_integers,
+    seed_plan_widget_keys_from_canonical,
 )
 from investment_persistent_state import (
     INVESTMENT_PLAN_PERSIST_KEY,
@@ -98,6 +102,61 @@ class TestInvestmentPlanPersistence(unittest.TestCase):
         self.assertEqual(state.get("plan_risk"), "Low")
         self.assertTrue(state.get("plan_monthly_provided"))
         self.assertIn(INVESTMENT_PLAN_PERSIST_KEY, state)
+        self.assertNotIn("plan_compare_return", state)
+
+    def test_compare_return_not_persisted_and_cleared_on_hydrate(self) -> None:
+        ss = _FakeSessionState(plan_total_cash=50_000, plan_compare_return=0.07)
+        st = _FakeSt(ss)
+        state = build_investment_disk_state(st)
+        self.assertNotIn("plan_compare_return", state)
+        st2 = _FakeSt(_FakeSessionState())
+        blob = {
+            "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+            "plan_compare_amounts_list": [5_000],
+        }
+        apply_investment_plan_persist_blob(st2, blob)
+        self.assertIsNone(resolve_plan_compare_annual_return(st2.session_state))
+
+    def test_widget_keys_seeded_from_canonical_after_restore(self) -> None:
+        ss = _FakeSessionState(
+            plan_total_cash=88_000,
+            plan_emergency=11_000,
+            plan_horizon=22,
+            plan_risk="Low",
+        )
+        ss[PLAN_MONTHLY_PROVIDED_KEY] = False
+        bump_investment_plan_restore_generation(ss)
+        seed_plan_widget_keys_from_canonical(ss, key_prefix="invest_plan_advanced")
+        self.assertEqual(ss["invest_plan_advanced_plan_total_cash"], 88_000)
+        self.assertEqual(ss["invest_plan_advanced_plan_horizon"], 22)
+        self.assertEqual(ss["invest_plan_advanced_plan_risk"], "Low")
+        self.assertEqual(ss["invest_plan_advanced_plan_monthly_text"], "")
+
+    def test_two_workspace_states_do_not_cross_contaminate(self) -> None:
+        state_a = {
+            "plan_total_cash": 11_111,
+            "plan_risk": "Low",
+            INVESTMENT_PLAN_PERSIST_KEY: {
+                "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+                "plan_compare_amounts_list": [1_111],
+            },
+        }
+        state_b = {
+            "plan_total_cash": 22_222,
+            "plan_risk": "High",
+            INVESTMENT_PLAN_PERSIST_KEY: {
+                "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+                "plan_compare_amounts_list": [2_222],
+            },
+        }
+        st_a = _FakeSt(_FakeSessionState())
+        st_b = _FakeSt(_FakeSessionState())
+        apply_investment_disk_state(st_a, copy.deepcopy(state_a))
+        apply_investment_disk_state(st_b, copy.deepcopy(state_b))
+        self.assertEqual(st_a.session_state.get("plan_total_cash"), 11_111)
+        self.assertEqual(st_b.session_state.get("plan_total_cash"), 22_222)
+        self.assertEqual(st_a.session_state.get(PLAN_COMPARE_AMOUNTS_KEY), [1_111])
+        self.assertEqual(st_b.session_state.get(PLAN_COMPARE_AMOUNTS_KEY), [2_222])
 
     def test_hydrate_does_not_clobber_with_defaults_when_blob_present(self) -> None:
         saved = {
