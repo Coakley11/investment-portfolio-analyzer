@@ -33,6 +33,16 @@ def _money(x: float) -> str:
     return f"${x:,.0f}"
 
 
+def _join_list_with_and(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
 def _deploy_match_tolerance(reference: float) -> float:
     return max(500.0, 0.005 * abs(reference))
 
@@ -471,7 +481,7 @@ def _resolve_confidence_monthly_contribution(
         optional = _monthly_contribution_optional_refinements(snapshot, information_needed)
         if optional:
             parts.append(
-                "Confidence may increase after " + ", ".join(optional) + " are included."
+                "Confidence may increase after " + _join_list_with_and(optional) + " are included."
             )
     return "medium", pct, " ".join(parts)
 

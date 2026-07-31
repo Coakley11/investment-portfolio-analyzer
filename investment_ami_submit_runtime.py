@@ -81,8 +81,10 @@ def queue_investment_ami_submit(
     send_gen: int,
 ) -> None:
     """Sidebar click: defer solve to main script (after sidebar ``st.rerun``)."""
+    from investment_ami_context import normalize_insight_question_text
+
     ss[SUBMIT_QUEUE_KEY] = {
-        "question": str(question or "").strip(),
+        "question": normalize_insight_question_text(question),
         "source_page": str(source_page or "").strip(),
         "page_suffix": page_suffix,
         "send_gen": send_gen,

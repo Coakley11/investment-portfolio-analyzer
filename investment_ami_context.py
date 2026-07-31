@@ -342,8 +342,13 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
     if _is_recession_question(q):
         return "macro_recession"
     try:
-        from investment_ami.decision_support.question_topics import is_invested_amount_question
+        from investment_ami.decision_support.question_topics import (
+            is_invested_amount_question,
+            is_monthly_contribution_question,
+        )
 
+        if is_monthly_contribution_question(q):
+            return "allocation_advisor"
         if is_invested_amount_question(q):
             return "allocation_advisor"
     except ImportError:
@@ -391,6 +396,14 @@ def intent_supported(intent: str) -> bool:
 
 def _normalize_question(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def normalize_insight_question_text(text: str) -> str:
+    """Strip repeated ``Question:`` prefixes from stored or pasted insight text."""
+    q = re.sub(r"\s+", " ", str(text or "").strip())
+    while q.lower().startswith("question:"):
+        q = q.split(":", 1)[1].strip()
+    return q
 
 
 def _is_rate_cut_question(q: str) -> bool:

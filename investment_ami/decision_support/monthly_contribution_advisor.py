@@ -108,8 +108,6 @@ def _format_precise_suggested_section(
             "for irregular expenses, changing cash flow, and unexpected costs.",
         ]
     )
-    if reason:
-        lines.extend(["", f"**Additional context:** {reason}"])
     return "\n".join(lines)
 
 

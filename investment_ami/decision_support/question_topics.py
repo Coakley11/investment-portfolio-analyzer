@@ -102,11 +102,30 @@ def is_monthly_contribution_question(question: str) -> bool:
     if "contribute" in q and "month" in q:
         return True
     if "monthly" in q and any(w in q for w in ("contribution", "invest", "investing", "investment")):
-        if "financial situation" in q or "each month" in q or "every month" in q:
-            return True
-        if "expense" not in q:
-            return True
+        return True
     if "investing enough" in q and "invested" not in q:
+        return True
+    monthly_recommendation_phrases = (
+        "what monthly contribution do you recommend",
+        "what monthly contribution would you recommend",
+        "what monthly investing amount makes sense",
+        "what recurring monthly investment would you recommend",
+        "how much should i invest each month",
+        "how much should i contribute every month",
+        "what should my monthly investment be",
+        "based on my finances",
+        "based on my financial information",
+        "given my income and expenses",
+    )
+    if any(p in q for p in monthly_recommendation_phrases):
+        return True
+    if "recommend" in q and "monthly" in q and any(
+        w in q for w in ("contribution", "invest", "investing", "investment")
+    ):
+        return True
+    if ("income" in q or "expenses" in q or "expense" in q) and "monthly" in q and any(
+        w in q for w in ("contribution", "invest", "investing", "investment", "recommend")
+    ):
         return True
     return any(
         p in q

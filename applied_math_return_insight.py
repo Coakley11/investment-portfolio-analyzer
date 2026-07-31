@@ -2538,6 +2538,12 @@ def render_applied_math_insight_panel(
         st.markdown(f"#### {_insight_panel_title(app, data)}")
         q = str(data.get("question") or "").strip()
         if q:
+            try:
+                from investment_ami_context import normalize_insight_question_text
+
+                q = normalize_insight_question_text(q)
+            except ImportError:
+                pass
             st.markdown(f"**Question:** *{q}*")
         if str(source_app or data.get("source_app") or "").strip().lower() == "investment":
             try:

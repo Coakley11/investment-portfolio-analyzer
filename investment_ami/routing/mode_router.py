@@ -406,6 +406,26 @@ def _resolve_analytical_tag(q: str, intent_suggested: str = "") -> tuple[str, st
     return None
 
 
+def _decision_support_priority_intent(q_normalized: str, legacy_intent: str) -> str | None:
+    """Decision-support intents that must not fall through to analytical synthesis."""
+    try:
+        from investment_ami.decision_support.question_topics import (
+            is_invested_amount_question,
+            is_monthly_contribution_question,
+        )
+    except ImportError:
+        if legacy_intent in ("allocation_advisor", "cash_reserve_advisor"):
+            return legacy_intent
+        return None
+    if is_monthly_contribution_question(q_normalized):
+        return "allocation_advisor"
+    if is_invested_amount_question(q_normalized):
+        return "allocation_advisor"
+    if legacy_intent == "cash_reserve_advisor":
+        return "cash_reserve_advisor"
+    return None
+
+
 def _analytical_decision(
     *,
     tag: str,
@@ -462,6 +482,23 @@ def route_investment_response_mode(
 
     matched: list[str] = []
     reasons: list[str] = []
+
+    ds_intent = _decision_support_priority_intent(q, legacy)
+    if ds_intent:
+        matched.append(f"decision_support_priority:{ds_intent}")
+        reasons.append(
+            "Decision-support question (monthly contribution, invested amount, or cash reserve) "
+            f"→ deterministic `{ds_intent}` before analytical synthesis."
+        )
+        return ModeRoutingDecision(
+            response_mode="deterministic",
+            question_tag="",
+            deterministic_intent=ds_intent,
+            legacy_intent_hint=legacy,
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+            intent_classification=intent_dict,
+        )
 
     objective = _match_deterministic_objective(q)
     if objective:
