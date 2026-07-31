@@ -2001,17 +2001,27 @@ try:
         hydrate_applied_math_insight_for_session,
         investment_insight_main_render_needed,
         prepare_insight_card_widget_rerun,
+        render_ami_insight_submit_feedback,
     )
 
     hydrate_applied_math_insight_for_session(st, "investment")
     prepare_insight_card_widget_rerun(st)
 except Exception:
     investment_insight_main_render_needed = None  # type: ignore[misc, assignment]
+    render_ami_insight_submit_feedback = None  # type: ignore[misc, assignment]
 
+_insight_rendered = False
 if investment_insight_main_render_needed and investment_insight_main_render_needed(st.session_state):
-    render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+    _insight_rendered = bool(
+        render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+    )
 elif investment_insight_main_render_needed is None:
-    render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+    _insight_rendered = bool(
+        render_suite_applied_math_insight(st, source_app="investment", source_page=_active_tab)
+    )
+
+if render_ami_insight_submit_feedback:
+    render_ami_insight_submit_feedback(st, insight_rendered=_insight_rendered)
 
 try:
     from investment_persistence_trace import render_ami_insight_lifecycle_runtime_diagnostics

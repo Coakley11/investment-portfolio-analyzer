@@ -69,6 +69,15 @@ _INVESTMENT_TAB_CANONICAL: dict[str, str] = {
     "portfolio analytics": "Portfolio Analytics",
     "④ analyze portfolio": "Portfolio Analytics",
     "analyze portfolio": "Portfolio Analytics",
+    "portfolio inputs": "Portfolio Inputs",
+    "③ build portfolio": "③ Build Portfolio",
+    "build portfolio": "③ Build Portfolio",
+    "overview": "Overview",
+    "② overview": "② Overview",
+    "getting started guide": "Getting Started Guide",
+    "① choose goal": "① Choose Goal",
+    "how much should i invest?": "Portfolio Inputs",
+    "how much to invest": "Portfolio Inputs",
     "efficient frontier": "Efficient Frontier",
     "⑩ frontier (optional)": "Efficient Frontier",
     "frontier (optional)": "Efficient Frontier",
@@ -95,6 +104,12 @@ INSIGHT_ELIGIBLE_PAGES: dict[str, frozenset[str]] = {
         "⑤ Portfolio Health",
         "Portfolio Analytics",
         "④ Analyze Portfolio",
+        "Portfolio Inputs",
+        "Overview",
+        "Getting Started Guide",
+        "③ Build Portfolio",
+        "② Overview",
+        "① Choose Goal",
         "Efficient Frontier",
         "⑩ Frontier (Optional)",
     }),
@@ -661,6 +676,23 @@ def should_render_insight_on_page(source_app: str, current_page: str, insight: d
     )
 
 
+def insight_has_displayable_content(data: dict[str, Any] | None) -> bool:
+    """True when the insight card can show question, conclusion, or structured sections."""
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("conclusion") or "").strip():
+        return True
+    if str(data.get("question") or "").strip():
+        return True
+    sections = data.get("analyst_sections")
+    if isinstance(sections, dict) and sections:
+        return True
+    kn = data.get("key_numbers")
+    if isinstance(kn, dict) and isinstance(kn.get("analyst_sections"), dict):
+        return bool(kn["analyst_sections"])
+    return False
+
+
 def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool:
     """
     Streamlit main-area gate after ``hydrate_applied_math_insight_for_session``.
@@ -671,7 +703,7 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
     ss = session_state
     submit_flag = bool(ss.pop("_ami_submit_render_insight_this_run", None))
     pending = ss.get(SESSION_PENDING_KEY)
-    has_pending = isinstance(pending, dict) and bool(pending.get("conclusion") or pending.get("question"))
+    has_pending = isinstance(pending, dict) and insight_has_displayable_content(pending)
     if submit_flag and has_pending:
         ss.pop("_ami_insight_render_success", None)
         ss["_ami_force_insight_render"] = True
@@ -680,6 +712,20 @@ def investment_insight_main_render_needed(session_state: dict[str, Any]) -> bool
             "investment_insight_main_render_needed",
             needed=True,
             reason="submit_flag",
+        )
+        return True
+    if submit_flag and not has_pending:
+        ss["_ami_insight_submit_status"] = {
+            "state": "error",
+            "message": "AMI finished but no insight was staged. Submit again or check diagnostics.",
+        }
+    if bool(ss.get("_ami_force_insight_render")) and has_pending:
+        ss.pop("_ami_insight_render_success", None)
+        record_ami_insight_lifecycle(
+            ss,
+            "investment_insight_main_render_needed",
+            needed=True,
+            reason="force_insight_render",
         )
         return True
     needed = not bool(ss.get("_ami_insight_render_success"))
@@ -864,6 +910,8 @@ def _pending_insight_valid(st: Any) -> dict[str, Any]:
     if iid and _insight_is_dismissed(st, iid):
         return {}
     if pending.get("conclusion") or pending.get("question"):
+        return pending
+    if insight_has_displayable_content(pending):
         return pending
     return {}
 
@@ -2178,11 +2226,12 @@ def render_applied_math_insight_panel(
 ) -> bool:
     """Display-only insight card on source app pages. Returns True if rendered."""
     data = insight if isinstance(insight, dict) else st.session_state.get(SESSION_PENDING_KEY)
-    if not isinstance(data, dict) or not data.get("conclusion"):
+    if not isinstance(data, dict) or not insight_has_displayable_content(data):
         return False
     app = str(source_app or data.get("source_app") or "").strip().lower()
 
     with st.container(border=True):
+        st.markdown('<div id="applied-investment-insight"></div>', unsafe_allow_html=True)
         st.markdown(f"#### {_insight_panel_title(app, data)}")
         q = str(data.get("question") or "").strip()
         if q:
@@ -2196,7 +2245,7 @@ def render_applied_math_insight_panel(
             except ImportError:
                 pass
         sections, is_decision_support, legacy_stale = _resolve_insight_analyst_sections(data)
-        if legacy_stale:
+        if legacy_stale and not (isinstance(sections, dict) and sections):
             st.info(
                 "This insight was saved in an **older AMI layout**. Submit the question again to refresh "
                 "with the structured Assessment / Facts Used / Information Needed format."
@@ -2279,7 +2328,7 @@ def render_suite_applied_math_insight_for_page(
         source_page=str(source_page or ""),
     )
     insight = st.session_state.get(SESSION_PENDING_KEY)
-    pending_exists = isinstance(insight, dict) and bool(insight.get("conclusion") or insight.get("question"))
+    pending_exists = isinstance(insight, dict) and insight_has_displayable_content(insight)
     cloud_exists = insight_exists_in_cloud(app) if app == "investment" else False
     scope = (
         insight_page_scope_decision(app, source_page, insight)
@@ -2330,10 +2379,10 @@ def render_suite_applied_math_insight_for_page(
                 and cur_page
                 and submit_page == cur_page
                 and isinstance(insight, dict)
-                and insight.get("conclusion")
+                and insight_has_displayable_content(insight)
             )
         )
-        if force_render and isinstance(insight, dict) and insight.get("conclusion"):
+        if force_render and isinstance(insight, dict) and insight_has_displayable_content(insight):
             should_render = True
             skip_reason = ""
         else:
@@ -2414,3 +2463,25 @@ def render_return_to_source_button(
         use_container_width=True,
         help="Restores your page context and shows this conclusion in the source app — display only, no auto-changes.",
     )
+
+
+def render_ami_insight_submit_feedback(st: Any, *, insight_rendered: bool = False) -> None:
+    """Surface AMI submit processing, success, and error states in the main app area."""
+    ss = st.session_state
+    status = ss.get("_ami_insight_submit_status")
+    if not isinstance(status, dict):
+        return
+    state = str(status.get("state") or "").strip().lower()
+    if state == "processing":
+        st.info("AMI is analyzing your question…")
+        return
+    if state == "error":
+        msg = str(status.get("message") or "AMI could not create an insight. Try again.")
+        st.error(msg)
+        ss.pop("_ami_insight_submit_status", None)
+        return
+    if state == "success":
+        if insight_rendered:
+            st.success("Applied Investment Insight is ready below.")
+            ss.pop("_ami_insight_submit_status", None)
+        return

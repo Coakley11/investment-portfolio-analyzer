@@ -1017,7 +1017,9 @@ def render_analyze_with_applied_math_sidebar(
                 except Exception:
                     log.exception("AMI source_state builder failed for %s (%s)", source_app, source_page)
             pre_payload: dict[str, Any] | None = None
+            instant_ok = True
             if is_investment:
+                ss["_ami_insight_submit_status"] = {"state": "processing"}
                 pre_payload = build_question_payload(
                     source_app=source_app,
                     source_page=source_page,
@@ -1027,7 +1029,7 @@ def render_analyze_with_applied_math_sidebar(
                     source_state=submit_source_state,
                 )
                 action_url_pre = build_applied_math_resume_url(pre_payload)
-                _stage_investment_instant_insight(
+                instant_ok = _stage_investment_instant_insight(
                     st,
                     ss,
                     question=q,
@@ -1038,6 +1040,24 @@ def render_analyze_with_applied_math_sidebar(
                     pre_payload=pre_payload,
                     action_url_pre=action_url_pre,
                 )
+                if not instant_ok:
+                    diag = ss.get("_ami_investment_submit_diagnostics") or {}
+                    err = diag.get("solver_error") or diag.get("skip_reason") or "Instant solver did not produce an insight."
+                    ss["_ami_insight_submit_status"] = {
+                        "state": "error",
+                        "message": f"Could not create Applied Investment Insight: {err}",
+                    }
+                else:
+                    ss["_ami_insight_submit_status"] = {
+                        "state": "success",
+                        "insight_id": str((ss.get("_ami_investment_instant_canonical") or {}).get("insight_id") or ""),
+                    }
+                    try:
+                        from investment_persistent_state import notify_pending_insight_change
+
+                        notify_pending_insight_change(st, source="ami_instant_submit")
+                    except ImportError:
+                        pass
                 canonical = ss.get("_ami_investment_instant_canonical")
                 if isinstance(canonical, dict) and canonical.get("insight_id"):
                     submit_ctx = dict(submit_ctx)
@@ -1069,6 +1089,10 @@ def render_analyze_with_applied_math_sidebar(
             ss[f"_ami_send_gen_{source_app}_{page_suffix}"] = send_gen + 1
             if result.get("duplicate"):
                 st.sidebar.info(dup_msg)
+            elif is_investment and not instant_ok:
+                st.sidebar.error(
+                    str((ss.get("_ami_insight_submit_status") or {}).get("message") or "AMI could not create an insight.")
+                )
             else:
                 st.sidebar.success(ok_msg)
             if on_after_send is not None and not result.get("duplicate"):
