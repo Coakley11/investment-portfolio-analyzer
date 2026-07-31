@@ -1279,7 +1279,16 @@ def build_context_from_session(
             ctx["portfolio_preset"] = preset
         pv = session_state.get("sidebar_portfolio_value")
         if pv:
-            ctx["portfolio_value"] = f"${int(float(pv)):,}"
+            try:
+                from planning_portfolio_value import effective_planning_portfolio_value_for_ami
+
+                eff = effective_planning_portfolio_value_for_ami(session_state)
+                display = int(round(eff)) if eff is not None else int(float(pv))
+                ctx["portfolio_value"] = f"${display:,}"
+            except (TypeError, ValueError):
+                ctx["portfolio_value"] = f"${int(float(pv)):,}"
+            except ImportError:
+                ctx["portfolio_value"] = f"${int(float(pv)):,}"
         try:
             from components.macro_engine import macro_assumption_summary
 
@@ -1561,6 +1570,12 @@ def execute_investment_ami_submit_pipeline(
 
     q = str(question or "").strip()
     page = str(source_page or "").strip()
+    try:
+        from planning_portfolio_value import prepare_session_for_investment_ami_submit
+
+        prepare_session_for_investment_ami_submit(ss)
+    except ImportError:
+        pass
     t_route = time.perf_counter()
     _log_stage("ROUTE", ss, page=page)
     submit_ctx = build_submit_context(

@@ -57,7 +57,9 @@ def build_financial_snapshot(context: dict[str, Any] | None, *, question: str) -
     monthly_known = bool(ctx.get("plan_monthly_provided"))
     horizon = _int_or_none(ctx.get("plan_horizon") or ctx.get("horizon_years"))
     risk = str(ctx.get("plan_risk") or ctx.get("risk_tolerance") or "").strip()
-    pv = _float_or_none(ctx.get("sidebar_portfolio_value") or ctx.get("initial_value"))
+    pv = _float_or_none(ctx.get("applied_plan_portfolio_value"))
+    if pv is None:
+        pv = _float_or_none(ctx.get("sidebar_portfolio_value") or ctx.get("initial_value"))
     if pv is None:
         pv = _float_or_none(ctx.get("portfolio_value"))
 

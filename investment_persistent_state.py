@@ -108,6 +108,7 @@ _PERSIST_SCALAR_KEYS = (
     "plan_risk",
     "investment_plan_generated",
     "investment_plan_applied_portfolio_value",
+    "applied_plan_portfolio_value",
     "investment_plan_applied_source",
     "visited_explain",
     "visited_risk",
@@ -165,6 +166,7 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "plan_risk": "Medium",
     "investment_plan_generated": False,
     "investment_plan_applied_portfolio_value": None,
+    "applied_plan_portfolio_value": None,
     "investment_plan_applied_source": None,
     "visited_explain": False,
     "visited_risk": False,
@@ -1360,6 +1362,32 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             merged_at.update(existing)
             st.session_state[key] = merged_at
             continue
+        if key == "sidebar_portfolio_value":
+            try:
+                from planning_portfolio_value import (
+                    get_applied_plan_portfolio_value,
+                    has_explicit_applied_plan_portfolio_value,
+                )
+
+                if has_explicit_applied_plan_portfolio_value(st.session_state):
+                    applied = get_applied_plan_portfolio_value(st.session_state)
+                    if applied is not None:
+                        st.session_state[key] = applied
+                        continue
+            except ImportError:
+                pass
+        if key in (
+            "applied_plan_portfolio_value",
+            "investment_plan_applied_portfolio_value",
+            "investment_plan_applied_source",
+        ):
+            try:
+                from planning_portfolio_value import has_explicit_applied_plan_portfolio_value
+
+                if has_explicit_applied_plan_portfolio_value(st.session_state):
+                    continue
+            except ImportError:
+                pass
         st.session_state[key] = copy.deepcopy(val)
 
     exp = state.get(EXPERIENCE_KEY) or state.get(PERSISTED_EXPERIENCE_KEY)

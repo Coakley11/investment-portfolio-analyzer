@@ -147,9 +147,16 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     pv = session_state.get("sidebar_portfolio_value")
     if pv:
         try:
-            ctx["portfolio_value"] = f"${int(float(pv)):,}"
-        except (TypeError, ValueError):
-            ctx["portfolio_value"] = str(pv)
+            from planning_portfolio_value import effective_planning_portfolio_value_for_ami
+
+            eff = effective_planning_portfolio_value_for_ami(session_state)
+            display_pv = eff if eff is not None else float(pv)
+            ctx["portfolio_value"] = f"${int(float(display_pv)):,}"
+        except ImportError:
+            try:
+                ctx["portfolio_value"] = f"${int(float(pv)):,}"
+            except (TypeError, ValueError):
+                ctx["portfolio_value"] = str(pv)
 
     hr = session_state.get("health_result")
     if hr is not None:
@@ -270,7 +277,17 @@ def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict
         if key in session_state and session_state.get(key) is not None:
             ctx[key] = session_state[key]
     if session_state.get("sidebar_portfolio_value") is not None:
-        ctx["sidebar_portfolio_value"] = session_state["sidebar_portfolio_value"]
+        try:
+            from planning_portfolio_value import effective_planning_portfolio_value_for_ami
+
+            eff = effective_planning_portfolio_value_for_ami(session_state)
+            if eff is not None:
+                ctx["applied_plan_portfolio_value"] = int(round(eff))
+                ctx["sidebar_portfolio_value"] = int(round(eff))
+            else:
+                ctx["sidebar_portfolio_value"] = session_state["sidebar_portfolio_value"]
+        except ImportError:
+            ctx["sidebar_portfolio_value"] = session_state["sidebar_portfolio_value"]
     if session_state.get("investment_plan_generated"):
         ctx["investment_plan_generated"] = True
     if session_state.get(PLAN_MONTHLY_PROVIDED_KEY) is not None:
@@ -525,6 +542,15 @@ def build_source_state(page: str, session_state: dict[str, Any]) -> dict[str, An
 
     for key in _INVESTMENT_SOURCE_GLOBAL_KEYS:
         val = session_state.get(key)
+        if key == "sidebar_portfolio_value":
+            try:
+                from planning_portfolio_value import effective_planning_portfolio_value_for_ami
+
+                eff = effective_planning_portfolio_value_for_ami(session_state)
+                if eff is not None:
+                    val = int(round(eff))
+            except ImportError:
+                pass
         if val is not None and val != "":
             filter_params[key] = val
 
@@ -656,8 +682,22 @@ def apply_source_state_to_session(session_state: dict[str, Any], source_state: d
             session_state[key] = ent[key]
     for k, v in wp.items():
         if v is not None:
+            try:
+                from planning_portfolio_value import should_block_portfolio_value_restore
+
+                if should_block_portfolio_value_restore(session_state, k):
+                    continue
+            except ImportError:
+                pass
             session_state[k] = v
     for k, v in fp.items():
         if v is not None and v != "":
+            try:
+                from planning_portfolio_value import should_block_portfolio_value_restore
+
+                if should_block_portfolio_value_restore(session_state, k):
+                    continue
+            except ImportError:
+                pass
             session_state[k] = v
 

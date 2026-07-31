@@ -280,10 +280,11 @@ border-radius:8px;padding:0.75rem 1rem;margin:0.5rem 0 1rem 0;">
 
 
 def _apply_plan_portfolio_value(amount: float, *, source: str) -> None:
+    from planning_portfolio_value import set_applied_plan_portfolio_value
+
     request_sidebar_portfolio_value(amount, force=True)
     st.session_state.capital_deployed = True
-    st.session_state.investment_plan_applied_portfolio_value = int(round(float(amount)))
-    st.session_state.investment_plan_applied_source = str(source)
+    set_applied_plan_portfolio_value(st.session_state, amount, source=source)
     maybe_autosave_investment_plan(st, source="plan_apply_portfolio_value")
 
 
@@ -830,6 +831,7 @@ def investment_plan_persist_fingerprint(session_state: Any) -> str:
         "investment_plan": plan_dict,
         "plan_compare_amounts_list": normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY)),
         "investment_plan_applied_portfolio_value": session_state.get("investment_plan_applied_portfolio_value"),
+        "applied_plan_portfolio_value": session_state.get("applied_plan_portfolio_value"),
         "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
     }
     raw = json.dumps(blob, sort_keys=True, default=str)
