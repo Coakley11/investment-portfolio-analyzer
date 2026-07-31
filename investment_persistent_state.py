@@ -44,6 +44,7 @@ _AMI_PERSIST_SESSION_KEYS = (
 _MAX_DIAG_LOG_ENTRIES = 8
 
 INVESTMENT_ACTIVE_TAB_KEY = "investment_active_tab"
+INVESTMENT_PLAN_PERSIST_KEY = "investment_plan_persist"
 EXPERIENCE_KEY = "experience"
 # Non-widget copy of mode — survives Streamlit widget init quirks; always in cloud blob.
 PERSISTED_EXPERIENCE_KEY = "_suite_persisted_experience"
@@ -103,7 +104,12 @@ _PERSIST_SCALAR_KEYS = (
     "plan_expenses",
     "plan_monthly",
     "plan_monthly_provided",
+    "plan_horizon",
+    "plan_risk",
     "investment_plan_generated",
+    "investment_plan_applied_portfolio_value",
+    "investment_plan_applied_source",
+    "plan_compare_return",
     "visited_explain",
     "visited_risk",
     "visited_forward",
@@ -156,7 +162,12 @@ PERSIST_FIELD_DEFAULTS: dict[str, Any] = {
     "plan_expenses": 0,
     "plan_monthly": 0,
     "plan_monthly_provided": False,
+    "plan_horizon": 15,
+    "plan_risk": "Medium",
     "investment_plan_generated": False,
+    "investment_plan_applied_portfolio_value": None,
+    "investment_plan_applied_source": None,
+    "plan_compare_return": None,
     "visited_explain": False,
     "visited_risk": False,
     "visited_forward": False,
@@ -647,6 +658,51 @@ def notify_pending_insight_change(
             return
         ss.pop("_ami_insight_autosave_blocked", None)
         autosave_investment_state(st, trigger=source)
+
+
+def notify_investment_plan_change(
+    st: Any,
+    *,
+    source: str = "plan_change",
+    fingerprint: str = "",
+) -> None:
+    """Persist How Much Should I Invest inputs, generated plan, and compare amounts."""
+    ss = st.session_state
+    if not ss.get("_suite_inv_persistence_bootstrapped"):
+        return
+    fp = str(fingerprint or "").strip()
+    if not fp:
+        try:
+            from components.investment_planning import investment_plan_persist_fingerprint
+
+            fp = investment_plan_persist_fingerprint(ss)
+        except ImportError:
+            fp = ""
+    dirty_key = f"_suite_persist_local_dirty::{APP_ID}"
+    ss[dirty_key] = True
+    try:
+        payload = build_investment_disk_state(st)
+    except Exception:
+        payload = {}
+    blocked, block_reason = _autosave_would_clobber_saved_portfolio(
+        st, payload if isinstance(payload, dict) else {}
+    )
+    if blocked:
+        ss["_investment_plan_save_status"] = "error"
+        ss["_investment_plan_save_error"] = (
+            f"Plan not saved ({block_reason}). Your previous saved data was kept."
+        )
+        return
+    ss.pop("_investment_plan_save_error", None)
+    autosave_investment_state(st, trigger=source)
+    last = ss.get("_suite_inv_debug_last_autosave_event") or {}
+    if last.get("outcome") == "written":
+        if fp:
+            ss["_investment_plan_last_persist_fp"] = fp
+        ss["_investment_plan_save_status"] = "saved"
+    elif last.get("cloud_save_error"):
+        ss["_investment_plan_save_status"] = "error"
+        ss["_investment_plan_save_error"] = str(last.get("cloud_save_error"))
 
 
 def _coerce_persisted_analysis_date(val: Any) -> dt.date | None:
@@ -1198,6 +1254,14 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
         val = ss.get(key)
         if val is not None and val != "":
             state[key] = copy.deepcopy(val)
+    try:
+        from components.investment_planning import capture_investment_plan_persist_blob
+
+        plan_blob = capture_investment_plan_persist_blob(ss)
+        if plan_blob:
+            state[INVESTMENT_PLAN_PERSIST_KEY] = plan_blob
+    except ImportError:
+        pass
     _snapshot_mode_debug(st, saved=mode)
     return state
 
@@ -1237,6 +1301,8 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
 
     for key, val in state.items():
         if key in (_LEGACY_TAB_KEY, _WF_BLOB, "holdings_fingerprint", EXPERIENCE_KEY, PERSISTED_EXPERIENCE_KEY):
+            continue
+        if key == INVESTMENT_PLAN_PERSIST_KEY:
             continue
         if key == INVESTMENT_ACTIVE_TAB_KEY and ami_skip_tab:
             st.session_state["_suite_page_overwrite_source"] = "ami_return_deferred_tab"
@@ -1339,6 +1405,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         from components.investment_planning import sanitize_plan_session_integers
 
         sanitize_plan_session_integers(st.session_state, PERSIST_FIELD_DEFAULTS)
+    except ImportError:
+        pass
+
+    try:
+        from components.investment_planning import apply_investment_plan_persist_blob
+
+        apply_investment_plan_persist_blob(st, state.get(INVESTMENT_PLAN_PERSIST_KEY))
     except ImportError:
         pass
 

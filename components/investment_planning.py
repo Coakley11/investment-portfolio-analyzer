@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
+import json
+
 import numpy as np
 import streamlit as st
 
@@ -28,6 +31,9 @@ CURRENT_MONTHLY_INVESTMENT_HELP = (
     "Leave blank if unknown, or enter $0 if you currently make no regular monthly investments."
 )
 PLAN_MONTHLY_PROVIDED_KEY = "plan_monthly_provided"
+PLAN_COMPARE_AMOUNTS_KEY = "plan_compare_amounts_list"
+INVESTMENT_PLAN_PERSIST_SCHEMA = "investment-plan-v1"
+PLAN_RISK_OPTIONS = ("Low", "Medium", "High")
 
 # Dict keys from older callers / fallbacks mapped to InvestmentPlanResult fields.
 _PLAN_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -268,6 +274,7 @@ def _apply_plan_portfolio_value(amount: float, *, source: str) -> None:
     st.session_state.capital_deployed = True
     st.session_state.investment_plan_applied_portfolio_value = int(round(float(amount)))
     st.session_state.investment_plan_applied_source = str(source)
+    maybe_autosave_investment_plan(st, source="plan_apply_portfolio_value")
 
 
 def _render_portfolio_value_buttons(
@@ -318,6 +325,7 @@ def _render_compare_investment_amounts(
     beginner: bool,
 ) -> None:
     list_key = f"{key_prefix}_compare_amounts_list"
+    seed_plan_compare_list_from_canonical(st.session_state, list_key=list_key)
     if list_key not in st.session_state or not isinstance(st.session_state.get(list_key), list):
         st.session_state[list_key] = []
 
@@ -346,18 +354,25 @@ def _render_compare_investment_amounts(
                 st.session_state[list_key] = normalize_compare_amounts(
                     list(st.session_state[list_key]) + [new_amt]
                 )
+                sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
+                maybe_autosave_investment_plan(st, source="plan_compare_add")
                 st.rerun()
     with quick_col:
         st.markdown("**Quick add**")
         if st.button(f"Max investable ({_money(inv)})", key=f"{key_prefix}_compare_add_inv"):
             st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [inv])
+            sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
+            maybe_autosave_investment_plan(st, source="plan_compare_quick")
             st.rerun()
         if st.button(f"Long-term rec. ({_money(lt)})", key=f"{key_prefix}_compare_add_lt"):
             st.session_state[list_key] = normalize_compare_amounts(list(st.session_state[list_key]) + [lt])
+            sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
+            maybe_autosave_investment_plan(st, source="plan_compare_quick")
             st.rerun()
 
     amounts = normalize_compare_amounts(st.session_state.get(list_key))
     st.session_state[list_key] = amounts
+    sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
 
     if not amounts:
         st.info("No comparison amounts yet. Add one above or use a quick-add shortcut.")
@@ -371,10 +386,14 @@ def _render_compare_investment_amounts(
         with row_right:
             if st.button("Remove", key=f"{key_prefix}_compare_rm_{idx}", use_container_width=True):
                 st.session_state[list_key] = [a for i, a in enumerate(amounts) if i != idx]
+                sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
+                maybe_autosave_investment_plan(st, source="plan_compare_remove")
                 st.rerun()
 
     if st.button("Clear all comparison amounts", key=f"{key_prefix}_compare_clear"):
         st.session_state[list_key] = []
+        sync_plan_compare_amounts_to_canonical(st.session_state, list_key=list_key)
+        maybe_autosave_investment_plan(st, source="plan_compare_clear")
         st.rerun()
 
     compare_amounts = normalize_compare_amounts(st.session_state.get(list_key))
@@ -515,14 +534,22 @@ def sanitize_plan_session_integers(session_state: Any, defaults: dict[str, Any] 
         "plan_debt",
         "plan_expenses",
         "plan_monthly",
+        "plan_horizon",
     )
     for key in keys:
         fb = defaults.get(key) if defaults else None
         if fb is None:
             fb = 0 if key != "plan_emergency" else 20_000
+            if key == "plan_horizon":
+                fb = 15
         if key not in session_state:
             continue
         session_state[key] = coerce_plan_integer(session_state.get(key), int(fb))
+    if "plan_risk" in session_state:
+        rv = str(session_state.get("plan_risk") or "Medium").strip()
+        if rv not in PLAN_RISK_OPTIONS:
+            rv = "Medium"
+        session_state["plan_risk"] = rv
 
 
 def _plan_field(raw: Any, field: str, default: float | list[str]) -> Any:
@@ -690,6 +717,120 @@ def _compute_investment_plan_safe(
     return _fallback_investment_plan(**kwargs)
 
 
+def _plan_risk_index(session_state: Any) -> int:
+    val = str(session_state.get("plan_risk") or "Medium").strip()
+    if val not in PLAN_RISK_OPTIONS:
+        val = "Medium"
+    return PLAN_RISK_OPTIONS.index(val)
+
+
+def sync_plan_compare_amounts_to_canonical(session_state: Any, *, list_key: str) -> None:
+    """Keep a prefix-independent compare list for durable persistence."""
+    amounts = normalize_compare_amounts(session_state.get(list_key))
+    session_state[list_key] = amounts
+    session_state[PLAN_COMPARE_AMOUNTS_KEY] = list(amounts)
+
+
+def seed_plan_compare_list_from_canonical(session_state: Any, *, list_key: str) -> None:
+    if list_key in session_state and session_state.get(list_key):
+        sync_plan_compare_amounts_to_canonical(session_state, list_key=list_key)
+        return
+    canon = normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY))
+    if canon:
+        session_state[list_key] = list(canon)
+        session_state[PLAN_COMPARE_AMOUNTS_KEY] = list(canon)
+
+
+def investment_plan_persist_fingerprint(session_state: Any) -> str:
+    """Stable hash of plan inputs + outputs for change-detection autosave."""
+    plan = session_state.get("investment_plan")
+    plan_dict: dict[str, Any] = {}
+    if plan is not None:
+        to_dict = getattr(plan, "to_dict", None)
+        if callable(to_dict):
+            plan_dict = dict(to_dict())
+        elif isinstance(plan, dict):
+            plan_dict = dict(plan)
+    blob = {
+        "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+        "plan_total_cash": session_state.get("plan_total_cash"),
+        "plan_emergency": session_state.get("plan_emergency"),
+        "plan_near_term": session_state.get("plan_near_term"),
+        "plan_debt": session_state.get("plan_debt"),
+        "plan_expenses": session_state.get("plan_expenses"),
+        "plan_monthly": session_state.get("plan_monthly"),
+        "plan_monthly_provided": session_state.get(PLAN_MONTHLY_PROVIDED_KEY),
+        "plan_horizon": session_state.get("plan_horizon"),
+        "plan_risk": session_state.get("plan_risk"),
+        "investment_plan_generated": session_state.get("investment_plan_generated"),
+        "investment_plan": plan_dict,
+        "plan_compare_amounts_list": normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY)),
+        "investment_plan_applied_portfolio_value": session_state.get("investment_plan_applied_portfolio_value"),
+        "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
+        "plan_compare_return": session_state.get("plan_compare_return"),
+    }
+    raw = json.dumps(blob, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def capture_investment_plan_persist_blob(session_state: Any) -> dict[str, Any]:
+    plan = session_state.get("investment_plan")
+    plan_dict: dict[str, Any] | None = None
+    if plan is not None:
+        to_dict = getattr(plan, "to_dict", None)
+        if callable(to_dict):
+            plan_dict = dict(to_dict())
+        elif isinstance(plan, dict):
+            plan_dict = dict(plan)
+    return {
+        "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
+        "investment_plan": plan_dict,
+        "plan_compare_amounts_list": normalize_compare_amounts(session_state.get(PLAN_COMPARE_AMOUNTS_KEY)),
+    }
+
+
+def apply_investment_plan_persist_blob(st: Any, blob: Any) -> None:
+    if not isinstance(blob, dict):
+        return
+    schema = str(blob.get("schema") or "").strip()
+    if schema and schema not in (INVESTMENT_PLAN_PERSIST_SCHEMA, "investment-plan-v0"):
+        return
+    ss = st.session_state
+    amounts = normalize_compare_amounts(blob.get("plan_compare_amounts_list"))
+    if amounts:
+        ss[PLAN_COMPARE_AMOUNTS_KEY] = list(amounts)
+    plan_raw = blob.get("investment_plan")
+    if plan_raw:
+        try:
+            ss["investment_plan"] = _normalize_investment_plan(plan_raw)
+            ss["investment_plan_generated"] = True
+        except Exception:
+            pass
+
+
+def maybe_autosave_investment_plan(st: Any, *, source: str = "plan_change") -> None:
+    """Persist plan blob when meaningful fields change (debounced by fingerprint)."""
+    ss = st.session_state
+    fp = investment_plan_persist_fingerprint(ss)
+    if fp == ss.get("_investment_plan_last_persist_fp"):
+        return
+    try:
+        from investment_persistent_state import notify_investment_plan_change
+
+        notify_investment_plan_change(st, source=source, fingerprint=fp)
+    except ImportError:
+        pass
+
+
+def render_investment_plan_save_status(st: Any) -> None:
+    status = st.session_state.pop("_investment_plan_save_status", None)
+    if status == "saved":
+        st.caption("Changes saved.")
+    elif status == "error":
+        msg = st.session_state.pop("_investment_plan_save_error", "Could not save plan.")
+        st.warning(msg)
+
+
 def render_how_much_to_invest(
     settings: dict,
     tickers: list[str] | None = None,
@@ -706,6 +847,7 @@ def render_how_much_to_invest(
     )
     st.markdown(f"#### {title}")
     st.caption(lead)
+    render_investment_plan_save_status(st)
 
     with st.expander("Adjust your numbers" if beginner else "Inputs", expanded=not beginner):
         c1, c2 = st.columns(2)
@@ -783,17 +925,23 @@ def render_how_much_to_invest(
         with r2:
             risk = st.selectbox(
                 "Risk tolerance",
-                ["Low", "Medium", "High"],
-                index=1,
+                list(PLAN_RISK_OPTIONS),
+                index=_plan_risk_index(st.session_state),
                 key=f"{key_prefix}_plan_risk",
             )
+            st.session_state.plan_risk = str(risk)
 
     st.session_state.plan_total_cash = int(total_cash)
     st.session_state.plan_emergency = int(emergency)
+    st.session_state.plan_near_term = int(near_term)
+    st.session_state.plan_debt = int(debt)
+    st.session_state.plan_expenses = int(expenses)
+    st.session_state.plan_horizon = int(horizon)
 
     generate_label = "Generate investment plan" if beginner else "Generate plan"
     if st.button(generate_label, type="primary", key=f"{key_prefix}_generate_plan"):
         st.session_state.investment_plan_generated = True
+        maybe_autosave_investment_plan(st, source="plan_generate")
     if not st.session_state.get("investment_plan_generated"):
         st.caption("Enter your numbers above, then click **Generate investment plan** to see results.")
         return None
@@ -809,6 +957,7 @@ def render_how_much_to_invest(
         monthly_contribution=current_monthly_investment_for_plan(st.session_state),
     )
     st.session_state.investment_plan = plan
+    maybe_autosave_investment_plan(st, source="plan_compute")
 
     _render_plan_results(
         plan,
@@ -821,4 +970,5 @@ def render_how_much_to_invest(
     )
 
     st.caption(DISCLAIMER)
+    maybe_autosave_investment_plan(st, source="plan_inputs")
     return plan
