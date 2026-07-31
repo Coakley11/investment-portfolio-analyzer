@@ -2344,12 +2344,20 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
     st.markdown("---")
     pv = float(settings["initial_value"])
     if beginner_mode:
-        input_tabs = st.tabs(["💰 How Much to Invest", "💼 Dollar Amounts", "📘 Implementation Guide"])
-        with input_tabs[0]:
+        from components.investment_planning import BEGINNER_PLAN_INPUT_TABS
+
+        chosen_input = st.radio(
+            "Portfolio input section",
+            BEGINNER_PLAN_INPUT_TABS,
+            horizontal=True,
+            key="beginner_plan_input_tab",
+            label_visibility="collapsed",
+        )
+        if chosen_input == BEGINNER_PLAN_INPUT_TABS[0]:
             render_how_much_to_invest(
                 settings, tickers=tickers, weights=weights, key_prefix="invest_plan_beginner"
             )
-        with input_tabs[1]:
+        elif chosen_input == BEGINNER_PLAN_INPUT_TABS[1]:
             from components.ui_helpers import format_money_cents, holding_dollar_from_weight
 
             alloc_preview = st.session_state.holdings_df.copy()
@@ -2360,7 +2368,7 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
             ]
             st.caption(f"Dollar amounts use portfolio value **{_money(pv)}** from the sidebar.")
             st.dataframe(alloc_preview, use_container_width=True, hide_index=True)
-        with input_tabs[2]:
+        else:
             render_implementation_guide(
                 tickers=tickers,
                 weights=weights,
@@ -2396,6 +2404,12 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
             health=st.session_state.get("health_result"),
             key_prefix="inputs_impl_adv",
         )
+    try:
+        from components.ui_helpers import apply_pending_scroll_to_target
+
+        apply_pending_scroll_to_target(st)
+    except ImportError:
+        pass
 
 # ── Explain This Portfolio ─────────────────────────────────────────────────────
 

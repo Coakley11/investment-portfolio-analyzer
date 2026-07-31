@@ -2571,25 +2571,15 @@ def render_applied_math_insight_panel(
         show_details = str(source_app or data.get("source_app") or "").strip().lower() != "investment"
         if is_decision_support and str(source_app or data.get("source_app") or "").strip().lower() == "investment":
             try:
-                from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS
+                from components.investment_planning import request_navigate_to_how_much_plan_inputs
 
-                exp = str(data.get("experience_mode") or "").lower()
-                labels = BEGINNER_TAB_LABELS if "beginner" in exp else ADVANCED_TAB_LABELS
-                plan_tab = labels[2]
                 if st.button(
                     "Go to How Much Should I Invest?",
                     key=f"ami_ds_plan_nav_{str(data.get('insight_id') or 'pending')[:12]}",
                     use_container_width=True,
                 ):
                     commit_applied_investment_insight_after_render(st, data)
-                    st.session_state["_pending_investment_tab"] = plan_tab
-                    st.session_state["investment_active_tab"] = plan_tab
-                    try:
-                        from investment_persistent_state import notify_investment_tab_change
-
-                        notify_investment_tab_change(st, plan_tab, source="ds_plan_nav")
-                    except ImportError:
-                        pass
+                    request_navigate_to_how_much_plan_inputs(st)
                     st.rerun()
             except ImportError:
                 pass

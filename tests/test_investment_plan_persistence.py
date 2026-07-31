@@ -92,6 +92,26 @@ class TestInvestmentPlanPersistence(unittest.TestCase):
         self.assertIsNotNone(restored)
         self.assertAlmostEqual(float(getattr(restored, "long_term_suggested", 0)), float(plan.long_term_suggested))
 
+    def test_plan_cashflow_blob_round_trip(self) -> None:
+        ss = _FakeSessionState(
+            plan_total_cash=50_000,
+            monthly_income=8000,
+            monthly_expenses=4500,
+            job_stability="Stable",
+            plan_employer_match="50% up to 6%",
+            plan_retirement_goal="retire at 62",
+        )
+        blob = capture_investment_plan_persist_blob(ss)
+        self.assertEqual(blob.get("monthly_income"), 8000)
+        self.assertEqual(blob.get("monthly_expenses"), 4500)
+        self.assertEqual(blob.get("job_stability"), "Stable")
+        st = _FakeSt(_FakeSessionState())
+        apply_investment_plan_persist_blob(st, blob)
+        self.assertEqual(st.session_state.get("monthly_income"), 8000)
+        self.assertEqual(st.session_state.get("monthly_expenses"), 4500)
+        self.assertEqual(st.session_state.get("job_stability"), "Stable")
+        self.assertEqual(st.session_state.get("plan_employer_match"), "50% up to 6%")
+
     def test_disk_state_includes_plan_blob(self) -> None:
         ss = _FakeSessionState(plan_total_cash=50_000, plan_horizon=10, plan_risk="Low")
         ss[PLAN_MONTHLY_PROVIDED_KEY] = True

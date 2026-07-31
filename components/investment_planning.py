@@ -11,7 +11,15 @@ import numpy as np
 import streamlit as st
 
 import portfolio_core as core
-from components.ui_helpers import APP_DISCLAIMER, format_money_cents, holding_dollar_from_weight, is_beginner_mode, request_sidebar_portfolio_value
+from components.ui_helpers import (
+    APP_DISCLAIMER,
+    HOW_MUCH_PLAN_SCROLL_ANCHOR,
+    format_money_cents,
+    holding_dollar_from_weight,
+    is_beginner_mode,
+    render_how_much_plan_scroll_anchor,
+    request_sidebar_portfolio_value,
+)
 
 DISCLAIMER = f"Educational estimate only. {APP_DISCLAIMER}"
 
@@ -31,6 +39,20 @@ CURRENT_MONTHLY_INVESTMENT_HELP = (
     "Leave blank if unknown, or enter $0 if you currently make no regular monthly investments."
 )
 PLAN_MONTHLY_PROVIDED_KEY = "plan_monthly_provided"
+HOW_MUCH_PLAN_SCROLL_ANCHOR = "how-much-should-i-invest"
+BEGINNER_PLAN_INPUT_TABS = (
+    "💰 How Much to Invest",
+    "💼 Dollar Amounts",
+    "📘 Implementation Guide",
+)
+JOB_STABILITY_OPTIONS = ("", "Stable", "Moderate", "Uncertain")
+PLAN_CASHFLOW_SESSION_KEYS = (
+    "monthly_income",
+    "monthly_expenses",
+    "job_stability",
+    "plan_employer_match",
+    "plan_retirement_goal",
+)
 PLAN_COMPARE_AMOUNTS_KEY = "plan_compare_amounts_list"
 INVESTMENT_PLAN_PERSIST_SCHEMA = "investment-plan-v1"
 PLAN_RISK_OPTIONS = ("Low", "Medium", "High")
@@ -840,6 +862,8 @@ def investment_plan_persist_fingerprint(session_state: Any) -> str:
         "applied_plan_portfolio_value": session_state.get("applied_plan_portfolio_value"),
         "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
     }
+    for key in PLAN_CASHFLOW_SESSION_KEYS:
+        blob[key] = session_state.get(key)
     raw = json.dumps(blob, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -853,7 +877,7 @@ def capture_investment_plan_persist_blob(session_state: Any) -> dict[str, Any]:
             plan_dict = dict(to_dict())
         elif isinstance(plan, dict):
             plan_dict = dict(plan)
-    return {
+    blob = {
         "schema": INVESTMENT_PLAN_PERSIST_SCHEMA,
         "plan_total_cash": session_state.get("plan_total_cash"),
         "plan_emergency": session_state.get("plan_emergency"),
@@ -871,6 +895,9 @@ def capture_investment_plan_persist_blob(session_state: Any) -> dict[str, Any]:
         "investment_plan_applied_portfolio_value": session_state.get("investment_plan_applied_portfolio_value"),
         "investment_plan_applied_source": session_state.get("investment_plan_applied_source"),
     }
+    for key in PLAN_CASHFLOW_SESSION_KEYS:
+        blob[key] = session_state.get(key)
+    return blob
 
 
 def apply_investment_plan_persist_blob(st: Any, blob: Any) -> None:
@@ -898,6 +925,9 @@ def apply_investment_plan_persist_blob(st: Any, blob: Any) -> None:
             ss[plan_key] = blob[plan_key]
     if PLAN_MONTHLY_PROVIDED_KEY in blob:
         ss[PLAN_MONTHLY_PROVIDED_KEY] = bool(blob.get(PLAN_MONTHLY_PROVIDED_KEY))
+    for key in PLAN_CASHFLOW_SESSION_KEYS:
+        if key in blob and blob.get(key) not in (None, ""):
+            ss[key] = blob[key]
     if blob.get("investment_plan_generated"):
         ss["investment_plan_generated"] = True
     try:
@@ -943,6 +973,109 @@ def render_investment_plan_save_status(st: Any) -> None:
         st.warning(msg)
 
 
+def _portfolio_inputs_tab_label(*, beginner_mode: bool) -> str:
+    from components.beginner_navigation import ADVANCED_TAB_LABELS, BEGINNER_TAB_LABELS
+
+    labels = BEGINNER_TAB_LABELS if beginner_mode else ADVANCED_TAB_LABELS
+    return labels[2]
+
+
+def request_navigate_to_how_much_plan_inputs(st: Any, *, beginner_mode: bool | None = None) -> str:
+    """
+    Schedule navigation to Portfolio Inputs / Build Portfolio and scroll to plan inputs.
+
+    Uses the live experience mode (not insight metadata) so tab labels match the UI.
+    """
+    ss = st.session_state
+    if beginner_mode is None:
+        try:
+            from investment_persistent_state import current_experience_mode
+
+            beginner_mode = "beginner" in str(current_experience_mode(st) or "").lower()
+        except ImportError:
+            exp = str(ss.get("experience") or ss.get("experience_mode") or "").lower()
+            beginner_mode = "beginner" in exp
+    tab = _portfolio_inputs_tab_label(beginner_mode=bool(beginner_mode))
+    ss["_pending_investment_tab"] = tab
+    ss["investment_active_tab"] = tab
+    ss["_pending_scroll_target"] = HOW_MUCH_PLAN_SCROLL_ANCHOR
+    ss["_force_plan_inputs_expanded"] = True
+    if beginner_mode:
+        ss["beginner_plan_input_tab"] = BEGINNER_PLAN_INPUT_TABS[0]
+    try:
+        from investment_persistent_state import notify_investment_tab_change
+
+        notify_investment_tab_change(st, tab, source="how_much_plan_nav")
+    except ImportError:
+        pass
+    return tab
+
+
+def _plan_cashflow_int_or_none(session_state: Any, key: str) -> int | None:
+    raw = session_state.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(round(float(raw)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _render_plan_cashflow_inputs(*, key_prefix: str) -> None:
+    """Monthly surplus inputs used by the Monthly Contribution Advisor."""
+    ss = st.session_state
+    st.markdown("##### Monthly cash flow (for contribution guidance)")
+    st.caption(
+        "These fields power AMI monthly contribution recommendations. They save with your workspace."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        income_default = _plan_cashflow_int_or_none(ss, "monthly_income")
+        income = st.number_input(
+            "Monthly after-tax income ($)",
+            min_value=0,
+            max_value=5_000_000,
+            value=int(income_default) if income_default is not None else 0,
+            step=500,
+            key=f"{key_prefix}_monthly_income",
+        )
+        ss["monthly_income"] = int(income) if income > 0 else None
+        expenses_default = _plan_cashflow_int_or_none(ss, "monthly_expenses")
+        expenses = st.number_input(
+            "Monthly essential expenses ($)",
+            min_value=0,
+            max_value=5_000_000,
+            value=int(expenses_default) if expenses_default is not None else 0,
+            step=250,
+            key=f"{key_prefix}_monthly_expenses",
+        )
+        ss["monthly_expenses"] = int(expenses) if expenses > 0 else None
+    with c2:
+        job_options = list(JOB_STABILITY_OPTIONS)
+        current_job = str(ss.get("job_stability") or "").strip()
+        job_index = job_options.index(current_job) if current_job in job_options else 0
+        job = st.selectbox(
+            "Job stability (optional)",
+            job_options,
+            index=job_index,
+            format_func=lambda x: "Not specified" if not x else x,
+            key=f"{key_prefix}_job_stability",
+        )
+        ss["job_stability"] = str(job or "").strip()
+        ss["plan_employer_match"] = st.text_input(
+            "Employer retirement match (optional)",
+            value=str(ss.get("plan_employer_match") or ""),
+            placeholder="e.g. 50% up to 6% of salary",
+            key=f"{key_prefix}_plan_employer_match",
+        ).strip()
+        ss["plan_retirement_goal"] = st.text_input(
+            "Retirement goal (optional)",
+            value=str(ss.get("plan_retirement_goal") or ""),
+            placeholder="e.g. retire at 60 with $2M",
+            key=f"{key_prefix}_plan_retirement_goal",
+        ).strip()
+
+
 def render_how_much_to_invest(
     settings: dict,
     tickers: list[str] | None = None,
@@ -951,6 +1084,8 @@ def render_how_much_to_invest(
 ) -> core.InvestmentPlanResult | None:
     """Beginner-friendly section: how much cash to keep vs. invest."""
     beginner = is_beginner_mode(settings)
+    render_how_much_plan_scroll_anchor()
+    force_open = bool(st.session_state.pop("_force_plan_inputs_expanded", False))
     title = "How Much Should I Invest?"
     lead = (
         "Simple answers: how much to keep in cash vs. put into your portfolio."
@@ -962,7 +1097,12 @@ def render_how_much_to_invest(
     render_investment_plan_save_status(st)
     seed_plan_widget_keys_from_canonical(st.session_state, key_prefix=key_prefix)
 
-    with st.expander("Adjust your numbers" if beginner else "Inputs", expanded=not beginner):
+    with st.expander(
+        "Adjust your numbers" if beginner else "Inputs",
+        expanded=force_open or not beginner,
+    ):
+        _render_plan_cashflow_inputs(key_prefix=key_prefix)
+        st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
             total_cash = st.number_input(
@@ -1057,6 +1197,7 @@ def render_how_much_to_invest(
         maybe_autosave_investment_plan(st, source="plan_generate")
     if not st.session_state.get("investment_plan_generated"):
         st.caption("Enter your numbers above, then click **Generate investment plan** to see results.")
+        maybe_autosave_investment_plan(st, source="plan_inputs")
         return None
 
     plan = _compute_investment_plan_safe(

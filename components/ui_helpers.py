@@ -86,6 +86,15 @@ TECHNICAL_METRIC_HELP = {
 
 
 PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY = "pending_sidebar_portfolio_value"
+HOW_MUCH_PLAN_SCROLL_ANCHOR = "how-much-should-i-invest"
+
+
+def render_how_much_plan_scroll_anchor() -> None:
+    """Stable scroll target for AMI → How Much plan inputs navigation."""
+    st.markdown(
+        f'<div id="{HOW_MUCH_PLAN_SCROLL_ANCHOR}" style="scroll-margin-top: 5rem;"></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_portfolio_recommendations_anchor() -> None:

@@ -294,6 +294,16 @@ def _merge_investment_plan_into_context(session_state: dict[str, Any], ctx: dict
         ctx["plan_monthly_provided"] = bool(session_state.get(PLAN_MONTHLY_PROVIDED_KEY))
     if session_state.get(PLAN_MONTHLY_PROVIDED_KEY):
         ctx["plan_monthly"] = session_state.get("plan_monthly")
+    for key in (
+        "monthly_income",
+        "monthly_expenses",
+        "job_stability",
+        "plan_employer_match",
+        "plan_retirement_goal",
+    ):
+        val = session_state.get(key)
+        if val is not None and val != "":
+            ctx[key] = val
     plan = session_state.get("investment_plan")
     if plan is not None:
         try:
