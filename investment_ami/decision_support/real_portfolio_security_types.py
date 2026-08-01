@@ -37,7 +37,29 @@ BROAD_MARKET_ETF_TICKERS: frozenset[str] = frozenset(
     }
 )
 BOND_FUND_TICKERS: frozenset[str] = frozenset(
-    {"BND", "AGG", "SCHZ", "TLT", "IEF", "SHY", "BIL", "SGOV", "VCIT", "VCSH"}
+    {
+        "BND",
+        "AGG",
+        "SCHZ",
+        "GOVT",
+        "VGIT",
+        "VGLT",
+        "TLT",
+        "IEF",
+        "SHY",
+        "BIL",
+        "SGOV",
+        "VCIT",
+        "VCSH",
+        "SPTS",
+        "SPTI",
+        "MUB",
+        "LQD",
+        "TIP",
+        "VTIP",
+        "BNDX",
+        "IAGG",
+    }
 )
 NARROW_OR_THEMATIC_ETF_TICKERS: frozenset[str] = frozenset(
     {
@@ -120,7 +142,7 @@ def classify_holding_security(
             category_label=category_label,
             confidence="high" if sym in BROAD_MARKET_ETF_TICKERS else "medium",
         )
-    if sym in BOND_FUND_TICKERS or asset_type_label == "Bonds" or "bond" in cat_lower:
+    if sym in BOND_FUND_TICKERS or engine_class == "Bonds" or asset_type_label == "Bonds" or "bond" in cat_lower:
         return SecurityClassification(
             sym,
             "bond_etf_or_bond_fund",

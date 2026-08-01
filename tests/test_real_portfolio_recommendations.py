@@ -64,6 +64,7 @@ class TestRealPortfolioDrift(unittest.TestCase):
         snap = _snap(txns, {"VOO": 400.0, "BND": 80.0})
         targets = {
             "ETFs": round(snap.allocation_by_asset_class.get("ETFs", 0.0), 1),
+            "Bonds": round(snap.allocation_by_asset_class.get("Bonds", 0.0), 1),
             "Cash": round(snap.allocation_by_asset_class.get("Cash", 0.0) or snap.allocation_by_holding.get("$CASH", 0.0), 1),
             "Stocks": 0.0,
             "Other": 0.0,
@@ -93,7 +94,7 @@ class TestRealPortfolioDrift(unittest.TestCase):
             [_deposit(10_000.0), _buy("VOO", 8, 400.0), _buy("BND", 8, 80.0)],
             {"VOO": 420.0, "BND": 78.0},
         )
-        targets = {"Stocks": 0.0, "ETFs": 50.0, "Cash": 10.0, "Other": 40.0}
+        targets = {"Stocks": 0.0, "ETFs": 50.0, "Cash": 10.0, "Bonds": 40.0}
         drift = analyze_real_portfolio_drift(snap, user_asset_class_targets=targets)
         modest = [o for o in drift.observations if o.severity == "modest"]
         if len(modest) >= 2:
@@ -125,6 +126,7 @@ class TestRealPortfolioRecommendations(unittest.TestCase):
         )
         targets = {
             "ETFs": round(snap.allocation_by_asset_class.get("ETFs", 0.0), 1),
+            "Bonds": round(snap.allocation_by_asset_class.get("Bonds", 0.0), 1),
             "Cash": round(snap.allocation_by_asset_class.get("Cash", 0.0) or snap.allocation_by_holding.get("$CASH", 0.0), 1),
             "Stocks": 0.0,
             "Other": 0.0,
@@ -314,6 +316,7 @@ class TestRealPortfolioRecommendations(unittest.TestCase):
         )
         targets = {
             "ETFs": round(snap.allocation_by_asset_class.get("ETFs", 0.0), 1),
+            "Bonds": round(snap.allocation_by_asset_class.get("Bonds", 0.0), 1),
             "Cash": round(snap.allocation_by_asset_class.get("Cash", 0.0) or snap.allocation_by_holding.get("$CASH", 0.0), 1),
             "Stocks": 0.0,
             "Other": 0.0,

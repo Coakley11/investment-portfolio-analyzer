@@ -37,7 +37,7 @@ TARGET_WEIGHT_SUM_TOLERANCE_PP = 3.0
 COMBINED_MODEST_DRIFT_COUNT = 2
 COMBINED_MODEST_DRIFT_SUM_PP = 8.0
 
-LEDGER_ASSET_CLASSES: frozenset[str] = frozenset({"Stocks", "ETFs", "Cash", "Other"})
+LEDGER_ASSET_CLASSES: frozenset[str] = frozenset({"Stocks", "ETFs", "Bonds", "Cash", "Other"})
 OBJECTIVE_BUCKETS: frozenset[str] = frozenset({"Equity", "Bonds", "Cash_and_TBills"})
 OBJECTIVE_ALIASES: dict[str, str] = {
     "equity": "Equity",
@@ -96,6 +96,7 @@ def _current_ledger_allocation(snapshot: RealPortfolioSnapshot) -> dict[str, flo
     return {
         "Stocks": float(ac.get("Stocks", 0.0)),
         "ETFs": float(ac.get("ETFs", 0.0)),
+        "Bonds": float(ac.get("Bonds", 0.0)),
         "Cash": cash,
         "Other": float(ac.get("Other", 0.0)),
     }
@@ -105,13 +106,19 @@ def _current_objective_allocation(snapshot: RealPortfolioSnapshot) -> dict[str, 
     ledger = _current_ledger_allocation(snapshot)
     return {
         "Equity": ledger["Stocks"] + ledger["ETFs"],
-        "Bonds": ledger["Other"],
+        "Bonds": ledger["Bonds"],
         "Cash_and_TBills": ledger["Cash"],
     }
 
 
 def _normalize_target_keys(raw: dict[str, float]) -> dict[str, float]:
-    canonical_ledger = {"stocks": "Stocks", "etfs": "ETFs", "cash": "Cash", "other": "Other"}
+    canonical_ledger = {
+        "stocks": "Stocks",
+        "etfs": "ETFs",
+        "bonds": "Bonds",
+        "cash": "Cash",
+        "other": "Other",
+    }
     out: dict[str, float] = {}
     for k, v in raw.items():
         key = str(k).strip()
@@ -220,8 +227,7 @@ def _resolve_target(
     if health_objective:
         obj = _objective_targets_from_health(health_objective)
         limitations.append(
-            "Target derived from Portfolio Health objective mapping (OBJECTIVE_ALLOCATIONS); "
-            "ledger Other weight is treated as Bonds for comparison."
+            "Target derived from Portfolio Health objective mapping (OBJECTIVE_ALLOCATIONS)."
         )
         return "inferred_risk_profile_target", obj, "sufficient", tuple(limitations)
 

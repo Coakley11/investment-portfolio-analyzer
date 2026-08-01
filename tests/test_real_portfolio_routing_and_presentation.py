@@ -161,7 +161,8 @@ class TestRealPortfolioPresentation(unittest.TestCase):
         ctx = _ledger_ctx()
         _resp, payload = self._run(ctx, "How is my portfolio doing?")
         md = render_investment_page_insight_markdown(payload["analyst_sections"]).lower()
-        self.assertIn("other / uncategorized", md)
+        self.assertIn("bonds", md)
+        self.assertNotIn("other / uncategorized", md)
         self.assertNotIn("bond allocation is", md)
 
     def test_single_stock_review_not_sell(self) -> None:

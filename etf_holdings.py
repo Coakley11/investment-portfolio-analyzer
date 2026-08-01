@@ -108,6 +108,10 @@ def _latest_price(symbol: str) -> float | None:
 _TICKER_PORTFOLIO_ASSET_TYPE: dict[str, str] = {
     "BND": "Bonds",
     "AGG": "Bonds",
+    "SCHZ": "Bonds",
+    "GOVT": "Bonds",
+    "VGIT": "Bonds",
+    "VGLT": "Bonds",
     "TLT": "Bonds",
     "IEF": "Bonds",
     "LQD": "Bonds",
