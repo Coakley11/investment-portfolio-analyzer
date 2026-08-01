@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from investment_ami.decision_support.models import DecisionSupportResponse
+from investment_ami.decision_support.real_portfolio_single_priority import (
+    build_highest_priority_change_section,
+    build_single_priority_assessment_lead,
+    format_later_step_suggestions,
+    is_single_priority_portfolio_question,
+    market_data_needs_refresh,
+    select_highest_priority_recommendation,
+)
 from investment_ami.decision_support.modules import MODULE_REAL_PORTFOLIO
 from investment_ami.decision_support.real_portfolio_cash_classification import (
     RealPortfolioCashClassification,
@@ -72,6 +80,7 @@ class RealPortfolioPresentation:
     trade_offs: str
     information_needed: str
     confidence: str
+    highest_priority_change: str = ""
     module_label: str = "Real Portfolio Advisor"
     recommendation_codes: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -388,6 +397,48 @@ def build_assessment_text(
     return "Here is a factual read of your transaction-backed portfolio based on available marks and plan context."
 
 
+def _recommendation_suggestion_text(
+    rec: RealPortfolioRecommendation,
+    *,
+    cash_class: RealPortfolioCashClassification,
+    drift: RealPortfolioDriftAnalysis,
+) -> str:
+    text = _RECOMMENDATION_COPY.get(rec.code, rec.title)
+    if rec.code == "preserve_liquidity":
+        shortfall = rec.evidence.get("protected_shortfall")
+        if shortfall is not None and float(shortfall) > 0:
+            target = cash_class.protected_cash_target
+            text = (
+                f"Your current portfolio cash is about {_money(float(shortfall))} below the combined "
+                "emergency and near-term reserve target entered in your plan. Until that gap is addressed, "
+                "increasing new investment contributions may reduce liquidity below your stated target.\n\n"
+                f"Before increasing long-term investments, consider bringing protected cash closer to the "
+                f"{_money(target)} target. Once those reserves are adequately funded, future contributions "
+                "could be directed gradually toward underweight equity and bond sleeves rather than selling "
+                "current holdings."
+            )
+    if rec.code == "rebalance_with_new_money":
+        if rec.evidence.get("conditional_only"):
+            target = _inferred_target_summary(drift)
+            text = (
+                f"Your marked portfolio differs substantially from the inferred {target} target, mainly because "
+                f"{_pct(cash_class.portfolio_cash_weight_pct)} is currently cash. However, part or all of that "
+                "cash may be reserved for emergencies and near-term needs. Clarify which portion is investable "
+                "before treating the full cash balance as allocation drift."
+            )
+        elif cash_class.reserves_fully_funded:
+            text = (
+                "Direct future contributions or excess cash toward underweight equity and bond sleeves "
+                "rather than selling current holdings."
+            )
+    if rec.code == "review_material_single_security" and rec.evidence.get("ticker"):
+        text = (
+            f"Review whether the size of **{rec.evidence['ticker']}** still matches the role you intended "
+            "for it (review — not a sell instruction)."
+        )
+    return text
+
+
 def build_real_portfolio_presentation(
     *,
     question: str,
@@ -449,43 +500,43 @@ def build_real_portfolio_presentation(
     perf_block = _format_contributors(performance)
     alloc_block = _allocation_concentration_block(snapshot, concentration, drift)
 
-    sug_lines: list[str] = []
-    for rec in recommendations.recommendations:
-        text = _RECOMMENDATION_COPY.get(rec.code, rec.title)
-        if rec.code == "preserve_liquidity":
-            shortfall = rec.evidence.get("protected_shortfall")
-            if shortfall is not None and float(shortfall) > 0:
-                target = cash_class.protected_cash_target
-                text = (
-                    f"Your current portfolio cash is about {_money(float(shortfall))} below the combined "
-                    "emergency and near-term reserve target entered in your plan. Until that gap is addressed, "
-                    "increasing new investment contributions may reduce liquidity below your stated target.\n\n"
-                    f"Before increasing long-term investments, consider bringing protected cash closer to the "
-                    f"{_money(target)} target. Once those reserves are adequately funded, future contributions "
-                    "could be directed gradually toward underweight equity and bond sleeves rather than selling "
-                    "current holdings."
-                )
-        if rec.code == "rebalance_with_new_money":
-            if rec.evidence.get("conditional_only"):
-                target = _inferred_target_summary(drift)
-                text = (
-                    f"Your marked portfolio differs substantially from the inferred {target} target, mainly because "
-                    f"{_pct(cash_class.portfolio_cash_weight_pct)} is currently cash. However, part or all of that "
-                    "cash may be reserved for emergencies and near-term needs. Clarify which portion is investable "
-                    "before treating the full cash balance as allocation drift."
-                )
-            elif cash_class.reserves_fully_funded:
-                text = (
-                    "Direct future contributions or excess cash toward underweight equity and bond sleeves "
-                    "rather than selling current holdings."
-                )
-        if rec.code == "review_material_single_security" and rec.evidence.get("ticker"):
-            text = (
-                f"Review whether the size of **{rec.evidence['ticker']}** still matches the role you intended "
-                "for it (review — not a sell instruction)."
+    single_mode = is_single_priority_portfolio_question(question)
+    primary = (
+        select_highest_priority_recommendation(recommendations, snapshot) if single_mode else None
+    )
+    highest_block = ""
+    if single_mode and primary:
+        highest_block = build_highest_priority_change_section(
+            primary,
+            snapshot=snapshot,
+            performance=performance,
+            drift=drift,
+            cash_class=cash_class,
+            recommendations=recommendations,
+        )
+        assessment = build_single_priority_assessment_lead(
+            primary,
+            performance=performance,
+            cash_class=cash_class,
+            drift=drift,
+        )
+        suggestions = format_later_step_suggestions(
+            recommendations,
+            primary,
+            snapshot,
+            suggestion_text_for=lambda rec: _recommendation_suggestion_text(
+                rec, cash_class=cash_class, drift=drift
+            ),
+        )
+    else:
+        sug_lines: list[str] = []
+        for rec in recommendations.recommendations:
+            if rec.code == "refresh_market_data" and not market_data_needs_refresh(snapshot):
+                continue
+            sug_lines.append(
+                f"- {_recommendation_suggestion_text(rec, cash_class=cash_class, drift=drift)}"
             )
-        sug_lines.append(f"- {text}")
-    suggestions = "\n".join(sug_lines)
+        suggestions = "\n".join(sug_lines)
 
     trade_offs = "\n".join(f"- {t}" for t in recommendations.tradeoffs)
 
@@ -535,10 +586,13 @@ def build_real_portfolio_presentation(
         trade_offs=trade_offs,
         information_needed=information_needed,
         confidence=conf_body,
+        highest_priority_change=highest_block,
         recommendation_codes=tuple(r.code for r in recommendations.recommendations),
         metadata={
             "metric_label": METRIC_LABEL_UNREALIZED,
             "metric_tooltip_unrealized": METRIC_TOOLTIP_UNREALIZED,
+            "single_priority_mode": single_mode,
+            "highest_priority_code": primary.code if primary else None,
             "cash_classification": {
                 "portfolio_cash": cash_class.portfolio_cash,
                 "protected_cash_target": cash_class.protected_cash_target,
@@ -621,6 +675,7 @@ def render_real_portfolio_analyst_sections(
         "ami_module_name": presentation.module_label,
         "question_text": q_clean,
         "direct_answer": presentation.assessment,
+        "highest_priority_change": presentation.highest_priority_change,
         "portfolio_snapshot": presentation.portfolio_snapshot,
         "performance_drivers": presentation.performance_drivers,
         "allocation_concentration": presentation.allocation_concentration,

@@ -196,6 +196,7 @@ _BEGINNER_INVESTMENT_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
 
 REAL_PORTFOLIO_PAGE_SECTION_ORDER: tuple[tuple[str, str], ...] = (
     ("direct_answer", "Assessment"),
+    ("highest_priority_change", "Highest-Priority Change"),
     ("portfolio_snapshot", "Portfolio Snapshot"),
     ("performance_drivers", "What Is Driving Performance"),
     ("allocation_concentration", "Allocation and Concentration"),

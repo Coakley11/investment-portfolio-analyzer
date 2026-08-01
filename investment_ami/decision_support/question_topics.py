@@ -170,6 +170,14 @@ def _is_my_portfolio_improvement_question(q: str) -> bool:
     return any(p in q for p in scoped)
 
 
+def is_single_priority_portfolio_question(question: str) -> bool:
+    from investment_ami.decision_support.real_portfolio_single_priority import (
+        is_single_priority_portfolio_question as _single,
+    )
+
+    return _single(question)
+
+
 def is_real_portfolio_question(question: str) -> bool:
     """Transaction-backed portfolio review — not monthly contribution or macro-only prompts."""
     q = str(question or "").strip().lower()
@@ -183,6 +191,15 @@ def is_real_portfolio_question(question: str) -> bool:
         return False
     if _is_my_portfolio_improvement_question(q):
         return True
+    try:
+        from investment_ami.decision_support.real_portfolio_single_priority import (
+            is_single_priority_portfolio_question as _single_priority,
+        )
+
+        if _single_priority(q):
+            return True
+    except ImportError:
+        pass
     analytical_markers = (
         "argue against",
         "critique",

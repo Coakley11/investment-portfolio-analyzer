@@ -134,7 +134,7 @@ def evaluate_recommendation_rules(
     """Evaluate all applicable rules; does not mutate inputs."""
     rules: list[RecommendationRuleResult] = []
 
-    if snapshot.unpriced_holdings_count > 0 or "missing_prices" in snapshot.data_quality_flags:
+    if snapshot.unpriced_holdings_count > 0:
         rules.append(
             RecommendationRuleResult(
                 code="refresh_market_data",
@@ -146,7 +146,18 @@ def evaluate_recommendation_rules(
         )
 
     age = snapshot.market_data_age_seconds
-    if snapshot.market_data_status == "cached" and age is not None and age > STALE_QUOTE_AGE_SECONDS:
+    status = str(snapshot.market_data_status or "")
+    if status in ("partial", "unavailable") and snapshot.unpriced_holdings_count > 0:
+        rules.append(
+            RecommendationRuleResult(
+                code="refresh_market_data",
+                priority=11,
+                action_type="refresh_market_data",
+                rationale_code="partial_prices",
+                evidence={"market_data_status": status},
+            )
+        )
+    if status == "cached" and age is not None and age > STALE_QUOTE_AGE_SECONDS:
         rules.append(
             RecommendationRuleResult(
                 code="refresh_market_data",
