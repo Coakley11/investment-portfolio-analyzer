@@ -162,9 +162,9 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
     _render_cash_accounting_summary(transactions)
 
     st.markdown("#### Allocation")
-    a1, a2, a3, a4 = st.columns(4)
+    a1, a2, a3, a4, a5 = st.columns(5)
     buckets = summary.allocation_by_bucket
-    for col, key in zip([a1, a2, a3, a4], ["Stocks", "ETFs", "Cash", "Other"]):
+    for col, key in zip([a1, a2, a3, a4, a5], ["Stocks", "ETFs", "Bonds", "Cash", "Other"]):
         with col:
             st.metric(f"{key} %", f"{buckets.get(key, 0.0):.1f}%")
 
@@ -353,7 +353,11 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
         return
 
     df = pe.transactions_display_dataframe(transactions)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        pe.style_transaction_history_dataframe(df),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     _render_cash_accounting_summary(transactions)
 

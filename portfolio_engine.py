@@ -55,6 +55,57 @@ def format_currency(value: float, *, decimals: int = 2) -> str:
     return f"{sign}${abs(amount):,.{decimals}f}"
 
 
+def format_transaction_flow_amount(
+    action: TransactionAction,
+    amount: float,
+) -> tuple[str, Literal["in", "out"]]:
+    """
+    Presentation-only signed cash flow label for transaction history.
+
+    Does not affect ledger math — use raw ``quantity`` / ``execution_price`` for calculations.
+    """
+    magnitude = abs(_safe_float(amount))
+    money = format_currency(magnitude)
+    if action in ("buy", "cash_withdrawal"):
+        return f"↓ −{money}", "out"
+    if action in ("sell", "cash_deposit"):
+        return f"↑ +{money}", "in"
+    return money, "in"
+
+
+# Readable on Streamlit light and dark dataframe backgrounds.
+_TXN_FLOW_IN_COLOR = "#22c55e"
+_TXN_FLOW_OUT_COLOR = "#f87171"
+
+
+def style_transaction_history_dataframe(df: pd.DataFrame) -> Any:
+    """Color Total / Amount cells green (inflow) or red (outflow)."""
+    if df.empty:
+        return df.style
+
+    in_css = f"color: {_TXN_FLOW_IN_COLOR}; font-weight: 600;"
+    out_css = f"color: {_TXN_FLOW_OUT_COLOR}; font-weight: 600;"
+    _OUT_ACTIONS = frozenset({"Buy", "Cash Withdrawal"})
+    _IN_ACTIONS = frozenset({"Sell", "Cash Deposit"})
+
+    def _row_style(row: pd.Series) -> list[str]:
+        action = str(row.get("Action", ""))
+        flow_css = ""
+        if action in _OUT_ACTIONS:
+            flow_css = out_css
+        elif action in _IN_ACTIONS:
+            flow_css = in_css
+        styles: list[str] = []
+        for col in row.index:
+            if col in ("Total", "Amount") and flow_css:
+                styles.append(flow_css)
+            else:
+                styles.append("")
+        return styles
+
+    return df.style.apply(_row_style, axis=1)
+
+
 def format_shares(value: float) -> str:
     """Human-readable share count — whole numbers without decimals when exact."""
     shares = _safe_float(value)
@@ -192,12 +243,35 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _bond_fund_tickers() -> frozenset[str]:
+    try:
+        from investment_ami.decision_support.real_portfolio_security_types import BOND_FUND_TICKERS
+
+        return BOND_FUND_TICKERS
+    except ImportError:
+        return frozenset({"BND", "AGG", "SCHZ", "GOVT", "VGIT", "TLT", "IEF", "SHY"})
+
+
+def is_bond_fund_ticker(ticker: str) -> bool:
+    """True for bond ETFs/funds (canonical Real Portfolio bond sleeve)."""
+    sym = str(ticker or "").strip().upper()
+    if not sym or sym in ("CASH", "$CASH"):
+        return False
+    if sym in _bond_fund_tickers():
+        return True
+    info = eh.infer_portfolio_fund_info(sym)
+    asset_type = str(info.get("asset_type") or "").lower()
+    return "bond" in asset_type
+
+
 def normalize_asset_type(raw: str | None, ticker: str = "") -> AssetType:
     """Map editor / fund metadata labels to portfolio engine asset types."""
     sym = str(ticker or "").strip().upper()
     label = str(raw or "").strip().lower()
     if sym in ("CASH", "$CASH") or label in ("cash", "t-bills", "t bills"):
         return "cash"
+    if is_bond_fund_ticker(sym):
+        return "bond"
     if "bond" in label:
         return "bond"
     if label in ("dividend etf", "reit") or sym in _KNOWN_ETF_TICKERS:
@@ -220,7 +294,7 @@ def allocation_bucket(asset_type: AssetType) -> str:
     mapping = {
         "stock": "Stocks",
         "etf": "ETFs",
-        "bond": "Other",
+        "bond": "Bonds",
         "cash": "Cash",
         "other": "Other",
     }
@@ -536,17 +610,19 @@ def transactions_display_dataframe(transactions: list[PortfolioTransaction]) -> 
         action_label = t.action.replace("_", " ").title()
         if t.action in ("cash_deposit", "cash_withdrawal"):
             amount = t.quantity if t.quantity > 0 else t.execution_price
+            flow_label, _flow = format_transaction_flow_amount(t.action, amount)
             rows.append(
                 {
                     "Date": t.date,
                     "Action": action_label,
                     "Ticker": "—",
-                    "Amount": format_currency(amount),
+                    "Amount": flow_label,
                     "Notes": t.notes or "",
                 }
             )
         else:
             total = t.quantity * t.execution_price
+            flow_label, _flow = format_transaction_flow_amount(t.action, total)
             rows.append(
                 {
                     "Date": t.date,
@@ -554,7 +630,7 @@ def transactions_display_dataframe(transactions: list[PortfolioTransaction]) -> 
                     "Ticker": t.ticker,
                     "Shares": format_shares(t.quantity),
                     "Price/Share": format_currency(t.execution_price),
-                    "Total": format_currency(total),
+                    "Total": flow_label,
                     "Notes": t.notes or "",
                 }
             )
@@ -573,7 +649,13 @@ def compute_portfolio_summary(
     total_gain = sum(p.gain_loss_dollar for p in positions)
     total_gain_pct = (total_gain / invested * 100.0) if invested > 0 else 0.0
 
-    bucket_totals: dict[str, float] = {"Stocks": 0.0, "ETFs": 0.0, "Cash": 0.0, "Other": 0.0}
+    bucket_totals: dict[str, float] = {
+        "Stocks": 0.0,
+        "ETFs": 0.0,
+        "Bonds": 0.0,
+        "Cash": 0.0,
+        "Other": 0.0,
+    }
     for p in positions:
         bucket = allocation_bucket(p.asset_type)
         bucket_totals[bucket] = bucket_totals.get(bucket, 0.0) + p.market_value

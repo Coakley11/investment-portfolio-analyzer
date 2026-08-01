@@ -152,11 +152,70 @@ def test_cash_transaction_display_omits_share_price():
     cash_row = df.iloc[1]
     assert "Price" not in df.columns
     assert "Amount" in df.columns
-    assert cash_row["Amount"] == "$50,000.00"
+    assert cash_row["Amount"] == "↑ +$50,000.00"
     assert cash_row["Ticker"] == "—"
     sec_row = df.iloc[0]
     assert sec_row["Price/Share"] == "$688.11"
     assert sec_row["Shares"] == "10 shares"
+    assert sec_row["Total"] == "↓ −$6,881.10"
+
+
+def test_transaction_flow_amount_signs():
+    buy_label, buy_dir = pe.format_transaction_flow_amount("buy", 5000.0)
+    assert buy_dir == "out"
+    assert buy_label == "↓ −$5,000.00"
+    sell_label, sell_dir = pe.format_transaction_flow_amount("sell", 1350.0)
+    assert sell_dir == "in"
+    assert sell_label == "↑ +$1,350.00"
+    dep_label, dep_dir = pe.format_transaction_flow_amount("cash_deposit", 100.0)
+    assert dep_dir == "in"
+    assert dep_label.startswith("↑ +")
+    wd_label, wd_dir = pe.format_transaction_flow_amount("cash_withdrawal", 100.0)
+    assert wd_dir == "out"
+    assert wd_label.startswith("↓ −")
+
+
+def test_bnd_classifies_as_bonds_not_other():
+    assert pe.allocation_bucket(pe.normalize_asset_type("etf", "BND")) == "Bonds"
+    assert pe.allocation_bucket(pe.normalize_asset_type("", "BND")) == "Bonds"
+    assert pe.is_bond_fund_ticker("BND")
+    for sym in ("AGG", "SCHZ", "GOVT", "VGIT"):
+        assert pe.allocation_bucket(pe.normalize_asset_type("stock", sym)) == "Bonds"
+
+
+def test_bnd_allocation_bucket_in_summary():
+    txns = [
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="cash_deposit",
+            date="2024-01-01",
+            ticker="",
+            quantity=10_000.0,
+            execution_price=1.0,
+        ),
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="buy",
+            date="2024-01-02",
+            ticker="BND",
+            quantity=10.0,
+            execution_price=80.0,
+            asset_type="bond",
+        ),
+        pe.PortfolioTransaction(
+            id=pe._new_id(),
+            action="buy",
+            date="2024-01-03",
+            ticker="VOO",
+            quantity=5.0,
+            execution_price=400.0,
+            asset_type="etf",
+        ),
+    ]
+    prices = {"BND": 80.0, "VOO": 400.0}
+    summary = pe.compute_portfolio_summary(txns, prices=prices)
+    assert summary.allocation_by_bucket["Bonds"] > 0
+    assert summary.allocation_by_bucket["Other"] == 0.0
 
 
 def test_portfolio_summary_allocation_buckets():
