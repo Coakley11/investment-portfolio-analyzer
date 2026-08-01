@@ -8,6 +8,18 @@ from typing import Any, Literal
 from investment_ami.decision_support.real_portfolio_models import RealHoldingSnapshot, RealPortfolioSnapshot
 
 METRIC_LABEL_UNREALIZED = "Unrealized gain or loss since purchase (cost basis)"
+METRIC_TOOLTIP_UNREALIZED = (
+    "Market value minus remaining recorded purchase cost for open positions; not today's return."
+)
+
+
+def unrealized_gain_loss_phrase(dollars: float) -> str:
+    """Short snapshot label without repeating the full metric definition."""
+    if dollars > 0:
+        return "Unrealized gain since purchase"
+    if dollars < 0:
+        return "Unrealized loss since purchase"
+    return "Unrealized change since purchase"
 
 PerformanceStatus = Literal[
     "positive_unrealized_gain",

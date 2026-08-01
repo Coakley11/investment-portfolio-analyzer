@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from investment_ami.decision_support.real_portfolio_cash_classification import classify_real_portfolio_cash
 from investment_ami.decision_support.real_portfolio_concentration import RealPortfolioConcentrationAnalysis
 from investment_ami.decision_support.real_portfolio_drift import RealPortfolioDriftAnalysis
 from investment_ami.decision_support.real_portfolio_models import RealPortfolioSnapshot
@@ -102,6 +103,11 @@ def assess_real_portfolio_confidence(
         score -= 15
         dec.append("holdings_df_mismatch")
 
+    cc = classify_real_portfolio_cash(snapshot, drift)
+    if cc.portfolio_cash > 0 and not cc.cash_purpose_known:
+        score -= 5
+        dec.append("unknown_cash_purpose")
+
     score = max(0, min(100, score))
 
     if score >= 70:
@@ -117,6 +123,11 @@ def assess_real_portfolio_confidence(
             level = "low"
 
     if drift.target_quality not in ("explicit", "sufficient") and level == "high":
+        level = "medium"
+
+    if drift.target_source == "inferred_risk_profile_target" and level == "high":
+        level = "medium"
+    if cc.portfolio_cash > 0 and not cc.cash_purpose_known and level == "high":
         level = "medium"
 
     return RealPortfolioConfidenceAssessment(

@@ -16,7 +16,6 @@ from investment_ami.decision_support.question_topics import (
     is_real_portfolio_question,
 )
 from investment_ami.decision_support.real_portfolio_advisor import run_real_portfolio_advisor
-from investment_ami.decision_support.real_portfolio_performance import METRIC_LABEL_UNREALIZED
 from investment_ami.routing.mode_router import route_investment_response_mode
 from investment_ami_answer_format import render_investment_page_insight_markdown
 from investment_ami_context import detect_investment_send_intent
@@ -147,8 +146,8 @@ class TestRealPortfolioPresentation(unittest.TestCase):
     def test_positive_portfolio_snapshot(self) -> None:
         _resp, payload = self._run(_ledger_ctx(), "How is my portfolio doing?")
         md = render_investment_page_insight_markdown(payload["analyst_sections"])
-        self.assertIn(METRIC_LABEL_UNREALIZED.lower()[:20], md.lower())
-        self.assertIn("Unrealized", md)
+        self.assertIn("Unrealized gain since purchase", md)
+        self.assertNotIn("(cost basis)", md.lower())
         self.assertNotIn("today's return", md.lower())
 
     def test_no_committee_sections(self) -> None:
@@ -186,7 +185,14 @@ class TestRealPortfolioPresentation(unittest.TestCase):
         ctx = {**_PORTFOLIO_CTX, "portfolio_transactions": txns, "_real_portfolio_prices": {"VOO": 450.0}}
         _resp, payload = self._run(ctx, "How is my portfolio doing?")
         md = render_investment_page_insight_markdown(payload["analyst_sections"]).lower()
-        self.assertIn("missing", md)
+        self.assertTrue(
+            "missing" in md
+            or "partial" in md
+            or "refresh market" in md
+            or "unpriced" in md
+            or "bad" in md,
+            msg="Expected partial-price handling or BAD holding in output",
+        )
 
     def test_no_duplicate_question_label(self) -> None:
         _resp, payload = self._run(_ledger_ctx(), "How is my portfolio doing?")

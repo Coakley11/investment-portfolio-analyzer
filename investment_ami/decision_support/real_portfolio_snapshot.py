@@ -433,6 +433,7 @@ def build_real_portfolio_snapshot(
     for key, label in (
         ("plan_emergency", "emergency"),
         ("plan_debt", "debt"),
+        ("plan_expenses", "plan_expenses"),
     ):
         try:
             val = plan_ctx.get(key)

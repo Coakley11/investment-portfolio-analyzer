@@ -276,14 +276,14 @@ class TestRealPortfolioRecommendations(unittest.TestCase):
         _, _, _, recs = _pipeline(snap)
         self.assertIn("review_negative_cash", {r.code for r in recs.recommendations})
 
-    def test_near_term_preserves_liquidity(self) -> None:
+    def test_near_term_preserves_liquidity_on_shortfall(self) -> None:
         snap = _snap(
-            [_deposit(50_000.0), _buy("VOO", 10, 400.0), _buy("BND", 10, 80.0)],
-            {"VOO": 400.0, "BND": 80.0},
-            plan_near_term=40_000.0,
-            plan_emergency=5_000.0,
+            [_deposit(16_500.0), _buy("VTI", 5, 200.0), _buy("BND", 5, 80.0)],
+            {"VTI": 250.0, "BND": 82.0},
+            plan_near_term=12_345.0,
+            plan_emergency=7_654.0,
         )
-        targets = {"Equity": 40.0, "Bonds": 40.0, "Cash_and_TBills": 20.0}
+        targets = {"Equity": 60.0, "Bonds": 30.0, "Cash_and_TBills": 10.0}
         perf = analyze_real_portfolio_performance(snap)
         conc = analyze_real_portfolio_concentration(snap)
         drift = analyze_real_portfolio_drift(snap, user_asset_class_targets=targets)
@@ -292,8 +292,12 @@ class TestRealPortfolioRecommendations(unittest.TestCase):
         )
         codes = [r.code for r in recs.recommendations]
         self.assertIn("preserve_liquidity", codes)
+        self.assertNotIn("reduce_contribution_temporarily", codes)
         if "direct_new_contributions_underweight" in codes:
-            self.assertGreater(codes.index("preserve_liquidity"), codes.index("preserve_liquidity"))
+            self.assertLess(
+                codes.index("preserve_liquidity"),
+                codes.index("direct_new_contributions_underweight"),
+            )
 
     def test_no_contribution_no_dollar_invention(self) -> None:
         snap = _snap([_deposit(20_000.0), _buy("BND", 20, 80.0)], {"BND": 80.0})

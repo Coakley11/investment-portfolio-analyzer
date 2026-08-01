@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from investment_ami.decision_support.real_portfolio_cash_classification import classify_real_portfolio_cash
 from investment_ami.decision_support.real_portfolio_confidence import assess_real_portfolio_confidence
 from investment_ami.decision_support.real_portfolio_concentration import RealPortfolioConcentrationAnalysis
 from investment_ami.decision_support.real_portfolio_drift import (
@@ -21,8 +22,7 @@ from investment_ami.decision_support.real_portfolio_recommendations import (
 from investment_ami.decision_support.real_portfolio_security_types import SecurityKind
 
 STALE_QUOTE_AGE_SECONDS = 90
-NEAR_TERM_LIQUIDITY_RATIO = 0.15
-WEAK_RESERVE_THRESHOLD = 10_000.0
+HIGH_PORTFOLIO_CASH_WEIGHT_PCT = 15.0
 
 
 def _rule_to_rec(rule: RecommendationRuleResult) -> RealPortfolioRecommendation:
@@ -55,19 +55,25 @@ def _rule_to_rec(rule: RecommendationRuleResult) -> RealPortfolioRecommendation:
     )
 
 
-def _liquidity_pressure(snapshot: RealPortfolioSnapshot) -> tuple[bool, dict[str, Any]]:
-    near = float(snapshot.near_term_needs or 0.0)
-    reserves = snapshot.reserves or {}
-    emergency = float(reserves.get("emergency", 0.0))
-    tmv = max(snapshot.total_market_value, 1.0)
+def _liquidity_pressure(
+    snapshot: RealPortfolioSnapshot,
+    drift: RealPortfolioDriftAnalysis | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Reserve shortfall only — high portfolio cash weight alone is not liquidity pressure."""
+    cc = classify_real_portfolio_cash(snapshot, drift)
     evidence: dict[str, Any] = {
-        "near_term_needs": near,
-        "emergency_reserve": emergency,
-        "total_market_value": snapshot.total_market_value,
+        "portfolio_cash": cc.portfolio_cash,
+        "protected_cash_target": cc.protected_cash_target,
+        "protected_shortfall": cc.protected_shortfall,
+        "investable_cash": cc.investable_cash,
+        "reserves_fully_funded": cc.reserves_fully_funded,
+        "cash_purpose_known": cc.cash_purpose_known,
+        "portfolio_cash_weight_pct": cc.portfolio_cash_weight_pct,
+        "target_portfolio_cash_allocation_pct": cc.target_portfolio_cash_allocation_pct,
+        "near_term_needs": float(snapshot.near_term_needs or 0.0),
+        "emergency_reserve": float((snapshot.reserves or {}).get("emergency", 0.0)),
     }
-    strong_near_term = near >= NEAR_TERM_LIQUIDITY_RATIO * tmv and near > 0
-    weak_reserves = emergency < WEAK_RESERVE_THRESHOLD and near > 0
-    pressured = strong_near_term or weak_reserves
+    pressured = cc.cash_purpose_known and cc.protected_shortfall > 0
     evidence["liquidity_pressured"] = pressured
     return pressured, evidence
 
@@ -184,27 +190,17 @@ def evaluate_recommendation_rules(
             )
         )
 
-    liquidity_pressured, liq_evidence = _liquidity_pressure(snapshot)
+    liquidity_pressured, liq_evidence = _liquidity_pressure(snapshot, drift)
     if liquidity_pressured:
         rules.append(
             RecommendationRuleResult(
                 code="preserve_liquidity",
                 priority=25,
                 action_type="preserve_liquidity",
-                rationale_code="near_term_or_reserve_pressure",
+                rationale_code="protected_cash_shortfall",
                 evidence=liq_evidence,
             )
         )
-        if snapshot.monthly_contribution is not None and snapshot.monthly_contribution > 0:
-            rules.append(
-                RecommendationRuleResult(
-                    code="reduce_contribution_temporarily",
-                    priority=26,
-                    action_type="reduce_contribution_temporarily",
-                    rationale_code="liquidity_over_contribution",
-                    evidence=liq_evidence,
-                )
-            )
 
     for obs in concentration.observations:
         if obs.code == "material_single_security_weight":
@@ -235,6 +231,12 @@ def evaluate_recommendation_rules(
                     evidence={"ticker": obs.ticker, "weight": obs.value},
                 )
             )
+
+    cash_class = classify_real_portfolio_cash(snapshot, drift)
+    high_cash_drift_ambiguity = (
+        cash_class.portfolio_cash_weight_pct >= HIGH_PORTFOLIO_CASH_WEIGHT_PCT
+        and (not cash_class.cash_purpose_known or not cash_class.reserves_fully_funded)
+    )
 
     if drift.rebalance_triggered and drift.largest_overweight:
         ow = drift.largest_overweight
@@ -270,16 +272,33 @@ def evaluate_recommendation_rules(
                     caution_flags=("seek_tax_guidance_before_sale",),
                 )
             )
-        rules.append(
-            RecommendationRuleResult(
-                code="rebalance_with_new_money",
-                priority=45,
-                action_type="rebalance_with_new_money",
-                rationale_code="material_drift_prefer_contributions",
-                evidence={"rebalance_triggered": True},
-                caution_flags=("seek_tax_guidance_before_sale",),
+        if cash_class.reserves_fully_funded and not high_cash_drift_ambiguity:
+            rules.append(
+                RecommendationRuleResult(
+                    code="rebalance_with_new_money",
+                    priority=45,
+                    action_type="rebalance_with_new_money",
+                    rationale_code="material_drift_prefer_contributions",
+                    evidence={"rebalance_triggered": True, "reserves_fully_funded": True},
+                    caution_flags=("seek_tax_guidance_before_sale",),
+                )
             )
-        )
+        elif high_cash_drift_ambiguity or drift.target_source == "inferred_risk_profile_target":
+            rules.append(
+                RecommendationRuleResult(
+                    code="rebalance_with_new_money",
+                    priority=46,
+                    action_type="rebalance_with_new_money",
+                    rationale_code="conditional_drift_pending_cash_classification",
+                    evidence={
+                        "rebalance_triggered": True,
+                        "inferred_target": drift.target_source == "inferred_risk_profile_target",
+                        "high_cash_weight_pct": cash_class.portfolio_cash_weight_pct,
+                        "conditional_only": True,
+                    },
+                    caution_flags=("do_not_treat_all_cash_as_drift",),
+                )
+            )
 
     placement = _contribution_placement(drift, snapshot, liquidity_pressured=liquidity_pressured)
     if ask_contribution_placement or placement.get("available"):
@@ -413,6 +432,7 @@ def build_real_portfolio_recommendations(
             "Increasing cash improves liquidity but reduces market exposure until needs are funded."
         )
 
+    cash_class = classify_real_portfolio_cash(snapshot, drift)
     information_needed: list[str] = []
     if drift.target_source == "unavailable":
         information_needed.append("explicit_target_allocation")
@@ -422,6 +442,15 @@ def build_real_portfolio_recommendations(
         information_needed.append("updated_market_prices")
     if any(h.total_cost_basis <= 0 for h in snapshot.holdings):
         information_needed.append("missing_cost_basis")
+    if cash_class.portfolio_cash > 0 and not cash_class.cash_purpose_known:
+        information_needed.append("protected_vs_investable_cash")
+    elif (
+        cash_class.portfolio_cash > 0
+        and drift.rebalance_triggered
+        and cash_class.portfolio_cash_weight_pct >= HIGH_PORTFOLIO_CASH_WEIGHT_PCT
+        and not cash_class.reserves_fully_funded
+    ):
+        information_needed.append("protected_vs_investable_cash")
 
     supporting: list[str] = []
     if performance.total_gain_loss_dollars is not None:
@@ -453,7 +482,7 @@ def build_real_portfolio_recommendations(
     placement = _contribution_placement(
         drift,
         snapshot,
-        liquidity_pressured=_liquidity_pressure(snapshot)[0],
+        liquidity_pressured=_liquidity_pressure(snapshot, drift)[0],
     )
 
     return RealPortfolioRecommendationSet(
