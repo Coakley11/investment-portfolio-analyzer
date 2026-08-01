@@ -27,11 +27,11 @@ class TestIntentClassifier(unittest.TestCase):
         self.assertEqual(mode.deterministic_intent, "sector_exposure")
 
     def test_why_question_prefers_synthesis(self) -> None:
-        q = "Why is my portfolio so concentrated in US large cap, and what trade-offs am I accepting?"
+        q = "Why would a recession affect global equity markets differently than bonds?"
         intent = classify_routing_intent(
             q,
             q_normalized=q.lower(),
-            legacy_intent_hint="portfolio_risk",
+            legacy_intent_hint="macro_recession",
             has_portfolio_context=True,
         )
         self.assertTrue(intent.prefer_synthesis)

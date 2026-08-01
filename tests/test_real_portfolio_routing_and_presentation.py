@@ -77,6 +77,30 @@ class TestRealPortfolioRouting(unittest.TestCase):
         self.assertEqual(mode.response_mode, "deterministic")
         self.assertEqual(mode.deterministic_intent, MODULE_REAL_PORTFOLIO)
 
+    def test_portfolio_improvement_paraphrases_route_real_portfolio(self) -> None:
+        questions = (
+            "If you could change only one thing about my portfolio, what would it be and why?",
+            "What is the biggest weakness in my portfolio?",
+            "What is the biggest improvement I could make?",
+            "What should I improve first?",
+            "What's the most important change I should make?",
+            "If you were managing my portfolio, what would you change?",
+            "What's the biggest problem with my portfolio?",
+        )
+        for q in questions:
+            with self.subTest(q=q):
+                self.assertTrue(
+                    is_real_portfolio_question(q),
+                    msg=f"expected real portfolio intent for: {q!r}",
+                )
+                self.assertEqual(
+                    detect_investment_send_intent(q, ""),
+                    MODULE_REAL_PORTFOLIO,
+                )
+                mode = route_investment_response_mode(q, _PORTFOLIO_CTX)
+                self.assertEqual(mode.response_mode, "deterministic", msg=q)
+                self.assertEqual(mode.deterministic_intent, MODULE_REAL_PORTFOLIO, msg=q)
+
     def test_actual_portfolio_performing(self) -> None:
         q = "How is my actual portfolio performing?"
         self.assertEqual(detect_investment_send_intent(q, ""), MODULE_REAL_PORTFOLIO)
@@ -136,6 +160,23 @@ class TestRealPortfolioPresentation(unittest.TestCase):
             build = build_real_portfolio_snapshot(ctx, prices=prices)
             assert build.ok
         return run_real_portfolio_advisor(ctx, question=question)
+
+    def test_one_thing_change_not_synthesis(self) -> None:
+        q = "If you could change only one thing about my portfolio, what would it be and why?"
+        _resp, payload = self._run(_ledger_ctx(), q)
+        md = render_investment_page_insight_markdown(payload["analyst_sections"]).lower()
+        for bad in (
+            "investment committee",
+            "executive summary",
+            "cio",
+            "growth pm",
+            "devil's advocate",
+            "devils advocate",
+        ):
+            self.assertNotIn(bad, md)
+        self.assertNotIn("vxus", md)
+        self.assertNotIn("vnq", md)
+        self.assertEqual(payload["computed"].get("ami_engine_id"), MODULE_REAL_PORTFOLIO)
 
     def test_no_ledger_guidance(self) -> None:
         _resp, payload = self._run(_PORTFOLIO_CTX, "How is my portfolio doing?")

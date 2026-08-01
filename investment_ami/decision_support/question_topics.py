@@ -116,6 +116,60 @@ _REAL_PORTFOLIO_PHRASES: tuple[str, ...] = (
 )
 
 
+_MY_PORTFOLIO_SCOPE: tuple[str, ...] = (
+    "my portfolio",
+    "my current portfolio",
+    "my actual portfolio",
+    "my real portfolio",
+    "my holdings",
+)
+
+_REAL_PORTFOLIO_IMPROVEMENT_PHRASES: tuple[str, ...] = (
+    "if you could change only one thing about my portfolio",
+    "change only one thing about my portfolio",
+    "only one thing about my portfolio",
+    "what is the biggest weakness in my portfolio",
+    "what's the biggest weakness in my portfolio",
+    "biggest weakness in my portfolio",
+    "what is the biggest improvement i could make",
+    "what's the biggest improvement i could make",
+    "what should i improve first",
+    "what's the most important change i should make",
+    "what is the most important change i should make",
+    "most important change i should make",
+    "if you were managing my portfolio",
+    "what's the biggest problem with my portfolio",
+    "what is the biggest problem with my portfolio",
+    "biggest problem with my portfolio",
+    "what would you change about my portfolio",
+    "what would you change in my portfolio",
+    "what would you change with my portfolio",
+)
+
+
+def _is_my_portfolio_improvement_question(q: str) -> bool:
+    """Single-change / priority improvement prompts about the user's actual portfolio."""
+    if any(p in q for p in _REAL_PORTFOLIO_IMPROVEMENT_PHRASES):
+        return True
+    if not any(s in q for s in _MY_PORTFOLIO_SCOPE) and "portfolio" not in q:
+        return False
+    scoped = (
+        "change only one thing",
+        "only one thing",
+        "biggest weakness",
+        "biggest improvement",
+        "improve first",
+        "most important change",
+        "managing my portfolio",
+        "biggest problem",
+        "what would you change",
+        "highest-impact",
+        "highest impact",
+        "one thing you would change",
+    )
+    return any(p in q for p in scoped)
+
+
 def is_real_portfolio_question(question: str) -> bool:
     """Transaction-backed portfolio review — not monthly contribution or macro-only prompts."""
     q = str(question or "").strip().lower()
@@ -127,6 +181,8 @@ def is_real_portfolio_question(question: str) -> bool:
         return False
     if is_cash_reserve_question(q):
         return False
+    if _is_my_portfolio_improvement_question(q):
+        return True
     analytical_markers = (
         "argue against",
         "critique",
@@ -137,10 +193,6 @@ def is_real_portfolio_question(question: str) -> bool:
         "primary drivers",
         "each environment",
         "analyze how",
-        "why ",
-        "why would",
-        "improve my portfolio",
-        "how would you improve",
         "institutional",
         "endowment",
         "financial crisis",
