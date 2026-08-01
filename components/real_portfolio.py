@@ -37,6 +37,16 @@ def get_portfolio_transactions() -> list[pe.PortfolioTransaction]:
 
 def set_portfolio_transactions(transactions: list[pe.PortfolioTransaction]) -> None:
     _ss()[SESSION_TRANSACTIONS_KEY] = pe.transactions_to_records(transactions)
+    _ss()["_real_portfolio_ledger_touched"] = True
+
+
+def _persist_portfolio_ledger_change(*, trigger: str = "portfolio_transactions_change") -> tuple[bool, str]:
+    try:
+        from investment_persistent_state import persist_portfolio_transactions_after_change
+
+        return persist_portfolio_transactions_after_change(st, trigger=trigger)
+    except ImportError:
+        return False, "Persistence unavailable."
 
 
 def _persist_new_transaction(
@@ -44,14 +54,11 @@ def _persist_new_transaction(
     txn: pe.PortfolioTransaction,
 ) -> None:
     set_portfolio_transactions(transactions + [txn])
-    try:
-        from investment_persistent_state import autosave_investment_state
-
-        st.session_state[f"_suite_persist_local_dirty::investment"] = True
-        autosave_investment_state(st, trigger="portfolio_transactions_change")
-    except ImportError:
-        pass
-    st.success("Transaction added.")
+    ok, msg = _persist_portfolio_ledger_change()
+    if ok:
+        st.success(msg)
+    else:
+        st.error(msg)
     st.rerun()
 
 
@@ -357,13 +364,11 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
         txn_id = options.get(pick)
         if txn_id:
             set_portfolio_transactions([t for t in transactions if t.id != txn_id])
-            try:
-                from investment_persistent_state import autosave_investment_state
-
-                st.session_state[f"_suite_persist_local_dirty::investment"] = True
-                autosave_investment_state(st, trigger="portfolio_transactions_change")
-            except ImportError:
-                pass
+            ok, msg = _persist_portfolio_ledger_change()
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
             st.rerun()
 
 

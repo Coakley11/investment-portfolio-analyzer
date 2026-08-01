@@ -22,7 +22,7 @@ Legend: **Y** = durable, **Partial** = some keys only, **N** = session-only / at
 | AMI dismissals | Y | Y | Y | `_ami_dismissed_*` |
 | Scenario params (AMI) | Partial | Partial | Y | On insight payload / session refresh paths |
 | Monte Carlo / health results | N | N | Y | Recomputed on demand; not primary persist target |
-| Transient UI flags | N | N | — | e.g. `_ami_force_insight_render`, loading flags (intentionally not persisted) |
+| **Real Portfolio transaction ledger** | Y | Y | Y | `portfolio_transactions` + `real_portfolio_ledger` (schema v1); positions/cost basis recomputed on hydrate |
 | Selected subtabs / filters | Partial | Partial | Y | Some overview subtab keys persisted; ephemeral chart toggles not all persisted |
 
 ## How Much Should I Invest — behavior

@@ -17,6 +17,15 @@ from suite_user_persistence import (
 
 APP_ID = "investment"
 
+# Real Portfolio transaction ledger — durable cloud/local blob (canonical source).
+PORTFOLIO_TRANSACTIONS_KEY = "portfolio_transactions"
+REAL_PORTFOLIO_LEDGER_META_KEY = "real_portfolio_ledger"
+REAL_PORTFOLIO_LEDGER_SCHEMA_VERSION = 1
+REAL_PORTFOLIO_LEDGER_TOUCHED_KEY = "_real_portfolio_ledger_touched"
+REAL_PORTFOLIO_LEDGER_RESTORED_FLAG = "_suite_real_portfolio_ledger_restored"
+REAL_PORTFOLIO_SAVE_STATUS_KEY = "_real_portfolio_save_status"
+REAL_PORTFOLIO_SAVE_ERROR_KEY = "_real_portfolio_save_error"
+
 # Bump when changing persistence diagnostics UI (visible in-app to confirm deploy).
 PERSISTENCE_DEBUG_BUILD_ID = "2026-06-03-production-cleanup-v1"
 
@@ -630,9 +639,92 @@ def notify_portfolio_change(
     return True
 
 
-def _autosave_would_clobber_saved_portfolio(st: Any, state: dict[str, Any]) -> tuple[bool, str]:
+def _ledger_txn_list(state: dict[str, Any]) -> list[Any] | None:
+    txns = state.get(PORTFOLIO_TRANSACTIONS_KEY)
+    return txns if isinstance(txns, list) else None
+
+
+def _state_has_real_portfolio_ledger_blob(state: dict[str, Any]) -> bool:
+    if isinstance(state.get(REAL_PORTFOLIO_LEDGER_META_KEY), dict):
+        return True
+    txns = _ledger_txn_list(state)
+    return txns is not None
+
+
+def _session_has_real_portfolio_ledger(ss: Any) -> bool:
+    if ss.get(REAL_PORTFOLIO_LEDGER_TOUCHED_KEY) or ss.get(REAL_PORTFOLIO_LEDGER_RESTORED_FLAG):
+        return True
+    if isinstance(ss.get(REAL_PORTFOLIO_LEDGER_META_KEY), dict):
+        return True
+    txns = ss.get(PORTFOLIO_TRANSACTIONS_KEY)
+    if isinstance(txns, list) and txns:
+        return True
+    if isinstance(txns, list) and ss.get(REAL_PORTFOLIO_LEDGER_RESTORED_FLAG):
+        return True
+    return False
+
+
+def _build_real_portfolio_ledger_meta(ss: Any, txn_records: list[Any]) -> dict[str, Any]:
+    import_meta = ss.get("real_portfolio_import_meta")
+    meta: dict[str, Any] = {
+        "schema_version": REAL_PORTFOLIO_LEDGER_SCHEMA_VERSION,
+        "updated_at": _utc_now_iso(),
+        "transaction_count": len(txn_records),
+    }
+    if isinstance(import_meta, dict) and import_meta:
+        meta["import_meta"] = copy.deepcopy(import_meta)
+    return meta
+
+
+def _migrate_real_portfolio_ledger_blob(state: dict[str, Any]) -> dict[str, Any]:
+    txns = _ledger_txn_list(state)
+    if txns is None:
+        return state
+    meta = state.get(REAL_PORTFOLIO_LEDGER_META_KEY)
+    if not isinstance(meta, dict):
+        state[REAL_PORTFOLIO_LEDGER_META_KEY] = {
+            "schema_version": REAL_PORTFOLIO_LEDGER_SCHEMA_VERSION,
+            "updated_at": _utc_now_iso(),
+            "transaction_count": len(txns),
+            "migrated_from": "legacy_txn_list_only",
+        }
+        return state
+    if meta.get("schema_version") is None:
+        meta["schema_version"] = REAL_PORTFOLIO_LEDGER_SCHEMA_VERSION
+    if "transaction_count" not in meta:
+        meta["transaction_count"] = len(txns)
+    return state
+
+
+def _should_persist_real_portfolio_ledger(ss: Any) -> bool:
+    if ss.get(REAL_PORTFOLIO_LEDGER_TOUCHED_KEY):
+        return True
+    if ss.get(REAL_PORTFOLIO_LEDGER_RESTORED_FLAG):
+        return True
+    return isinstance(ss.get(PORTFOLIO_TRANSACTIONS_KEY), list)
+
+
+def _mark_real_portfolio_ledger_restored(st: Any, txn_records: list[Any]) -> None:
+    ss = st.session_state
+    ss[REAL_PORTFOLIO_LEDGER_RESTORED_FLAG] = True
+    ss[REAL_PORTFOLIO_LEDGER_TOUCHED_KEY] = True
+    ss[PORTFOLIO_TRANSACTIONS_KEY] = copy.deepcopy(txn_records)
+
+
+def _autosave_would_clobber_saved_portfolio(
+    st: Any,
+    state: dict[str, Any],
+    *,
+    trigger: str = "",
+) -> tuple[bool, str]:
     """Block writes that would replace a saved cloud portfolio with empty/default holdings."""
+    if trigger in ("portfolio_transactions_change", "portfolio_transactions_import"):
+        return False, ""
+    if _state_has_real_portfolio_ledger_blob(state):
+        return False, ""
     cloud_state, _ = _cloud_has_saved_portfolio()
+    if isinstance(cloud_state, dict) and _state_has_real_portfolio_ledger_blob(cloud_state):
+        return False, ""
     if not isinstance(cloud_state, dict) or not cloud_state:
         return False, ""
     cloud_records = _holdings_records_from_blob(cloud_state.get("holdings_df"))
@@ -724,6 +816,76 @@ def notify_investment_plan_change(
     elif last.get("cloud_save_error"):
         ss["_investment_plan_save_status"] = "error"
         ss["_investment_plan_save_error"] = str(last.get("cloud_save_error"))
+
+
+def persist_portfolio_transactions_after_change(
+    st: Any,
+    *,
+    trigger: str = "portfolio_transactions_change",
+) -> tuple[bool, str]:
+    """
+    Durable save for Real Portfolio ledger edits.
+
+    Returns (success, user_message). On failure the in-session ledger is kept; cloud/disk prior copy is not destroyed.
+    """
+    ss = st.session_state
+    ss[f"_suite_persist_local_dirty::{APP_ID}"] = True
+    ss[REAL_PORTFOLIO_LEDGER_TOUCHED_KEY] = True
+    ss.pop(REAL_PORTFOLIO_SAVE_ERROR_KEY, None)
+    autosave_investment_state(st, trigger=trigger)
+    last = ss.get("_suite_inv_debug_last_autosave_event") or {}
+    outcome = str(last.get("outcome") or "")
+    if outcome == "saved":
+        ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "saved"
+        return True, "Changes saved."
+    if outcome == "skipped_fp_unchanged":
+        ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "saved"
+        return True, "Changes saved."
+    if outcome == "skipped_cloud_portfolio_clobber_guard":
+        reason = str(last.get("skip_reason") or "blocked")
+        msg = f"Changes not saved ({reason}). Your previous saved ledger was kept."
+        ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "error"
+        ss[REAL_PORTFOLIO_SAVE_ERROR_KEY] = msg
+        return False, msg
+    if outcome == "save_failed":
+        err = str(last.get("cloud_save_error") or "save failed")
+        msg = f"Changes not saved ({err}). Your ledger is still in this session; previous saved copy was kept."
+        ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "error"
+        ss[REAL_PORTFOLIO_SAVE_ERROR_KEY] = msg
+        return False, msg
+    if outcome == "exception":
+        err = str(last.get("error") or "unknown error")
+        msg = f"Changes not saved ({err}). Your ledger is still in this session."
+        ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "error"
+        ss[REAL_PORTFOLIO_SAVE_ERROR_KEY] = msg
+        return False, msg
+    msg = f"Changes not saved ({outcome or 'unknown'})."
+    ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "error"
+    ss[REAL_PORTFOLIO_SAVE_ERROR_KEY] = msg
+    return False, msg
+
+
+def clear_investment_session_for_auth_boundary(session_state: dict[str, Any]) -> None:
+    """Drop in-memory investment data so the next account can hydrate its own workspace ledger."""
+    for key in (
+        PORTFOLIO_TRANSACTIONS_KEY,
+        REAL_PORTFOLIO_LEDGER_META_KEY,
+        REAL_PORTFOLIO_LEDGER_TOUCHED_KEY,
+        REAL_PORTFOLIO_LEDGER_RESTORED_FLAG,
+        REAL_PORTFOLIO_SAVE_STATUS_KEY,
+        REAL_PORTFOLIO_SAVE_ERROR_KEY,
+        "real_portfolio_import_meta",
+        "holdings_df",
+        "health_summary",
+    ):
+        session_state.pop(key, None)
+    session_state.pop("_suite_inv_persistence_bootstrapped", None)
+    session_state.pop(f"_suite_disk_state_restored::{APP_ID}", None)
+    session_state.pop(f"_suite_applied_cloud_ts::{APP_ID}", None)
+    session_state.pop(f"_suite_autosave_fp::{APP_ID}", None)
+    session_state.pop(f"_suite_persist_local_dirty::{APP_ID}", None)
+    session_state.pop("default_holdings_applied", None)
+    session_state.pop("default_holdings_apply_reason", None)
 
 
 def _coerce_persisted_analysis_date(val: Any) -> dt.date | None:
@@ -839,6 +1001,13 @@ def _finalize_holdings_restore(st: Any, state: dict[str, Any]) -> None:
 
     ss = st.session_state
     if isinstance(ss.get("holdings_df"), pd.DataFrame):
+        return
+
+    if _state_has_real_portfolio_ledger_blob(state):
+        ss["holdings_df"] = pd.DataFrame()
+        ss["default_holdings_applied"] = False
+        ss.pop("default_holdings_apply_reason", None)
+        ss.pop("_suite_inv_holdings_restore_issue", None)
         return
 
     blob_fp = str(state.get("holdings_fingerprint") or "").strip()
@@ -977,6 +1146,8 @@ def finalize_init_holdings_defaults(st: Any) -> None:
     ss = st.session_state
     if ss.get("_suite_inv_holdings_from_saved_blob") or ss.get("portfolio_built"):
         return
+    if _session_has_real_portfolio_ledger(ss):
+        return
     df = ss.get("holdings_df")
     if isinstance(df, pd.DataFrame) and not df.empty:
         return
@@ -1041,7 +1212,7 @@ def _normalize_restored_state(state: dict[str, Any]) -> dict[str, Any]:
     if exp in EXPERIENCE_OPTIONS:
         out[EXPERIENCE_KEY] = exp
         out[PERSISTED_EXPERIENCE_KEY] = exp
-    return out
+    return _migrate_real_portfolio_ledger_blob(out)
 
 
 def investment_cloud_resync_needed(
@@ -1109,6 +1280,21 @@ def investment_cloud_resync_needed(
             ):
                 reasons.append("workflow_state")
     except ImportError:
+        pass
+
+    try:
+        import json
+
+        cloud_txns = _ledger_txn_list(cloud)
+        if cloud_txns is not None:
+            live_txns = st.session_state.get(PORTFOLIO_TRANSACTIONS_KEY)
+            if not isinstance(live_txns, list):
+                live_txns = []
+            if json.dumps(cloud_txns, sort_keys=True, default=str) != json.dumps(
+                live_txns, sort_keys=True, default=str
+            ):
+                reasons.append(PORTFOLIO_TRANSACTIONS_KEY)
+    except Exception:
         pass
 
     detail = ",".join(reasons)
@@ -1269,9 +1455,12 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
                     state["holdings_fingerprint"] = fp
         except Exception:
             pass
-    txn_records = ss.get("portfolio_transactions")
-    if isinstance(txn_records, list) and txn_records:
-        state["portfolio_transactions"] = copy.deepcopy(txn_records)
+    txn_records = ss.get(PORTFOLIO_TRANSACTIONS_KEY)
+    if _should_persist_real_portfolio_ledger(ss):
+        if not isinstance(txn_records, list):
+            txn_records = []
+        state[PORTFOLIO_TRANSACTIONS_KEY] = copy.deepcopy(txn_records)
+        state[REAL_PORTFOLIO_LEDGER_META_KEY] = _build_real_portfolio_ledger_meta(ss, txn_records)
     summary = ss.get("health_summary")
     if isinstance(summary, dict):
         state["health_summary"] = copy.deepcopy(summary)
@@ -1346,9 +1535,13 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
             if records:
                 _apply_holdings_df_records(st, records, source="restore_blob")
             continue
-        if key == "portfolio_transactions":
+        if key == PORTFOLIO_TRANSACTIONS_KEY:
             if isinstance(val, list):
-                st.session_state["portfolio_transactions"] = copy.deepcopy(val)
+                _mark_real_portfolio_ledger_restored(st, val)
+            continue
+        if key == REAL_PORTFOLIO_LEDGER_META_KEY:
+            if isinstance(val, dict):
+                st.session_state[REAL_PORTFOLIO_LEDGER_META_KEY] = copy.deepcopy(val)
             continue
         if key in ("analysis_start_date", "analysis_end_date"):
             coerced = _coerce_persisted_analysis_date(val)
@@ -1736,6 +1929,8 @@ _CLOUD_READBACK_TRIGGERS = frozenset(
         "portfolio_change",
         "insight_hydrate",
         "insight_store",
+        "portfolio_transactions_change",
+        "portfolio_transactions_import",
     }
 )
 
@@ -1794,7 +1989,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
     state: dict[str, Any] | None = None
     try:
         state = build_investment_disk_state(st)
-        blocked, block_reason = _autosave_would_clobber_saved_portfolio(st, state)
+        blocked, block_reason = _autosave_would_clobber_saved_portfolio(st, state, trigger=trigger)
         if blocked:
             event = {
                 "at": _utc_now_iso(),
@@ -1807,6 +2002,11 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             ss["_ami_insight_autosave_blocked"] = block_reason
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
             ss["_suite_inv_debug_last_autosave_event"] = event
+            if trigger in ("portfolio_transactions_change", "portfolio_transactions_import"):
+                ss[REAL_PORTFOLIO_SAVE_STATUS_KEY] = "error"
+                ss[REAL_PORTFOLIO_SAVE_ERROR_KEY] = (
+                    f"Changes not saved ({block_reason}). Your previous saved ledger was kept."
+                )
             return
         event["blob_experience"] = state.get(EXPERIENCE_KEY)
         event["blob_persisted"] = state.get(PERSISTED_EXPERIENCE_KEY)
@@ -1818,6 +2018,12 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
         event["blob_holdings_fingerprint"] = state.get("holdings_fingerprint")
         event["payload_holdings_row_count"] = len(holdings_records)
         event["cloud_blob_has_holdings_df"] = bool(holdings_records)
+        ledger_txns = state.get(PORTFOLIO_TRANSACTIONS_KEY)
+        if isinstance(ledger_txns, list):
+            event["payload_portfolio_transactions_count"] = len(ledger_txns)
+            event["payload_real_portfolio_ledger_schema"] = (
+                (state.get(REAL_PORTFOLIO_LEDGER_META_KEY) or {}).get("schema_version")
+            )
         try:
             from suite_workspace import workspace_persistence_meta
 
@@ -1842,6 +2048,8 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             "portfolio_change",
             "insight_hydrate",
             "insight_store",
+            "portfolio_transactions_change",
+            "portfolio_transactions_import",
         ):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)
@@ -2259,7 +2467,10 @@ def ensure_investment_safe_startup_after_restore_error(st: Any) -> None:
     ss = st.session_state
     df = ss.get("holdings_df")
     if not isinstance(df, pd.DataFrame) or df.empty:
-        if not ss.get("portfolio_built") and not ss.get("_suite_inv_holdings_from_saved_blob"):
+        if _session_has_real_portfolio_ledger(ss):
+            ss["default_holdings_applied"] = False
+            ss.pop("default_holdings_apply_reason", None)
+        elif not ss.get("portfolio_built") and not ss.get("_suite_inv_holdings_from_saved_blob"):
             ss["holdings_df"] = pd.DataFrame(core.DEFAULT_HOLDINGS)
             ss["default_holdings_applied"] = True
             ss["default_holdings_apply_reason"] = "safe_startup_after_restore_error"

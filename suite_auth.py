@@ -441,6 +441,12 @@ def logout(session_state: dict[str, Any], *, st: Any | None = None) -> None:
     except Exception:
         pass
     _clear_auth_session(session_state, st=st)
+    try:
+        from investment_persistent_state import clear_investment_session_for_auth_boundary
+
+        clear_investment_session_for_auth_boundary(session_state)
+    except ImportError:
+        pass
 
 
 def _read_profile_settings(email: str) -> dict[str, Any]:
