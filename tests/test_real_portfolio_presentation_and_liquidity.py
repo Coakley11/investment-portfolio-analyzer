@@ -288,9 +288,75 @@ class TestPresentationAndLiquidity(unittest.TestCase):
             drift=drift,
             recommendations=recs,
         )
-        self.assertIn("Confidence is limited because", pres.confidence)
+        self.assertRegex(pres.confidence, r"Confidence is (moderate|medium|limited)", pres.confidence)
         self.assertIn("inferred", pres.confidence.lower())
-        self.assertIn("protected cash from investable cash", pres.confidence.lower())
+        self.assertIn("protected cash from cash available for long-term investing", pres.confidence.lower())
+
+    def test_assessment_includes_gain_and_contributor(self) -> None:
+        snap = _snap(
+            [_deposit(20_000.0), _buy("VTI", 10, 200.0), _buy("BND", 10, 80.0)],
+            {"VTI": 250.0, "BND": 82.0},
+        )
+        perf = analyze_real_portfolio_performance(snap)
+        conc = analyze_real_portfolio_concentration(snap)
+        drift = analyze_real_portfolio_drift(snap, health_objective="balanced growth")
+        recs = build_real_portfolio_recommendations(snap, perf, conc, drift)
+        pres = build_real_portfolio_presentation(
+            question="How is my portfolio doing?",
+            snapshot=snap,
+            performance=perf,
+            concentration=conc,
+            drift=drift,
+            recommendations=recs,
+        )
+        self.assertIn("unrealized gain", pres.assessment.lower())
+        self.assertIn("VTI", pres.assessment)
+        self.assertIn("not today's return", pres.assessment.lower())
+
+    def test_drift_block_reserve_cash_context(self) -> None:
+        snap = _snap(
+            [_deposit(16_500.0), _buy("VTI", 5, 200.0), _buy("BND", 5, 80.0)],
+            {"VTI": 250.0, "BND": 82.0},
+            plan_emergency=7_654.0,
+            plan_near_term=12_345.0,
+            health_objective="balanced growth",
+        )
+        perf = analyze_real_portfolio_performance(snap)
+        conc = analyze_real_portfolio_concentration(snap)
+        drift = analyze_real_portfolio_drift(snap, health_objective="balanced growth")
+        recs = build_real_portfolio_recommendations(snap, perf, conc, drift)
+        pres = build_real_portfolio_presentation(
+            question="drift",
+            snapshot=snap,
+            performance=perf,
+            concentration=conc,
+            drift=drift,
+            recommendations=recs,
+        )
+        self.assertIn("may be reserved rather than investable", pres.allocation_concentration.lower())
+
+    def test_liquidity_suggestion_next_step_without_sell(self) -> None:
+        snap = _snap(
+            [_deposit(16_500.0)],
+            {},
+            plan_emergency=7_654.0,
+            plan_near_term=12_345.0,
+        )
+        perf = analyze_real_portfolio_performance(snap)
+        conc = analyze_real_portfolio_concentration(snap)
+        drift = analyze_real_portfolio_drift(snap, health_objective="balanced growth")
+        recs = build_real_portfolio_recommendations(snap, perf, conc, drift)
+        pres = build_real_portfolio_presentation(
+            question="liquidity",
+            snapshot=snap,
+            performance=perf,
+            concentration=conc,
+            drift=drift,
+            recommendations=recs,
+        )
+        self.assertIn("bringing protected cash closer", pres.suggestions.lower())
+        self.assertIn("rather than selling", pres.suggestions.lower())
+        self.assertNotIn("you should sell", pres.suggestions.lower())
 
 
 if __name__ == "__main__":

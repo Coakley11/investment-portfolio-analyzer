@@ -7,7 +7,10 @@ from typing import Any
 
 from investment_ami.decision_support.models import DecisionSupportResponse
 from investment_ami.decision_support.modules import MODULE_REAL_PORTFOLIO
-from investment_ami.decision_support.real_portfolio_cash_classification import classify_real_portfolio_cash
+from investment_ami.decision_support.real_portfolio_cash_classification import (
+    RealPortfolioCashClassification,
+    classify_real_portfolio_cash,
+)
 from investment_ami.decision_support.real_portfolio_concentration import RealPortfolioConcentrationAnalysis
 from investment_ami.decision_support.real_portfolio_drift import RealPortfolioDriftAnalysis
 from investment_ami.decision_support.real_portfolio_models import RealPortfolioSnapshot
@@ -106,6 +109,137 @@ def _inferred_target_summary(drift: RealPortfolioDriftAnalysis) -> str:
     return ", ".join(parts) if parts else "your saved or inferred target"
 
 
+def _top_contributor_phrases(performance: RealPortfolioPerformanceAnalysis) -> str:
+    chunks: list[str] = []
+    if performance.positive_contributors:
+        c = performance.positive_contributors[0]
+        d = c.contribution_to_total_gain_loss_dollars
+        if d is not None and d > 0:
+            chunks.append(f"**{c.ticker}** is the main positive contributor")
+    if performance.negative_contributors:
+        c = performance.negative_contributors[0]
+        d = c.contribution_to_total_gain_loss_dollars
+        if d is not None and d < 0:
+            if chunks:
+                chunks.append(
+                    f"while **{c.ticker}** has a small unrealized loss of approximately {_money(abs(d))}"
+                )
+            else:
+                chunks.append(
+                    f"**{c.ticker}** is the main negative contributor "
+                    f"(approximately {_money(abs(d))} unrealized loss)"
+                )
+    if not chunks:
+        return ""
+    if len(chunks) == 1:
+        return chunks[0] + "."
+    return f"{chunks[0]}, {chunks[1]}."
+
+
+def _unrealized_headline(performance: RealPortfolioPerformanceAnalysis) -> str:
+    d = performance.total_gain_loss_dollars
+    if d is None:
+        return ""
+    pct = performance.total_gain_loss_pct
+    if pct is None:
+        pct = performance.priced_holdings_gain_loss_pct
+    if d > 0:
+        line = f"Your portfolio has an unrealized gain of approximately {_money(d)}"
+        if pct is not None:
+            line += f", or {_pct(pct)},"
+        line += " since purchase (not today's return)."
+        return line
+    if d < 0:
+        line = f"Your portfolio has an unrealized loss of approximately {_money(abs(d))}"
+        if pct is not None:
+            line += f", or {_pct(abs(pct))},"
+        line += " since purchase (not today's return)."
+        return line
+    return ""
+
+
+def _build_informative_assessment(
+    performance: RealPortfolioPerformanceAnalysis,
+    recommendations: RealPortfolioRecommendationSet,
+    cash_class: RealPortfolioCashClassification,
+) -> str:
+    sentences: list[str] = []
+    headline = _unrealized_headline(performance)
+    if headline:
+        sentences.append(headline)
+    contributor = _top_contributor_phrases(performance)
+    if contributor:
+        sentences.append(contributor)
+    urgent_codes = {
+        r.code
+        for r in recommendations.recommendations
+        if r.priority <= 30 and r.code not in ("preserve_liquidity",)
+    }
+    if not urgent_codes and recommendations.primary_action in (
+        "hold_current_course",
+        "no_urgent_change",
+        "preserve_liquidity",
+    ):
+        urgent = "No urgent portfolio change is indicated"
+    elif not urgent_codes:
+        urgent = "No urgent portfolio change is indicated"
+    else:
+        urgent = "Review the highlighted items below before making changes"
+    if cash_class.protected_shortfall > 0:
+        urgent += (
+            f", but your current ledger cash is about {_money(cash_class.protected_shortfall)} below "
+            "the emergency and near-term reserve target entered in your plan"
+        )
+    urgent += "."
+    sentences.append(urgent)
+    return " ".join(sentences)
+
+
+def _format_confidence_narrative(
+    *,
+    conf_label: str,
+    snapshot: RealPortfolioSnapshot,
+    drift: RealPortfolioDriftAnalysis,
+    cash_class: RealPortfolioCashClassification,
+    score: int | None,
+) -> str:
+    body = f"**{conf_label}**"
+    if score:
+        body += f" (score {score}/100)"
+    strengths: list[str] = []
+    if snapshot.unpriced_holdings_count == 0:
+        strengths.append("all holdings are priced")
+    incomplete_cb = any(
+        h.total_cost_basis <= 0 and h.current_price is not None for h in snapshot.holdings
+    )
+    if not incomplete_cb and snapshot.total_cost_basis > 0:
+        strengths.append("cost basis is available")
+    limitations: list[str] = []
+    if drift.target_source == "inferred_risk_profile_target" or drift.target_quality not in (
+        "explicit",
+        "sufficient",
+    ):
+        limitations.append("the target allocation is inferred")
+    if cash_class.portfolio_cash > 0:
+        limitations.append(
+            "the ledger does not yet distinguish protected cash from cash available for long-term investing"
+        )
+    level_word = conf_label.lower()
+    if limitations:
+        if strengths:
+            body += (
+                f"\n\nConfidence is {level_word} because "
+                f"{' and '.join(strengths)}, but {' and '.join(limitations)}."
+            )
+        else:
+            body += f"\n\nConfidence is limited because {' and '.join(limitations)}."
+    elif strengths:
+        body += f"\n\n{' and '.join(strengths).capitalize()} support this read."
+    else:
+        body += "\n\nPricing and plan inputs support this read."
+    return body
+
+
 def _allocation_concentration_block(
     snapshot: RealPortfolioSnapshot,
     concentration: RealPortfolioConcentrationAnalysis,
@@ -158,6 +292,10 @@ def _allocation_concentration_block(
                 f"  - {o.asset_class}: current {_pct(o.current_weight)}, target {_pct(o.target_weight)} "
                 f"({o.drift_percentage_points:+.1f} pp, {o.severity})."
             )
+        lines.append(
+            "- These drift figures describe the full ledger allocation. Because part of the cash balance "
+            "may be reserved rather than investable, they should not automatically be treated as rebalancing instructions."
+        )
         if drift.target_source == "inferred_risk_profile_target":
             lines.append(
                 "- Target comparison uses an **inferred** objective mapping; save an explicit target for stronger drift guidance."
@@ -198,6 +336,7 @@ def build_assessment_text(
     recommendations: RealPortfolioRecommendationSet,
     *,
     snapshot: RealPortfolioSnapshot | None = None,
+    cash_class: RealPortfolioCashClassification | None = None,
 ) -> str:
     if performance.performance_status == "partial_data":
         return (
@@ -214,6 +353,12 @@ def build_assessment_text(
             f"{perf_note}the **main issue to review is concentration in an individual security**, "
             "not overall performance alone."
         ).strip()
+    if (
+        cash_class is not None
+        and performance.total_gain_loss_dollars is not None
+        and performance.performance_status != "partial_data"
+    ):
+        return _build_informative_assessment(performance, recommendations, cash_class)
     if drift.rebalance_triggered and snapshot is not None:
         cc = classify_real_portfolio_cash(snapshot, drift)
         if cc.portfolio_cash_weight_pct >= 15.0 and (
@@ -240,20 +385,6 @@ def build_assessment_text(
             "The portfolio has **materially drifted** from the available target allocation; "
             "gradual rebalancing with new contributions may be reasonable if liquidity allows."
         )
-    if performance.performance_status == "positive_unrealized_gain":
-        return (
-            "Your portfolio is **above its recorded cost basis** on priced holdings, and the available data "
-            "does **not** indicate an urgent need to change it."
-        )
-    if performance.performance_status == "negative_unrealized_loss":
-        return (
-            "Your portfolio is **below recorded cost basis** on priced holdings, but unrealized losses alone "
-            "do **not** establish that the allocation is unsuitable."
-        )
-    if recommendations.primary_action in ("hold_current_course", "no_urgent_change"):
-        return (
-            "Available data does **not** indicate an urgent portfolio change; monitoring may be appropriate."
-        )
     return "Here is a factual read of your transaction-backed portfolio based on available marks and plan context."
 
 
@@ -268,7 +399,7 @@ def build_real_portfolio_presentation(
 ) -> RealPortfolioPresentation:
     cash_class = classify_real_portfolio_cash(snapshot, drift)
     assessment = build_assessment_text(
-        performance, concentration, drift, recommendations, snapshot=snapshot
+        performance, concentration, drift, recommendations, snapshot=snapshot, cash_class=cash_class
     )
 
     snap_lines = [
@@ -324,10 +455,15 @@ def build_real_portfolio_presentation(
         if rec.code == "preserve_liquidity":
             shortfall = rec.evidence.get("protected_shortfall")
             if shortfall is not None and float(shortfall) > 0:
+                target = cash_class.protected_cash_target
                 text = (
                     f"Your current portfolio cash is about {_money(float(shortfall))} below the combined "
                     "emergency and near-term reserve target entered in your plan. Until that gap is addressed, "
-                    "increasing new investment contributions may reduce liquidity below your stated target."
+                    "increasing new investment contributions may reduce liquidity below your stated target.\n\n"
+                    f"Before increasing long-term investments, consider bringing protected cash closer to the "
+                    f"{_money(target)} target. Once those reserves are adequately funded, future contributions "
+                    "could be directed gradually toward underweight equity and bond sleeves rather than selling "
+                    "current holdings."
                 )
         if rec.code == "rebalance_with_new_money":
             if rec.evidence.get("conditional_only"):
@@ -373,38 +509,22 @@ def build_real_portfolio_presentation(
     information_needed = "\n".join(f"- {x}" for x in dict.fromkeys(info_lines))
 
     conf = recommendations.confidence_level.title()
-    drivers: list[str] = []
-    if snapshot.unpriced_holdings_count:
-        drivers.append("market prices are incomplete")
-    if drift.target_source in ("inferred_risk_profile_target", "unavailable"):
-        drivers.append("target allocation is inferred or missing")
-    if cash_class.portfolio_cash > 0 and not cash_class.cash_purpose_known:
-        drivers.append("ledger cash purpose is not fully specified in plan inputs")
-    if recommendations.confidence_level == "high" and drivers:
-        conf = "Medium"
-    if drift.target_source == "inferred_risk_profile_target" or (
-        cash_class.portfolio_cash > 0 and not cash_class.cash_purpose_known
+    if recommendations.confidence_level == "high" and (
+        snapshot.unpriced_holdings_count
+        or drift.target_source in ("inferred_risk_profile_target", "unavailable")
+        or cash_class.portfolio_cash > 0
     ):
+        conf = "Medium"
+    if drift.target_source == "inferred_risk_profile_target" or cash_class.portfolio_cash > 0:
         if conf == "High":
             conf = "Medium"
-    conf_body = f"**{conf}**"
-    if recommendations.confidence_score:
-        conf_body += f" (score {recommendations.confidence_score}/100)"
-    limit_notes: list[str] = []
-    if drift.target_source == "inferred_risk_profile_target":
-        limit_notes.append("the target allocation is inferred")
-    if cash_class.portfolio_cash > 0 and not cash_class.cash_purpose_known:
-        limit_notes.append("the ledger does not distinguish protected cash from investable cash")
-    if limit_notes:
-        conf_body += (
-            "\n\nConfidence is limited because "
-            + " and ".join(limit_notes)
-            + "."
-        )
-    elif drivers:
-        conf_body += f"\n\nMain drivers: {'; '.join(drivers)}."
-    else:
-        conf_body += "\n\nPricing and plan inputs support this read."
+    conf_body = _format_confidence_narrative(
+        conf_label=conf,
+        snapshot=snapshot,
+        drift=drift,
+        cash_class=cash_class,
+        score=recommendations.confidence_score or None,
+    )
 
     return RealPortfolioPresentation(
         assessment=assessment,

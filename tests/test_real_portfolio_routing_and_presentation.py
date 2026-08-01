@@ -148,7 +148,7 @@ class TestRealPortfolioPresentation(unittest.TestCase):
         md = render_investment_page_insight_markdown(payload["analyst_sections"])
         self.assertIn("Unrealized gain since purchase", md)
         self.assertNotIn("(cost basis)", md.lower())
-        self.assertNotIn("today's return", md.lower())
+        self.assertIn("not today's return", md.lower())
 
     def test_no_committee_sections(self) -> None:
         _resp, payload = self._run(_ledger_ctx(), "How is my portfolio doing?")
@@ -196,11 +196,15 @@ class TestRealPortfolioPresentation(unittest.TestCase):
 
     def test_no_duplicate_question_label(self) -> None:
         _resp, payload = self._run(_ledger_ctx(), "How is my portfolio doing?")
-        md = render_investment_page_insight_markdown(payload["analyst_sections"])
-        self.assertNotIn("Question: Question:", md)
-        self.assertNotIn("question: question:", md.lower())
-        if "**Question**" in md:
-            self.assertEqual(md.count("**Question**"), 1)
+        sections = payload["analyst_sections"]
+        md = render_investment_page_insight_markdown(sections)
+        self.assertNotIn("**Question**", md)
+        q = str(sections.get("question_text") or "").strip()
+        self.assertTrue(q)
+        panel_line = f"**Question:** *{q}*"
+        combined = f"{panel_line}\n\n{md}"
+        self.assertEqual(combined.lower().count(q.lower()), 1)
+        self.assertNotIn("Question: Question:", combined)
 
     def test_persist_roundtrip_sections(self) -> None:
         _resp, payload = self._run(_ledger_ctx(), "How is my portfolio doing?")

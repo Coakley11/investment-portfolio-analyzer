@@ -2579,16 +2579,36 @@ def render_applied_math_insight_panel(
             st.markdown(f"**Conclusion:** {data.get('conclusion')}")
         show_details = str(source_app or data.get("source_app") or "").strip().lower() != "investment"
         if is_decision_support and str(source_app or data.get("source_app") or "").strip().lower() == "investment":
+            problem = str(
+                data.get("problem_type")
+                or (data.get("key_numbers") or {}).get("problem_type")
+                or ""
+            ).strip()
+            is_real_portfolio = problem == "real_portfolio_advisor" or (
+                isinstance(sections, dict)
+                and str(sections.get("insights_layout") or "") == "real_portfolio_advisor"
+            )
             try:
-                from components.investment_planning import request_navigate_to_how_much_plan_inputs
+                if is_real_portfolio:
+                    from components.investment_planning import request_navigate_to_my_portfolio
+
+                    nav_fn = request_navigate_to_my_portfolio
+                    nav_label = "Go to My Portfolio"
+                    nav_key = "ami_rp_nav"
+                else:
+                    from components.investment_planning import request_navigate_to_how_much_plan_inputs
+
+                    nav_fn = request_navigate_to_how_much_plan_inputs
+                    nav_label = "Go to How Much Should I Invest?"
+                    nav_key = "ami_ds_plan_nav"
 
                 if st.button(
-                    "Go to How Much Should I Invest?",
-                    key=f"ami_ds_plan_nav_{str(data.get('insight_id') or 'pending')[:12]}",
+                    nav_label,
+                    key=f"{nav_key}_{str(data.get('insight_id') or 'pending')[:12]}",
                     use_container_width=True,
                 ):
                     commit_applied_investment_insight_after_render(st, data)
-                    request_navigate_to_how_much_plan_inputs(st)
+                    nav_fn(st)
                     st.rerun()
             except ImportError:
                 pass

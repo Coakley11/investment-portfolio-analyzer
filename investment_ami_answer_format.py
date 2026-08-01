@@ -269,9 +269,6 @@ def render_investment_page_insight_markdown(
     if layout == "real_portfolio_advisor":
         parts: list[str] = []
         module = str(sections.get("ami_module_name") or "Real Portfolio Advisor").strip()
-        qtext = str(sections.get("question_text") or "").strip()
-        if qtext:
-            parts.append(f"**Question**\n\n{escape_streamlit_markdown_prose(qtext)}")
         parts.append(f"**Advisor:** {module}")
         for key, label in REAL_PORTFOLIO_PAGE_SECTION_ORDER:
             body = str(sections.get(key) or "").strip()

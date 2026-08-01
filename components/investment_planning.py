@@ -1011,6 +1011,36 @@ def request_navigate_to_how_much_plan_inputs(st: Any, *, beginner_mode: bool | N
     return tab
 
 
+def request_navigate_to_my_portfolio(st: Any, *, beginner_mode: bool | None = None) -> str:
+    """Schedule navigation to the My Portfolio (Real Portfolio ledger) tab."""
+    from components.beginner_navigation import (
+        BEGINNER_REAL_PORTFOLIO_TAB_LABEL,
+        REAL_PORTFOLIO_TAB_LABEL,
+    )
+
+    ss = st.session_state
+    if beginner_mode is None:
+        try:
+            from investment_persistent_state import current_experience_mode
+
+            beginner_mode = "beginner" in str(current_experience_mode(st) or "").lower()
+        except ImportError:
+            exp = str(ss.get("experience") or ss.get("experience_mode") or "").lower()
+            beginner_mode = "beginner" in exp
+    tab = BEGINNER_REAL_PORTFOLIO_TAB_LABEL if beginner_mode else REAL_PORTFOLIO_TAB_LABEL
+    ss["_pending_investment_tab"] = tab
+    ss["investment_active_tab"] = tab
+    ss.pop("_pending_scroll_target", None)
+    ss.pop("_force_plan_inputs_expanded", None)
+    try:
+        from investment_persistent_state import notify_investment_tab_change
+
+        notify_investment_tab_change(st, tab, source="my_portfolio_nav")
+    except ImportError:
+        pass
+    return tab
+
+
 def _plan_cashflow_int_or_none(session_state: Any, key: str) -> int | None:
     raw = session_state.get(key)
     if raw is None or raw == "":

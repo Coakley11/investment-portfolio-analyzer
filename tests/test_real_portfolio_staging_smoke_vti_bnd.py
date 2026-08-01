@@ -133,7 +133,7 @@ class TestStagingAmiSmoke(unittest.TestCase):
     def test_q1_portfolio_snapshot_and_terminology(self) -> None:
         payload, md = self._run(_QUESTIONS_REAL[0])
         self.assertIn(METRIC_LABEL_UNREALIZED.lower()[:15], md)
-        self.assertNotIn("today's return", md)
+        self.assertIn("not today's return", md.lower())
         self.assertNotIn("investment committee", md)
         self.assertNotIn("executive summary", md)
         self.assertEqual(payload["computed"].get("ami_engine_id"), "real_portfolio_advisor")
@@ -155,7 +155,7 @@ class TestStagingAmiSmoke(unittest.TestCase):
 
     def test_q4_rebalance_not_one_day_return(self) -> None:
         _, md = self._run(_QUESTIONS_REAL[3])
-        self.assertNotIn("today's return", md)
+        self.assertIn("not today's return", md.lower())
         self.assertNotIn("you should sell", md)
 
     def test_q5_contribution_placement(self) -> None:
