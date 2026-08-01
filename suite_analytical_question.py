@@ -1701,6 +1701,19 @@ def _stage_investment_instant_insight(
     page = str(ctx.get("page") or source_page or "").strip()
 
     try:
+        import copy
+
+        from applied_math_context import _merge_real_portfolio_ledger_into_ami_context
+
+        _merge_real_portfolio_ledger_into_ami_context(ss, ctx)
+    except ImportError:
+        txns = ss.get("portfolio_transactions")
+        if isinstance(txns, list) and "portfolio_transactions" not in ctx:
+            import copy
+
+            ctx["portfolio_transactions"] = copy.deepcopy(txns)
+
+    try:
         from investment_ami.routing.mode_router import mode_routing_diagnostics_dict, route_investment_response_mode
 
         from investment_ami_instant_solver import (

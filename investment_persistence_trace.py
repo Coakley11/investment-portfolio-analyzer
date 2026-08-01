@@ -1769,6 +1769,22 @@ def render_ami_insight_lifecycle_runtime_diagnostics(st: Any) -> None:
     snap_build = snapshot.get("diag_build")
 
     with st.sidebar.expander("AMI insight lifecycle (temp debug)", expanded=True):
+        try:
+            from applied_math_context import (
+                build_investment_applied_math_context,
+                real_portfolio_ami_ledger_diagnostics,
+            )
+
+            ami_ctx = build_investment_applied_math_context(
+                str(ss.get("investment_active_tab") or ""),
+                ss,
+            )
+            ledger_diag = real_portfolio_ami_ledger_diagnostics(ss, ami_ctx)
+            st.markdown("**Real Portfolio ledger → AMI**")
+            st.json(ledger_diag)
+        except Exception as exc:
+            st.caption(f"Real Portfolio ledger diag unavailable: {exc}")
+
         st.caption(
             f"Build `{module_build}` — admin + dev mode only. "
             "Reproduce slider bug, then copy the block below."

@@ -474,6 +474,12 @@ def render_real_portfolio_tab(*, beginner: bool = False) -> None:
         else "Manual portfolio ledger: positions derived from transactions, live marks, allocation, and sizing."
     )
     _hero("My Portfolio", subtitle)
+    try:
+        from suite_deploy_marker import resolve_git_commit_short
+
+        st.caption(f"Deploy commit: `{resolve_git_commit_short()}` · Real Portfolio UI: `{REAL_PORTFOLIO_BUILD_ID}`")
+    except ImportError:
+        st.caption(f"Real Portfolio UI: `{REAL_PORTFOLIO_BUILD_ID}`")
 
     labels = list(REAL_PORTFOLIO_SUBTABS)
     try:

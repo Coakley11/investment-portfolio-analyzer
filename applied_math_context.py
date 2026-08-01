@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 
@@ -121,6 +122,137 @@ def record_rebalance_from_health(session_state: dict[str, Any], health: Any) -> 
 
     if ctx:
         cache_investment_context(session_state, ctx)
+
+
+def _merge_real_portfolio_ledger_into_ami_context(session_state: dict[str, Any], ctx: dict[str, Any]) -> None:
+    """
+    Copy canonical transaction ledger into AMI submit context.
+
+    Real Portfolio Advisor reads ``portfolio_transactions`` from the merged context dict;
+    session-only ledger without this copy yields ``no_real_ledger`` despite a populated UI tab.
+    """
+    try:
+        from investment_persistent_state import (
+            PORTFOLIO_TRANSACTIONS_KEY,
+            REAL_PORTFOLIO_LEDGER_META_KEY,
+            REAL_PORTFOLIO_LEDGER_RESTORED_FLAG,
+            REAL_PORTFOLIO_LEDGER_TOUCHED_KEY,
+        )
+    except ImportError:
+        PORTFOLIO_TRANSACTIONS_KEY = "portfolio_transactions"
+        REAL_PORTFOLIO_LEDGER_META_KEY = "real_portfolio_ledger"
+        REAL_PORTFOLIO_LEDGER_TOUCHED_KEY = "_real_portfolio_ledger_touched"
+        REAL_PORTFOLIO_LEDGER_RESTORED_FLAG = "_suite_real_portfolio_ledger_restored"
+
+    txn_records = session_state.get(PORTFOLIO_TRANSACTIONS_KEY)
+    if isinstance(txn_records, list):
+        ctx[PORTFOLIO_TRANSACTIONS_KEY] = copy.deepcopy(txn_records)
+    meta = session_state.get(REAL_PORTFOLIO_LEDGER_META_KEY)
+    if isinstance(meta, dict):
+        ctx[REAL_PORTFOLIO_LEDGER_META_KEY] = copy.deepcopy(meta)
+    if session_state.get(REAL_PORTFOLIO_LEDGER_TOUCHED_KEY):
+        ctx[REAL_PORTFOLIO_LEDGER_TOUCHED_KEY] = True
+    if session_state.get(REAL_PORTFOLIO_LEDGER_RESTORED_FLAG):
+        ctx[REAL_PORTFOLIO_LEDGER_RESTORED_FLAG] = True
+
+
+def real_portfolio_ami_ledger_diagnostics(
+    session_state: dict[str, Any],
+    ctx: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Admin/support snapshot: session vs AMI context vs snapshot build."""
+    try:
+        from investment_persistent_state import PORTFOLIO_TRANSACTIONS_KEY, APP_ID, load_user_state
+    except ImportError:
+        PORTFOLIO_TRANSACTIONS_KEY = "portfolio_transactions"
+        APP_ID = "investment"
+        load_user_state = None  # type: ignore[assignment]
+
+    ss_txns = session_state.get(PORTFOLIO_TRANSACTIONS_KEY)
+    ctx = ctx or {}
+    ctx_txns = ctx.get(PORTFOLIO_TRANSACTIONS_KEY)
+    session_count = len(ss_txns) if isinstance(ss_txns, list) else 0
+    ctx_count = len(ctx_txns) if isinstance(ctx_txns, list) else 0
+    persisted_count: int | None = None
+    if load_user_state is not None:
+        try:
+            disk_state, _ = load_user_state(APP_ID)
+            if isinstance(disk_state, dict):
+                disk_tx = disk_state.get(PORTFOLIO_TRANSACTIONS_KEY)
+                persisted_count = len(disk_tx) if isinstance(disk_tx, list) else 0
+        except Exception:
+            persisted_count = None
+
+    workspace_id = ""
+    try:
+        workspace_id = str(session_state.get("_suite_active_workspace_id") or "")
+    except Exception:
+        pass
+
+    deploy_commit = "unknown"
+    try:
+        from suite_deploy_marker import resolve_git_commit_short
+
+        deploy_commit = resolve_git_commit_short()
+    except Exception:
+        pass
+
+    snapshot_source = "none"
+    failure_code = ""
+    try:
+        from investment_ami.decision_support.real_portfolio_snapshot import build_real_portfolio_snapshot
+
+        probe_ctx = dict(ctx) if ctx else {}
+        if isinstance(ss_txns, list) and PORTFOLIO_TRANSACTIONS_KEY not in probe_ctx:
+            probe_ctx[PORTFOLIO_TRANSACTIONS_KEY] = copy.deepcopy(ss_txns)
+        build = build_real_portfolio_snapshot(session_state, context=probe_ctx if probe_ctx else None)
+        if build.ok:
+            snapshot_source = "portfolio_transactions"
+        elif build.failure:
+            failure_code = str(build.failure.code or "")
+            if session_count > 0 and ctx_count == 0:
+                snapshot_source = "session_only_context_missing_txns"
+            elif session_count == 0:
+                snapshot_source = "empty_session"
+            else:
+                snapshot_source = "build_failed"
+    except Exception as exc:
+        failure_code = f"exception:{exc}"
+
+    positions_ok = False
+    if isinstance(ss_txns, list) and ss_txns:
+        try:
+            import portfolio_engine as pe
+
+            positions, _ = pe.build_positions(pe.transactions_from_records(ss_txns))
+            positions_ok = bool(positions)
+        except Exception:
+            positions_ok = False
+
+    no_ledger_reason = ""
+    if failure_code == "no_real_ledger":
+        if session_count > 0 and ctx_count == 0:
+            no_ledger_reason = "ami_context_missing_portfolio_transactions"
+        elif session_count == 0:
+            no_ledger_reason = "session_portfolio_transactions_empty"
+        elif not positions_ok:
+            no_ledger_reason = "ledger_has_no_open_positions_or_cash_activity"
+        else:
+            no_ledger_reason = "snapshot_rejected_meaningful_ledger_check"
+
+    return {
+        "deploy_commit": deploy_commit,
+        "active_workspace": workspace_id,
+        "session_transaction_count": session_count,
+        "ami_context_transaction_count": ctx_count,
+        "persisted_transaction_count": persisted_count,
+        "real_portfolio_ledger_touched": bool(session_state.get("_real_portfolio_ledger_touched")),
+        "snapshot_build_source": snapshot_source,
+        "snapshot_failure_code": failure_code,
+        "no_real_ledger_reason": no_ledger_reason,
+        "session_has_open_positions": positions_ok,
+        "has_real_portfolio_context": bool(ctx.get("real_portfolio")),
+    }
 
 
 def build_investment_applied_math_context(page: str, session_state: dict[str, Any]) -> dict[str, Any]:
@@ -255,6 +387,7 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
         except Exception:
             pass
 
+    _merge_real_portfolio_ledger_into_ami_context(session_state, ctx)
     _merge_investment_plan_into_context(session_state, ctx)
     return ctx
 
