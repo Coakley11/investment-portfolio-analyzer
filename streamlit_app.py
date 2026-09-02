@@ -323,6 +323,12 @@ if _PERSISTENCE_OK:
             ensure_investment_safe_startup_after_restore_error(st)
         except Exception as _safe_startup_exc:
             st.session_state["_suite_inv_safe_startup_error"] = str(_safe_startup_exc)
+    try:
+        from planning_portfolio_value import reset_sidebar_portfolio_widget_gate_for_run
+
+        reset_sidebar_portfolio_widget_gate_for_run(st.session_state)
+    except Exception:
+        pass
     apply_pending_sidebar_portfolio_value()
     show_persistence_messages(st)
     render_reset_controls(
@@ -1047,6 +1053,12 @@ def metrics_row_extended(m: core.ExtendedPortfolioMetrics, settings: dict):
 
 
 def render_sidebar() -> dict:
+    try:
+        from planning_portfolio_value import reset_sidebar_portfolio_widget_gate_for_run
+
+        reset_sidebar_portfolio_widget_gate_for_run(st.session_state)
+    except Exception:
+        pass
     apply_pending_sidebar_portfolio_value()
     try:
         from investment_persistence_trace import bump_pr1_render_pass

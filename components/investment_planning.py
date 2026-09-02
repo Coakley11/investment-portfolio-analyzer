@@ -305,7 +305,7 @@ def _apply_plan_portfolio_value(amount: float, *, source: str) -> None:
     from planning_portfolio_value import set_applied_plan_portfolio_value
 
     set_applied_plan_portfolio_value(st.session_state, amount, source=source)
-    request_sidebar_portfolio_value(amount, force=True)
+    request_sidebar_portfolio_value(amount, force=True, source=source)
     st.session_state.capital_deployed = True
     maybe_autosave_investment_plan(st, source="plan_apply_portfolio_value")
     try:

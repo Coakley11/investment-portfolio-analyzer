@@ -147,23 +147,36 @@ def apply_pending_sidebar_portfolio_value(*, respect_user_edit: bool = True) -> 
         return
     if respect_user_edit and st.session_state.get("_suite_inv_portfolio_value_user_set"):
         st.session_state.pop(PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY, None)
+        # Still align sidebar with canonical applied plan when present.
+        initialize_sidebar_portfolio_value_before_widget(st.session_state)
         return
     st.session_state["sidebar_portfolio_value"] = st.session_state.pop(
         PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY
     )
 
 
-def request_sidebar_portfolio_value(value: int | float, *, force: bool = False) -> None:
+def request_sidebar_portfolio_value(
+    value: int | float,
+    *,
+    force: bool = False,
+    source: str = "",
+) -> None:
     """Queue portfolio value change for the next run (avoids Streamlit widget key conflict)."""
     rounded = int(round(float(value)))
     st.session_state[PENDING_SIDEBAR_PORTFOLIO_VALUE_KEY] = rounded
-    st.session_state["investment_plan_applied_portfolio_value"] = rounded
     try:
-        from planning_portfolio_value import APPLIED_PLAN_PORTFOLIO_VALUE_KEY
+        from planning_portfolio_value import (
+            APPLIED_PLAN_PORTFOLIO_VALUE_KEY,
+            set_applied_plan_portfolio_value,
+        )
 
-        st.session_state[APPLIED_PLAN_PORTFOLIO_VALUE_KEY] = rounded
+        if source:
+            set_applied_plan_portfolio_value(st.session_state, rounded, source=source)
+        else:
+            st.session_state["investment_plan_applied_portfolio_value"] = rounded
+            st.session_state[APPLIED_PLAN_PORTFOLIO_VALUE_KEY] = rounded
     except ImportError:
-        pass
+        st.session_state["investment_plan_applied_portfolio_value"] = rounded
     if force:
         st.session_state.pop("_suite_inv_portfolio_value_user_set", None)
 

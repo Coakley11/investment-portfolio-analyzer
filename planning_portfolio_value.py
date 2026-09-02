@@ -35,6 +35,18 @@ def mark_sidebar_portfolio_widget_instantiated(session_state: dict[str, Any] | A
     session_state[SIDEBAR_PORTFOLIO_WIDGET_INSTANTIATED_KEY] = True
 
 
+def reset_sidebar_portfolio_widget_gate_for_run(session_state: dict[str, Any] | Any) -> None:
+    """
+    Clear the per-run widget gate at the start of each Streamlit script run.
+
+    The gate exists so we never mutate ``sidebar_portfolio_value`` after
+    ``st.number_input`` is drawn *in the same run*. It must not survive across
+    reruns — otherwise pending/applied plan values never reach the sidebar and
+    allocation dollars keep using a stale portfolio value.
+    """
+    session_state.pop(SIDEBAR_PORTFOLIO_WIDGET_INSTANTIATED_KEY, None)
+
+
 def get_applied_plan_portfolio_value(session_state: dict[str, Any] | Any) -> int | None:
     for key in (APPLIED_PLAN_PORTFOLIO_VALUE_KEY, LEGACY_APPLIED_PLAN_KEY):
         val = session_state.get(key)
