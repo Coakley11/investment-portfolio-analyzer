@@ -1,5 +1,8 @@
 streamlit>=1.32.0
+# Yahoo Finance client — Streamlit Cloud shared IPs are often rate-limited;
+# keep curl_cffi available so yfinance can impersonate a browser TLS stack.
 yfinance>=0.2.40
+curl_cffi>=0.7.0
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.11.0

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .env
 .venv/
+.venv_yf17/
 venv/
 .streamlit/secrets.toml
 **/__pycache__/

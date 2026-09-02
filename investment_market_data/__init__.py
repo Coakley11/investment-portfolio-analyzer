@@ -21,6 +21,7 @@ from investment_market_data.provider import (
     invalidate_all_market_data_caches,
     reset_market_data_provider_for_tests,
 )
+from investment_market_data.yahoo import MarketDataFetchError
 
 __all__ = (
     "DISK_CACHE_ENABLED",
@@ -28,6 +29,7 @@ __all__ = (
     "ETF_HOLDINGS_TTL_SECONDS",
     "EtfHoldingsBundle",
     "HISTORICAL_TTL_SECONDS",
+    "MarketDataFetchError",
     "MarketDataProvider",
     "SPOT_PRICE_TTL_SECONDS",
     "TICKER_INFO_TTL_SECONDS",

@@ -2267,6 +2267,20 @@ if _load_analytics:
             st.session_state.plan_compare_return = metrics.annual_return
         except Exception as ex:
             st.error(f"Analysis failed: {ex}")
+            try:
+                from investment_market_data import MarketDataFetchError, get_market_data_diagnostics
+
+                if isinstance(ex, MarketDataFetchError):
+                    last = get_market_data_diagnostics().last_fetch or {}
+                    if last:
+                        st.caption(
+                            "Market-data diagnostics: "
+                            f"symbols={last.get('symbols')}, start={last.get('start')}, "
+                            f"end={last.get('end')}, attempts={last.get('attempts')}, "
+                            f"shape={last.get('response_shape')}"
+                        )
+            except Exception:
+                pass
             if _PERSISTENCE_OK:
                 autosave_investment_state(st)
             st.stop()
