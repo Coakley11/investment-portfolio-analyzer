@@ -21,7 +21,7 @@ REAL_PORTFOLIO_SUBTABS = (
 SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-06-23-schd-quote-v3"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-02-instrument-alloc-v2"
 
 
 def _ss() -> Any:
@@ -162,6 +162,10 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
     _render_cash_accounting_summary(transactions)
 
     st.markdown("#### Allocation")
+    st.caption(
+        "Instrument type from your transactions (Stock / ETF / Bond / Cash / Other) — "
+        "not underlying economic exposure. Bond ETFs entered as ETF count as ETFs here."
+    )
     a1, a2, a3, a4, a5 = st.columns(5)
     buckets = summary.allocation_by_bucket
     for col, key in zip([a1, a2, a3, a4, a5], ["Stocks", "ETFs", "Bonds", "Cash", "Other"]):
@@ -333,7 +337,11 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
             elif price <= 0:
                 st.error("Execution price must be greater than zero.")
             else:
-                inferred_asset = pe.normalize_asset_type(asset_type, sym)
+                # Persist the selectbox instrument type as-is. Never pass ticker into
+                # classification here — bond-fund economics belong in AMI/drift only.
+                instrument = pe.canonicalize_instrument_type(asset_type)
+                if instrument is None:
+                    instrument = pe.resolve_instrument_type(asset_type, "")
                 txn = pe.PortfolioTransaction(
                     id=pe._new_id(),
                     action=action,  # type: ignore[arg-type]
@@ -343,7 +351,7 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
                     execution_price=price,
                     notes=notes,
                     company_name=pe.infer_company_name(sym),
-                    asset_type=inferred_asset,
+                    asset_type=instrument,
                 )
                 _persist_new_transaction(transactions, txn)
 

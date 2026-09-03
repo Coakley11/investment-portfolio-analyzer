@@ -278,7 +278,7 @@ def build_real_portfolio_snapshot(
         position_cost = shares * avg_cost
         total_cost_basis += position_cost
 
-        asset_type = pe.normalize_asset_type(str(entry.get("asset_type")), ticker)
+        asset_type = pe.resolve_instrument_type(str(entry.get("asset_type")), ticker)
         # Economic sleeves for drift/AMI (bond ETFs → Bonds), not instrument-type cards.
         asset_class = pe.economic_exposure_bucket(asset_type, ticker)
         company = str(entry.get("company_name") or pe.infer_company_name(ticker))

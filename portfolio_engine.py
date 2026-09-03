@@ -264,6 +264,51 @@ def is_bond_fund_ticker(ticker: str) -> bool:
     return "bond" in asset_type
 
 
+# User-facing / persisted instrument taxonomy (Dashboard Allocation cards).
+# Once a label maps here, ticker-based economic classifiers must not override it.
+_EXPLICIT_INSTRUMENT_ALIASES: dict[str, AssetType] = {
+    "stock": "stock",
+    "stocks": "stock",
+    "etf": "etf",
+    "etfs": "etf",
+    "dividend etf": "etf",
+    "reit": "etf",
+    "bond": "bond",
+    "bonds": "bond",
+    "other": "other",
+    "cash": "cash",
+    "t-bills": "cash",
+    "t bills": "cash",
+}
+
+
+def canonicalize_instrument_type(raw: str | None) -> AssetType | None:
+    """Return a canonical instrument type if ``raw`` is an explicit instrument label.
+
+    Does not consult tickers or market-data metadata. Returns ``None`` when the
+    label is blank/unknown so callers may fall back to ticker inference.
+    """
+    label = str(raw or "").strip().lower()
+    if not label:
+        return None
+    if label in _EXPLICIT_INSTRUMENT_ALIASES:
+        return _EXPLICIT_INSTRUMENT_ALIASES[label]
+    return None
+
+
+def resolve_instrument_type(raw: str | None, ticker: str = "") -> AssetType:
+    """Instrument type for ledger / Dashboard: explicit labels are frozen.
+
+    Bond-fund ticker detection is used only when the stored/editor label is blank
+    or not an instrument taxonomy value. This is the source of truth for
+    Stocks/ETFs/Bonds/Cash/Other allocation cards.
+    """
+    explicit = canonicalize_instrument_type(raw)
+    if explicit is not None:
+        return explicit
+    return normalize_asset_type(raw, ticker)
+
+
 def normalize_asset_type(raw: str | None, ticker: str = "") -> AssetType:
     """Map labels to *instrument* types (Stock / ETF / Bond / Cash / Other).
 
@@ -272,19 +317,15 @@ def normalize_asset_type(raw: str | None, ticker: str = "") -> AssetType:
     silently reclassify an ETF wrapper (e.g. BND entered as ETF) into Bond for
     Dashboard instrument-type allocation.
     """
+    explicit = canonicalize_instrument_type(raw)
+    if explicit is not None:
+        return explicit
+
     sym = str(ticker or "").strip().upper()
     label = str(raw or "").strip().lower()
-    if sym in ("CASH", "$CASH") or label in ("cash", "t-bills", "t bills"):
+    if sym in ("CASH", "$CASH"):
         return "cash"
-    # Honor explicit instrument taxonomy before any ticker-based economic override.
-    if label in ("etf", "dividend etf", "reit"):
-        return "etf"
-    if label in ("stock",):
-        return "stock"
-    if label in ("bond",) or label == "bonds":
-        return "bond"
-    if label in ("other",):
-        return "other"
+    # Non-canonical labels that still imply fixed income as an instrument.
     if "bond" in label:
         return "bond"
     if is_bond_fund_ticker(sym):
@@ -300,6 +341,11 @@ def normalize_asset_type(raw: str | None, ticker: str = "") -> AssetType:
         # Avoid infinite recursion: fund metadata may return the same blank/unknown label.
         inferred = str(info.get("asset_type") or "").strip().lower()
         if inferred and inferred != label:
+            # Fund metadata often returns economic labels ("Bonds"); map via aliases
+            # or recurse. Explicit instrument aliases (including "bonds"→bond) win.
+            mapped = canonicalize_instrument_type(inferred)
+            if mapped is not None:
+                return mapped
             return normalize_asset_type(inferred, sym)
         if is_bond_fund_ticker(sym):
             return "bond"
@@ -371,8 +417,13 @@ class PortfolioTransaction:
     def from_record(cls, record: dict[str, Any]) -> PortfolioTransaction:
         ticker = str(record.get("ticker") or "").strip().upper()
         asset_raw = str(record.get("asset_type") or "")
-        if not asset_raw and ticker:
-            asset_raw = normalize_asset_type("", ticker)
+        if asset_raw:
+            # Preserve explicit persisted instrument type; do not reclassify by ticker.
+            asset_resolved = resolve_instrument_type(asset_raw, "")
+        elif ticker:
+            asset_resolved = resolve_instrument_type("", ticker)
+        else:
+            asset_resolved = "stock"
         return cls(
             id=str(record.get("id") or _new_id()),
             action=str(record.get("action") or "buy"),  # type: ignore[arg-type]
@@ -382,7 +433,7 @@ class PortfolioTransaction:
             execution_price=_safe_float(record.get("execution_price")),
             notes=str(record.get("notes") or ""),
             company_name=str(record.get("company_name") or infer_company_name(ticker)),
-            asset_type=str(asset_raw or "stock"),
+            asset_type=str(asset_resolved),
         )
 
 
@@ -537,14 +588,15 @@ def _ledger_from_transactions(
                 "shares": 0.0,
                 "total_cost": 0.0,
                 "company_name": txn.company_name or infer_company_name(ticker),
-                "asset_type": normalize_asset_type(txn.asset_type, ticker),
+                "asset_type": resolve_instrument_type(txn.asset_type, ticker),
                 "splits_applied": 0,
             },
         )
         if txn.company_name:
             entry["company_name"] = txn.company_name
         if txn.asset_type:
-            entry["asset_type"] = normalize_asset_type(txn.asset_type, ticker)
+            # Explicit transaction instrument type wins; ticker must not override.
+            entry["asset_type"] = resolve_instrument_type(txn.asset_type, ticker)
 
         if action == "buy":
             cost = qty * price
@@ -586,7 +638,7 @@ def build_positions(
             PortfolioPosition(
                 ticker=ticker,
                 company_name=str(entry.get("company_name") or ticker),
-                asset_type=normalize_asset_type(str(entry.get("asset_type")), ticker),
+                asset_type=resolve_instrument_type(str(entry.get("asset_type")), ticker),
                 shares_owned=shares,
                 average_cost_basis=avg_cost,
                 current_price=current_price,
@@ -661,6 +713,7 @@ def transactions_display_dataframe(transactions: list[PortfolioTransaction]) -> 
                     "Date": t.date,
                     "Action": action_label,
                     "Ticker": t.ticker,
+                    "Asset Type": resolve_instrument_type(t.asset_type, t.ticker),
                     "Shares": format_shares(t.quantity),
                     "Price/Share": format_currency(t.execution_price),
                     "Total": flow_label,
