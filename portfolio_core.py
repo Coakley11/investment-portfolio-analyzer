@@ -292,6 +292,31 @@ def align_returns_and_weights(
     return aligned, w, labels
 
 
+def build_risk_pack(
+    returns: pd.DataFrame,
+    weights: Iterable[float],
+    initial_value: float,
+    tickers: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Build correlation / scenario / risk-contribution pack with ticker alignment.
+
+    Aligns returns to ``tickers`` first, then calls contribution helpers with the
+    aligned frame so callers never need to pass ``tickers=`` into legacy 2-arg
+    signatures (avoids Cloud partial-reload TypeError mismatches).
+    """
+    aligned, w, _labels = align_returns_and_weights(returns, weights, tickers=tickers)
+    port_rets = portfolio_daily_returns(aligned, w)
+    return {
+        "corr": correlation_matrix(aligned),
+        "scenarios": scenario_analysis(aligned, w, initial_value),
+        "vol_rank": volatility_ranking(aligned),
+        "risk_contrib": risk_contribution(aligned, w),
+        "roll_vol": rolling_volatility(port_rets),
+        "roll_ret": rolling_returns(port_rets),
+        "port_rets": port_rets,
+    }
+
+
 def fetch_price_history(
     tickers: list[str],
     start: str,

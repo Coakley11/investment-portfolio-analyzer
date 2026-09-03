@@ -29,25 +29,46 @@ def _synthetic_returns(columns: list[str], *, seed: int = 0) -> pd.DataFrame:
     return pd.DataFrame(data, index=idx, columns=columns)
 
 
-class TestRiskContributionTickerAlignment(unittest.TestCase):
-    def test_pilot_weights_survive_alphabetical_column_reorder(self) -> None:
-        # Holdings order weights; returns columns deliberately alphabetical.
-        alpha_cols = sorted(_PILOT_TICKERS)
-        self.assertEqual(alpha_cols, ["BND", "VNQ", "VTI", "VXUS"])
-        rets = _synthetic_returns(alpha_cols)
+class TestComputeRiskPackStreamlitPath(unittest.TestCase):
+    def test_build_risk_pack_preserves_pilot_weights_with_reordered_columns(self) -> None:
+        """Same contract as streamlit_app.compute_risk_pack → core.build_risk_pack."""
+        rets = _synthetic_returns(sorted(_PILOT_TICKERS))
+        pack = core.build_risk_pack(
+            rets,
+            tuple(_PILOT_WEIGHTS.tolist()),
+            initial_value=10_000.0,
+            tickers=_PILOT_TICKERS,
+        )
+        rc = pack["risk_contrib"]
+        assert isinstance(rc, pd.DataFrame)
+        weight_map = {str(r["Ticker"]): float(r["Weight"]) for _, r in rc.iterrows()}
+        self.assertAlmostEqual(weight_map["VTI"], 0.40, places=6)
+        self.assertAlmostEqual(weight_map["VXUS"], 0.20, places=6)
+        self.assertAlmostEqual(weight_map["BND"], 0.30, places=6)
+        self.assertAlmostEqual(weight_map["VNQ"], 0.10, places=6)
+        self.assertIn("port_rets", pack)
+        self.assertEqual(len(pack["port_rets"]), len(rets))
 
-        # Bug pattern without tickers: holdings weights zip onto alpha columns.
-        buggy = core.risk_contribution(rets, _PILOT_WEIGHTS)
-        buggy_map = {str(r["Ticker"]): float(r["Weight"]) for _, r in buggy.iterrows()}
-        self.assertAlmostEqual(buggy_map["BND"], 0.40, places=6)
-        self.assertAlmostEqual(buggy_map["VTI"], 0.30, places=6)
+    def test_streamlit_compute_risk_pack_signature_matches_app(self) -> None:
+        """Import the cached Streamlit wrapper and call it like streamlit_app does."""
+        from streamlit_app import compute_risk_pack
 
-        fixed = core.risk_contribution(rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS)
-        fixed_map = {str(r["Ticker"]): float(r["Weight"]) for _, r in fixed.iterrows()}
-        self.assertAlmostEqual(fixed_map["VTI"], 0.40, places=6)
-        self.assertAlmostEqual(fixed_map["VXUS"], 0.20, places=6)
-        self.assertAlmostEqual(fixed_map["BND"], 0.30, places=6)
-        self.assertAlmostEqual(fixed_map["VNQ"], 0.10, places=6)
+        rets = _synthetic_returns(sorted(_PILOT_TICKERS))
+        pack = compute_risk_pack(
+            rets,
+            tuple(_PILOT_WEIGHTS.tolist()),
+            10_000.0,
+            tickers_tuple=tuple(_PILOT_TICKERS),
+        )
+        weight_map = {
+            str(r["Ticker"]): float(r["Weight"])
+            for _, r in pack["risk_contrib"].iterrows()
+        }
+        self.assertAlmostEqual(weight_map["VTI"], 0.40, places=6)
+        self.assertAlmostEqual(weight_map["VXUS"], 0.20, places=6)
+        self.assertAlmostEqual(weight_map["BND"], 0.30, places=6)
+        self.assertAlmostEqual(weight_map["VNQ"], 0.10, places=6)
+
 
     def test_return_and_drawdown_contribution_siblings_align(self) -> None:
         rets = _synthetic_returns(sorted(_PILOT_TICKERS))

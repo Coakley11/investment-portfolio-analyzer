@@ -726,18 +726,14 @@ def compute_risk_pack(
     initial_value: float,
     tickers_tuple: tuple[str, ...] | None = None,
 ):
-    weights = np.asarray(weights_tuple, dtype=float)
+    """Streamlit entry — delegates to core.build_risk_pack (aligned, 2-arg helpers)."""
     tickers = list(tickers_tuple) if tickers_tuple else None
-    port_rets = core.portfolio_daily_returns(returns, weights, tickers=tickers)
-    return {
-        "corr": core.correlation_matrix(returns),
-        "scenarios": core.scenario_analysis(returns, weights, initial_value),
-        "vol_rank": core.volatility_ranking(returns),
-        "risk_contrib": core.risk_contribution(returns, weights, tickers=tickers),
-        "roll_vol": core.rolling_volatility(port_rets),
-        "roll_ret": core.rolling_returns(port_rets),
-        "port_rets": port_rets,
-    }
+    return core.build_risk_pack(
+        returns,
+        weights_tuple,
+        initial_value,
+        tickers=tickers,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -1852,7 +1848,11 @@ def render_overview_tab(
             with st.spinner("Loading benchmark comparison…"):
                 comp_prices = load_comparison_prices(settings["start"], settings["end"])
                 comp_returns_raw = compute_daily_returns(comp_prices)
-                port_rets = core.portfolio_daily_returns(returns, weights)
+                port_rets = core.portfolio_daily_returns(
+                    returns,
+                    weights,
+                    tickers=[str(t).strip().upper() for t in tickers],
+                )
                 synth_6040 = comp_returns_raw["SPY"] * 0.60 + comp_returns_raw["AGG"] * 0.40
                 benchmark_returns = pd.DataFrame(
                     {
