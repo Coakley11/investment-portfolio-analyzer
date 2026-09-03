@@ -331,13 +331,35 @@ if _PERSISTENCE_OK:
         pass
     apply_pending_sidebar_portfolio_value()
     show_persistence_messages(st)
-    render_reset_controls(
+
+# Single Account & Workspace entry (Command Center + Saved Sessions + Log out).
+# Replaces the former top-level Saved session expander + suite account shell chrome.
+try:
+    from investment_account_workspace import render_investment_account_workspace_control
+
+    render_investment_account_workspace_control(
         st,
-        "investment",
         on_reset=default_reset_investment_session,
-        label="Reset to default",
-        help_text="Clears saved portfolio, workflow progress, local disk, and cloud session for this app.",
+        reset_label="Reset to default",
+        reset_help=(
+            "Clears saved portfolio, workflow progress, local disk, and cloud session for this app."
+        ),
     )
+except Exception as _acct_ws_exc:
+    st.session_state["_suite_inv_account_workspace_error"] = str(_acct_ws_exc)
+    if _PERSISTENCE_OK:
+        try:
+            render_reset_controls(
+                st,
+                "investment",
+                on_reset=default_reset_investment_session,
+                label="Reset to default",
+                help_text=(
+                    "Clears saved portfolio, workflow progress, local disk, and cloud session for this app."
+                ),
+            )
+        except Exception:
+            pass
 
 st.markdown(
     """
@@ -1081,17 +1103,20 @@ def render_sidebar() -> dict:
             render_investment_diagnostics_controls(st, persistence_ok=_PERSISTENCE_OK)
         except Exception as _pr1_diag_exc:
             st.session_state["_pr1_diag_checkbox_error"] = str(_pr1_diag_exc)
+    # Account & Workspace (CC / Saved Sessions / Log out) renders earlier at module
+    # scope. Keep suite shell only for developer diagnostics — no duplicate account
+    # panel or Command Center link.
     try:
         from suite_app_shell import render_suite_sidebar_account_shell
 
-        render_suite_sidebar_account_shell(st)
+        render_suite_sidebar_account_shell(
+            st,
+            show_account_panel=False,
+            show_command_center_link=False,
+            command_center_divider=False,
+        )
     except Exception:
-        try:
-            from suite_command_center_link import render_command_center_sidebar_link
-
-            render_command_center_sidebar_link(st)
-        except Exception:
-            pass
+        pass
     _inv_dev = False
     try:
         from suite_workspace import can_show_developer_tools
