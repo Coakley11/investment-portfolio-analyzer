@@ -175,12 +175,18 @@ def test_transaction_flow_amount_signs():
     assert wd_label.startswith("↓ −")
 
 
-def test_bnd_classifies_as_bonds_not_other():
-    assert pe.allocation_bucket(pe.normalize_asset_type("etf", "BND")) == "Bonds"
+def test_instrument_vs_economic_bnd_classification():
+    """Instrument cards respect ETF; economic sleeves still treat BND as fixed income."""
+    assert pe.allocation_bucket(pe.normalize_asset_type("etf", "BND")) == "ETFs"
     assert pe.allocation_bucket(pe.normalize_asset_type("", "BND")) == "Bonds"
     assert pe.is_bond_fund_ticker("BND")
+    assert pe.economic_exposure_bucket("etf", "BND") == "Bonds"
+    assert pe.economic_exposure_bucket(pe.normalize_asset_type("etf", "BND"), "BND") == "Bonds"
     for sym in ("AGG", "SCHZ", "GOVT", "VGIT"):
-        assert pe.allocation_bucket(pe.normalize_asset_type("stock", sym)) == "Bonds"
+        assert pe.allocation_bucket(pe.normalize_asset_type("stock", sym)) == "Stocks"
+        assert pe.economic_exposure_bucket("stock", sym) == "Bonds"
+        assert pe.allocation_bucket(pe.normalize_asset_type("etf", sym)) == "ETFs"
+        assert pe.economic_exposure_bucket("etf", sym) == "Bonds"
 
 
 def test_bnd_allocation_bucket_in_summary():

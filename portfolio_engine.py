@@ -265,32 +265,52 @@ def is_bond_fund_ticker(ticker: str) -> bool:
 
 
 def normalize_asset_type(raw: str | None, ticker: str = "") -> AssetType:
-    """Map editor / fund metadata labels to portfolio engine asset types."""
+    """Map labels to *instrument* types (Stock / ETF / Bond / Cash / Other).
+
+    Explicit transaction/editor instrument labels win. Bond-fund ticker inference
+    only fills gaps when the user did not choose an instrument type — it must not
+    silently reclassify an ETF wrapper (e.g. BND entered as ETF) into Bond for
+    Dashboard instrument-type allocation.
+    """
     sym = str(ticker or "").strip().upper()
     label = str(raw or "").strip().lower()
     if sym in ("CASH", "$CASH") or label in ("cash", "t-bills", "t bills"):
         return "cash"
-    if is_bond_fund_ticker(sym):
+    # Honor explicit instrument taxonomy before any ticker-based economic override.
+    if label in ("etf", "dividend etf", "reit"):
+        return "etf"
+    if label in ("stock",):
+        return "stock"
+    if label in ("bond",) or label == "bonds":
         return "bond"
+    if label in ("other",):
+        return "other"
     if "bond" in label:
         return "bond"
-    if label in ("dividend etf", "reit") or sym in _KNOWN_ETF_TICKERS:
+    if is_bond_fund_ticker(sym):
+        return "bond"
+    if sym in _KNOWN_ETF_TICKERS:
         return "etf"
     if label == "equity":
         if sym in _KNOWN_ETF_TICKERS:
             return "etf"
         return "stock"
-    if label in ("etf",):
-        return "etf"
-    if label in ("stock",):
-        return "stock"
     if sym and sym not in ("CASH",):
         info = eh.infer_portfolio_fund_info(sym)
-        return normalize_asset_type(info.get("asset_type", "other"), sym)
+        # Avoid infinite recursion: fund metadata may return the same blank/unknown label.
+        inferred = str(info.get("asset_type") or "").strip().lower()
+        if inferred and inferred != label:
+            return normalize_asset_type(inferred, sym)
+        if is_bond_fund_ticker(sym):
+            return "bond"
+        if sym in _KNOWN_ETF_TICKERS:
+            return "etf"
+        return "other"
     return "other"
 
 
 def allocation_bucket(asset_type: AssetType) -> str:
+    """Instrument-type allocation card labels (Dashboard Stocks/ETFs/Bonds/…)."""
     mapping = {
         "stock": "Stocks",
         "etf": "ETFs",
@@ -300,6 +320,19 @@ def allocation_bucket(asset_type: AssetType) -> str:
     }
     return mapping.get(asset_type, "Other")
 
+
+def economic_exposure_bucket(asset_type: AssetType | str, ticker: str = "") -> str:
+    """Economic sleeve for drift/AMI analysis (bond ETFs → Bonds / fixed income).
+
+    Distinct from :func:`allocation_bucket`: an instrument typed as ETF can still
+    contribute fixed-income exposure when the ticker is a known bond fund.
+    """
+    sym = str(ticker or "").strip().upper()
+    if is_bond_fund_ticker(sym):
+        return "Bonds"
+    if asset_type in ("stock", "etf", "bond", "cash", "other"):
+        return allocation_bucket(asset_type)  # type: ignore[arg-type]
+    return allocation_bucket(normalize_asset_type(str(asset_type or ""), sym))
 
 def infer_company_name(ticker: str) -> str:
     sym = str(ticker or "").strip().upper()

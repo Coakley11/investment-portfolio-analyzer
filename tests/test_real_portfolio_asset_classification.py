@@ -1,4 +1,4 @@
-"""Regression: bond ETFs (e.g. BND) classify as Bonds across Real Portfolio surfaces."""
+"""Regression: bond ETFs stay Bonds for economic/AMI sleeves; instrument types stay separate."""
 
 from __future__ import annotations
 
@@ -46,6 +46,24 @@ class TestRealPortfolioBondClassification(unittest.TestCase):
         self.assertAlmostEqual(ac.get("Other", 0.0), 0.0, places=1)
         bnd = next(h for h in result.snapshot.holdings if h.ticker == "BND")
         self.assertEqual(bnd.asset_class, "Bonds")
+
+    def test_snapshot_bnd_entered_as_etf_still_economic_bonds(self) -> None:
+        txns = [
+            _deposit(10_000.0),
+            _buy("VOO", 5, 400.0, asset_type="etf"),
+            _buy("BND", 10, 80.0, asset_type="etf"),
+        ]
+        prices = {"VOO": 400.0, "BND": 80.0}
+        summary = pe.compute_portfolio_summary(pe.transactions_from_records(txns), prices=prices)
+        self.assertAlmostEqual(summary.allocation_by_bucket["Bonds"], 0.0, places=1)
+        self.assertGreater(summary.allocation_by_bucket["ETFs"], 0.0)
+
+        result = build_real_portfolio_snapshot({"portfolio_transactions": txns}, prices=prices)
+        self.assertTrue(result.ok)
+        assert result.snapshot is not None
+        bnd = next(h for h in result.snapshot.holdings if h.ticker == "BND")
+        self.assertEqual(bnd.asset_class, "Bonds")
+        self.assertGreater(result.snapshot.allocation_by_asset_class.get("Bonds", 0.0), 0.0)
 
     def test_valuation_unchanged_by_classification(self) -> None:
         txns = [_deposit(5_000.0), _buy("BND", 10, 80.0)]
