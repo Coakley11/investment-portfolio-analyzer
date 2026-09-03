@@ -720,14 +720,20 @@ def compute_daily_returns(prices: pd.DataFrame):
 
 
 @st.cache_data(show_spinner=False)
-def compute_risk_pack(returns: pd.DataFrame, weights_tuple: tuple[float, ...], initial_value: float):
+def compute_risk_pack(
+    returns: pd.DataFrame,
+    weights_tuple: tuple[float, ...],
+    initial_value: float,
+    tickers_tuple: tuple[str, ...] | None = None,
+):
     weights = np.asarray(weights_tuple, dtype=float)
-    port_rets = core.portfolio_daily_returns(returns, weights)
+    tickers = list(tickers_tuple) if tickers_tuple else None
+    port_rets = core.portfolio_daily_returns(returns, weights, tickers=tickers)
     return {
         "corr": core.correlation_matrix(returns),
         "scenarios": core.scenario_analysis(returns, weights, initial_value),
         "vol_rank": core.volatility_ranking(returns),
-        "risk_contrib": core.risk_contribution(returns, weights),
+        "risk_contrib": core.risk_contribution(returns, weights, tickers=tickers),
         "roll_vol": core.rolling_volatility(port_rets),
         "roll_ret": core.rolling_returns(port_rets),
         "port_rets": port_rets,
@@ -2299,7 +2305,12 @@ if _load_analytics:
 
     latest = prices.iloc[-1]
     holdings_df = core.holdings_breakdown(tickers, weights, asset_types, settings["initial_value"], latest)
-    base_risk_pack = compute_risk_pack(returns, tuple(weights.tolist()), settings["initial_value"])
+    base_risk_pack = compute_risk_pack(
+        returns,
+        tuple(weights.tolist()),
+        settings["initial_value"],
+        tickers_tuple=tuple(str(t).strip().upper() for t in tickers),
+    )
     insights = core.generate_portfolio_insights(
         tickers,
         weights,
@@ -2984,6 +2995,11 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
                 )
                 st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    f"**Sharpe Score (pts)** is a 0–15 health component "
+                    f"(≈ raw Sharpe × 10, capped) — not the Sharpe ratio itself. "
+                    f"Live portfolio Sharpe ratio: **{metrics.sharpe_ratio:.3f}**."
+                )
 
             section_header("What's Working / What's Not", "Plain summary of strengths and things to watch.")
             wn1, wn2 = st.columns(2)

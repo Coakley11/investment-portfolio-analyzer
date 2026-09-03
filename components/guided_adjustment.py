@@ -65,15 +65,17 @@ def _build_adjustment_table(
     return pd.DataFrame(rows)
 
 
-def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[str, str]:
-    """Return (issue, why) in plain language."""
+def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[str, str, str]:
+    """Return (issue, why, triggered_by) in plain language."""
     for d in health.recommendation_details[:3]:
         issue = translate_for_beginner(d.issue) if beginner else d.issue
         why = translate_for_beginner(d.why_it_matters) if beginner else d.why_it_matters
-        return issue, why
+        triggered = str(d.triggered_by or "").strip()
+        return issue, why, triggered
     return (
         "Your portfolio weights may have drifted from your selected objective.",
         "Drift can change how much risk you are taking compared to what you intended.",
+        "",
     )
 
 
@@ -174,7 +176,7 @@ def render_guided_portfolio_adjustment(
         )
         adj_tabs = None
 
-    issue, why = _primary_issue(health, beginner)
+    issue, why, triggered_by = _primary_issue(health, beginner)
     adj_table = _build_adjustment_table(health.rebalance_df, initial_value)
     has_changes = not adj_table.empty
 
@@ -189,6 +191,8 @@ def render_guided_portfolio_adjustment(
         with adj_tabs[0]:
             st.markdown("#### What the model noticed")
             st.markdown(issue)
+            if triggered_by:
+                st.caption(f"Triggered by: {triggered_by}")
         with adj_tabs[1]:
             st.markdown("#### Why it may matter")
             st.markdown(why)
@@ -214,6 +218,8 @@ def render_guided_portfolio_adjustment(
     with st.container(border=True):
         st.markdown("### Step 1 — Identify the issue")
         st.markdown(f"**What the model noticed:** {issue}")
+        if triggered_by:
+            st.caption(f"Triggered by: {triggered_by}")
 
     # Step 2
     with st.container(border=True):
@@ -222,6 +228,10 @@ def render_guided_portfolio_adjustment(
         if health.recommendation_details:
             d0 = health.recommendation_details[0]
             st.markdown(f"**In plain terms:** {translate_for_beginner(d0.text) if beginner else d0.text}")
+            if d0.evidence:
+                sharpe_ev = d0.evidence.get("Sharpe ratio")
+                if sharpe_ev:
+                    st.caption(f"Model Sharpe ratio used for this flag: **{sharpe_ev}**")
 
     # Step 3
     with st.container(border=True):

@@ -57,13 +57,27 @@ def render_action_plan(
     st.caption(DISCLAIMER)
 
 
+def _detail_display_text(detail: core.RecommendationDetail, fallback: str, *, beginner: bool) -> str:
+    raw = str(detail.text or "").strip()
+    if not raw:
+        raw = str(fallback or "").strip()
+    if not raw:
+        return ""
+    return translate_for_beginner(raw) if beginner else raw
+
+
 def render_recommendation_detail(
     detail: core.RecommendationDetail,
     index: int,
     *,
     beginner: bool = True,
-) -> None:
-    display_text = translate_for_beginner(detail.text) if beginner else detail.text
+    fallback_text: str = "",
+) -> bool:
+    """Render one recommendation. Returns False if there is nothing to show."""
+    display_text = _detail_display_text(detail, fallback_text, beginner=beginner)
+    if not display_text:
+        return False
+
     issue = translate_for_beginner(detail.issue) if beginner else detail.issue
     why = translate_for_beginner(detail.why_it_matters) if beginner else detail.why_it_matters
     dollars = detail.evidence.get("Approx. dollar amount") or detail.evidence.get("About how much money is involved")
@@ -86,7 +100,9 @@ def render_recommendation_detail(
         st.markdown(f"**What might I consider doing?** {detail.possible_benefit}")
         if dollars:
             st.markdown(f"**How many dollars are involved?** About `{dollars}` (model estimate).")
-        with st.expander("More detail", expanded=False):
+        # Flattened (no nested expander) so content is visible inside parent expanders.
+        with st.container(border=True):
+            st.markdown("**More detail**")
             st.markdown(f"**Triggered by:** {detail.triggered_by}")
             for key, val in detail.evidence.items():
                 if key in ("Approx. dollar amount",):
@@ -94,9 +110,9 @@ def render_recommendation_detail(
                 st.markdown(f"- {key}: `{val}`")
             st.caption(DISCLAIMER)
     else:
-        st.markdown(f"**Recommendation {index + 1}**")
-        st.markdown(display_text)
-        with st.expander("Why? — model reasoning", expanded=False):
+        with st.container(border=True):
+            st.markdown(f"**Recommendation {index + 1}**")
+            st.markdown(display_text)
             st.markdown(f"**What is the issue?** {issue}")
             st.markdown(f"**Why does it matter?** {why}")
             st.markdown(f"**What might you consider?** {detail.possible_benefit}")
@@ -106,6 +122,36 @@ def render_recommendation_detail(
                 for key, val in detail.evidence.items():
                     st.markdown(f"- {key}: `{val}`")
             st.caption(DISCLAIMER)
+    return True
+
+
+def _iter_recommendation_entries(
+    health: core.PortfolioHealthResult,
+) -> list[tuple[core.RecommendationDetail, str]]:
+    """Pair each detail with a text fallback from ``health.recommendations``."""
+    details = list(health.recommendation_details or [])
+    texts = list(health.recommendations or [])
+    if not details and texts:
+        details = [
+            core.RecommendationDetail(
+                text=t,
+                issue="See model commentary.",
+                why_it_matters="Educational flag from portfolio health rules.",
+                triggered_by="Portfolio Health evaluation.",
+                possible_benefit="Review allocation and assumptions.",
+                evidence={"Portfolio Health Score": f"{health.score:.0f}/100"},
+            )
+            for t in texts
+        ]
+        texts = [d.text for d in details]
+
+    out: list[tuple[core.RecommendationDetail, str]] = []
+    for i, detail in enumerate(details[:12]):
+        fallback = texts[i] if i < len(texts) else ""
+        if not str(detail.text or "").strip() and not str(fallback or "").strip():
+            continue
+        out.append((detail, fallback))
+    return out
 
 
 def render_recommendations_panel(
@@ -120,27 +166,20 @@ def render_recommendations_panel(
     lead = (
         "Each card answers: what is the issue, why it matters, what you might consider, and how much money is involved."
         if beginner
-        else "Expand each recommendation for issue, trigger metrics, and tradeoffs."
+        else "Each recommendation includes issue, trigger metrics, and tradeoffs."
     )
     st.markdown(f"#### {title}")
     st.caption(lead)
 
-    details = health.recommendation_details or [
-        core.RecommendationDetail(
-            text=t,
-            issue="See model commentary.",
-            why_it_matters="Educational flag from portfolio health rules.",
-            triggered_by="Portfolio Health evaluation.",
-            possible_benefit="Review allocation and assumptions.",
-            evidence={"Portfolio Health Score": f"{health.score:.0f}/100"},
-        )
-        for t in health.recommendations
-    ]
+    entries = _iter_recommendation_entries(health)
+    if not entries:
+        st.info("No model recommendations for this run.")
+        return
 
-    for i, detail in enumerate(details[:12]):
-        render_recommendation_detail(detail, i, beginner=beginner)
-        if i < len(details) - 1:
-            st.markdown("---")
+    shown = 0
+    for detail, fallback in entries:
+        if render_recommendation_detail(detail, shown, beginner=beginner, fallback_text=fallback):
+            shown += 1
 
 
 def render_action_plan_placeholder(beginner: bool = True) -> None:

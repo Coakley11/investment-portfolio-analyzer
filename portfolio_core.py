@@ -6,7 +6,7 @@ UI lives in streamlit_app.py; keep formulas stable when changing the dashboard.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -253,6 +253,45 @@ def normalize_weights(weights: Iterable[float]) -> np.ndarray:
     return w / w.sum()
 
 
+def align_returns_and_weights(
+    asset_returns: pd.DataFrame,
+    weights: Iterable[float],
+    tickers: Sequence[str] | None = None,
+) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
+    """Align return columns to ticker/weight order (holdings row order).
+
+    Prevents positional bugs when market-data columns are alphabetical (or any
+    other order) while ``weights`` follow the holdings/ticker list.
+    """
+    w = normalize_weights(weights)
+    if asset_returns is None or getattr(asset_returns, "empty", True):
+        labels = [str(t).strip().upper() for t in (tickers or [])]
+        if not labels:
+            labels = [f"A{i}" for i in range(len(w))]
+        return pd.DataFrame(columns=labels), w[: len(labels)], labels
+
+    col_map = {str(c).strip().upper(): c for c in asset_returns.columns}
+    if tickers is not None:
+        labels = [str(t).strip().upper() for t in tickers]
+        if len(labels) != len(w):
+            raise ValueError(
+                f"tickers length ({len(labels)}) must match weights length ({len(w)})"
+            )
+        missing = [t for t in labels if t not in col_map]
+        if missing:
+            raise ValueError(f"asset_returns missing columns for tickers: {missing}")
+        ordered_cols = [col_map[t] for t in labels]
+        aligned = asset_returns.loc[:, ordered_cols].copy()
+        aligned.columns = labels
+        return aligned, w, labels
+
+    # Legacy: assume weights already match the first len(w) columns' order.
+    labels = [str(c).strip().upper() for c in list(asset_returns.columns)[: len(w)]]
+    aligned = asset_returns.iloc[:, : len(w)].copy()
+    aligned.columns = labels
+    return aligned, w, labels
+
+
 def fetch_price_history(
     tickers: list[str],
     start: str,
@@ -289,9 +328,9 @@ def sharpe_ratio(
 def portfolio_daily_returns(
     asset_returns: pd.DataFrame,
     weights: np.ndarray,
+    tickers: Sequence[str] | None = None,
 ) -> pd.Series:
-    w = normalize_weights(weights)
-    aligned = asset_returns.iloc[:, : len(w)]
+    aligned, w, _labels = align_returns_and_weights(asset_returns, weights, tickers=tickers)
     return (aligned * w).sum(axis=1)
 
 
@@ -385,9 +424,10 @@ def volatility_ranking(asset_returns: pd.DataFrame) -> pd.DataFrame:
 def risk_contribution(
     asset_returns: pd.DataFrame,
     weights: np.ndarray,
+    tickers: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    w = normalize_weights(weights)
-    cov = asset_returns.cov() * TRADING_DAYS
+    aligned, w, labels = align_returns_and_weights(asset_returns, weights, tickers=tickers)
+    cov = aligned.cov() * TRADING_DAYS
     port_vol = float(np.sqrt(np.dot(w.T, np.dot(cov.values, w))))
     if port_vol <= 0:
         marginal = np.zeros(len(w))
@@ -396,7 +436,7 @@ def risk_contribution(
     contrib_pct = marginal / marginal.sum() if marginal.sum() > 0 else w
     return pd.DataFrame(
         {
-            "Ticker": asset_returns.columns[: len(w)],
+            "Ticker": labels,
             "Weight": w,
             "Risk Contribution": contrib_pct,
             "Risk Contribution (%)": contrib_pct * 100,
@@ -1564,15 +1604,16 @@ def _macro_sensitivity_by_type() -> dict[str, dict[str, float]]:
 def _return_contribution_df(
     asset_returns: pd.DataFrame,
     weights: np.ndarray,
+    tickers: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    w = normalize_weights(weights)
-    ann = asset_returns.mean() * TRADING_DAYS
+    aligned, w, labels = align_returns_and_weights(asset_returns, weights, tickers=tickers)
+    ann = aligned.mean() * TRADING_DAYS
     contrib = w * ann.values
     total = float(contrib.sum())
     pct = contrib / total if abs(total) > 1e-9 else contrib
     return pd.DataFrame(
         {
-            "Ticker": asset_returns.columns[: len(w)],
+            "Ticker": labels,
             "Weight": w,
             "Annual Return": ann.values[: len(w)],
             "Return Contribution": contrib,
@@ -1584,17 +1625,16 @@ def _return_contribution_df(
 def _drawdown_contribution_df(
     asset_returns: pd.DataFrame,
     weights: np.ndarray,
+    tickers: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    w = normalize_weights(weights)
-    dds = []
-    for col in asset_returns.columns[: len(w)]:
-        dds.append(maximum_drawdown(asset_returns[col]))
+    aligned, w, labels = align_returns_and_weights(asset_returns, weights, tickers=tickers)
+    dds = [maximum_drawdown(aligned[col]) for col in labels]
     dds_arr = np.asarray(dds)
     contrib = w * np.abs(dds_arr)
     total = float(contrib.sum()) if contrib.sum() > 0 else 1.0
     return pd.DataFrame(
         {
-            "Ticker": asset_returns.columns[: len(w)],
+            "Ticker": labels,
             "Weight": w,
             "Max Drawdown": dds_arr,
             "Drawdown Contribution (%)": contrib / total * 100,
@@ -1724,8 +1764,8 @@ def evaluate_portfolio_health(
 ) -> PortfolioHealthResult:
     w = normalize_weights(weights)
     profile = allocation_profile(tickers, w, asset_types)
-    ret_contrib = _return_contribution_df(asset_returns, w)
-    dd_contrib = _drawdown_contribution_df(asset_returns, w)
+    ret_contrib = _return_contribution_df(asset_returns, w, tickers=tickers)
+    dd_contrib = _drawdown_contribution_df(asset_returns, w, tickers=tickers)
     risk_df = risk_contrib_df.copy()
     macro_heatmap = _macro_heatmap_df(asset_types)
 
@@ -1819,7 +1859,8 @@ def evaluate_portfolio_health(
     breakdown = {
         "Return vs Benchmark": s_return,
         "Volatility Level": s_vol,
-        "Sharpe Ratio": s_sharpe,
+        # Score points (sharpe × 10, capped) — not the raw Sharpe ratio.
+        "Sharpe Score (pts)": s_sharpe,
         "Max Drawdown": s_dd,
         "Diversification": s_div,
         "Concentration Risk": s_conc,
