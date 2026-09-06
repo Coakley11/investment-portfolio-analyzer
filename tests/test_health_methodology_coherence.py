@@ -85,8 +85,9 @@ class TestPolicyBenchmarkConstruction(unittest.TestCase):
         self.assertGreater(n, 0)
         self.assertLess(n, len(idx_a))
         self.assertLess(n, len(idx_b))
-        # Gap thresholds still apply on aligned window.
-        self.assertIn(s_ret, {0.0, 4.0, 8.0, 12.0, 15.0})
+        # Gap thresholds still apply on aligned window (Option C: 20-pt scale).
+        allowed = {0.0, 20.0, 16.0, 8.0 * 20.0 / 15.0, 4.0 * 20.0 / 15.0}
+        self.assertTrue(any(abs(s_ret - a) < 1e-9 for a in allowed))
 
     def test_health_return_component_uses_policy_not_spy_label(self) -> None:
         idx = pd.date_range("2020-01-01", periods=80, freq="B")
@@ -125,8 +126,11 @@ class TestPolicyBenchmarkConstruction(unittest.TestCase):
             policy_benchmark_meta=meta,
             recommended_type_mix=core.OBJECTIVE_ALLOCATIONS["balanced growth"],
         )
-        self.assertIn("Return vs Policy Benchmark", health.score_breakdown)
+        self.assertIn("Policy-Relative Performance", health.score_breakdown)
         self.assertNotIn("Return vs Benchmark", health.score_breakdown)
+        self.assertNotIn("Return vs Policy Benchmark", health.score_breakdown)
+        self.assertNotIn("Sharpe Score (pts)", health.score_breakdown)
+        self.assertNotIn("Macro Regime Fit", health.score_breakdown)
         self.assertIn("60%", health.policy_benchmark_label)
         self.assertIn("SPY", health.policy_benchmark_detail)
         self.assertIn("AGG", health.policy_benchmark_detail)
@@ -246,8 +250,10 @@ class TestObjectiveAlignmentUnchanged(unittest.TestCase):
             policy_benchmark_meta=meta,
             recommended_type_mix=core.OBJECTIVE_ALLOCATIONS["balanced growth"],
         )
-        # avg_drift ≈ 0.0667 → s_obj = 10
-        self.assertAlmostEqual(float(health.score_breakdown["Objective Alignment"]), 10.0, places=5)
+        # avg_drift ≈ 0.0667 → s_obj = 30 - 0.0667*75 = 25
+        self.assertAlmostEqual(
+            float(health.score_breakdown["Policy / Objective Fit"]), 25.0, places=5
+        )
         self.assertAlmostEqual(health.avg_drift, (0.10 + 0.0 + 0.10) / 3, places=5)
 
 

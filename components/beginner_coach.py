@@ -411,8 +411,9 @@ def render_beginner_analyze_results(health: core.PortfolioHealthResult, *, objec
         st.markdown("**Goal alignment**")
         st.markdown(objective_alignment_plain_english(health.avg_drift, objective))
         st.markdown(
-            "**What the coach also considers:** diversification, risk level, and how your mix "
-            "fits the current economic assumptions — without requiring you to read formulas."
+            "**What the coach also considers:** whether you are on your plan, "
+            "how diversified the mix is, whether risk fits that plan, and whether "
+            "returns have roughly kept up with your policy — without requiring formulas."
         )
         if health.recommendation_details:
             d0 = health.recommendation_details[0]

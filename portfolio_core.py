@@ -5,7 +5,7 @@ UI lives in streamlit_app.py; keep formulas stable when changing the dashboard.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -237,6 +237,12 @@ class PortfolioHealthResult:
     policy_benchmark_label: str = ""
     policy_benchmark_detail: str = ""
     max_pairwise_abs_corr: float = 0.0
+    # Option C transparency / diagnostics (not part of Core Health points)
+    pillar_explanations: dict[str, str] = field(default_factory=dict)
+    construction_subscores: dict[str, float] = field(default_factory=dict)
+    health_diagnostics: dict[str, float] = field(default_factory=dict)
+    macro_check_score: float = 0.0
+    macro_check_max: float = 10.0
 
 
 OBJECTIVE_ALLOCATIONS: dict[str, dict[str, float]] = {
@@ -332,8 +338,13 @@ def score_return_vs_policy_benchmark(
     policy_returns: pd.Series | None,
 ) -> tuple[float, float, float, int]:
     """
-    Return (s_return, port_ann, policy_ann, n_aligned) using the same gap thresholds
-    as the legacy Return vs Benchmark ladder, on an explicit date intersection.
+    Policy-relative performance pillar (0–20).
+
+    Uses the same gap thresholds as the legacy 15-point ladder, rescaled to a
+    20-point maximum so the Option C core Health total remains 100.
+
+    Returns (s_return, port_ann, policy_ann, n_aligned) on an explicit date
+    intersection — never falls back to 100% SPY.
     """
     if policy_returns is None or portfolio_returns is None:
         return 0.0, 0.0, 0.0, 0
@@ -350,17 +361,295 @@ def score_return_vs_policy_benchmark(
     port_ann = annualized_return(aligned["port"])
     policy_ann = annualized_return(aligned["policy"])
     ret_gap = port_ann - policy_ann
+    # Legacy 15-pt ladder × (20/15), expressed as explicit 20-pt thresholds.
     if ret_gap >= 0.02:
-        s_return = 15.0
+        s_return = 20.0
     elif ret_gap >= 0:
-        s_return = 12.0
+        s_return = 16.0
     elif ret_gap >= -0.02:
-        s_return = 8.0
+        s_return = float(8.0 * 20.0 / 15.0)  # ≈ 10.667
     elif ret_gap >= -0.05:
-        s_return = 4.0
+        s_return = float(4.0 * 20.0 / 15.0)  # ≈ 5.333
     else:
         s_return = 0.0
     return float(s_return), float(port_ann), float(policy_ann), n
+
+
+# Alias used by Option C naming in Health UI / tests.
+score_policy_relative_performance = score_return_vs_policy_benchmark
+
+
+HEALTH_CORE_PILLAR_MAX: dict[str, float] = {
+    "Policy / Objective Fit": 30.0,
+    "Portfolio Construction": 30.0,
+    "Risk Appropriateness": 20.0,
+    "Policy-Relative Performance": 20.0,
+}
+HEALTH_CONSTRUCTION_DIV_MAX = 15.0
+HEALTH_CONSTRUCTION_CONC_MAX = 15.0
+# Diversification / concentration engines still score 0–12 internally.
+_HEALTH_DIV_ENGINE_MAX = 12.0
+_HEALTH_CONC_ENGINE_MAX = 12.0
+
+
+def score_policy_objective_fit(
+    profile: dict[str, float],
+    objective: str,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Policy / Objective Fit pillar (0–30).
+
+    Category drift vs OBJECTIVE_ALLOCATIONS (equity / bonds / tbills). Same
+    avg_drift definition as the legacy 0–12 Objective Alignment score, rescaled
+    to 30: ``clip(30 − avg_drift × 75, 0, 30)`` (zero at avg_drift = 0.40).
+    """
+    obj_targets = _objective_type_targets(objective)
+    eq_drift = abs(float(profile["equity"]) - obj_targets["equity"])
+    bond_drift = abs(float(profile["bonds"]) - obj_targets["bonds"])
+    tbill_drift = abs(float(profile["tbills"]) - obj_targets["tbills"])
+    avg_drift = (eq_drift + bond_drift + tbill_drift) / 3.0
+    points = float(np.clip(30.0 - avg_drift * 75.0, 0.0, 30.0))
+    return points, {
+        "avg_drift": float(avg_drift),
+        "equity_drift": float(eq_drift),
+        "bond_drift": float(bond_drift),
+        "tbill_drift": float(tbill_drift),
+        "targets": dict(obj_targets),
+        "current": {
+            "equity": float(profile["equity"]),
+            "bonds": float(profile["bonds"]),
+            "tbills": float(profile["tbills"]),
+        },
+        "points": points,
+        "max_points": HEALTH_CORE_PILLAR_MAX["Policy / Objective Fit"],
+    }
+
+
+def score_portfolio_construction(
+    tickers: Sequence[str],
+    weights: np.ndarray,
+    asset_types: Sequence[str],
+    corr: pd.DataFrame,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Portfolio Construction pillar (0–30) = Diversification (0–15) + Concentration (0–15).
+
+    Scales the existing 0–12 diversification and kind-aware concentration engines
+    by 15/12. Max pairwise correlation remains diagnostic only (inside div_diag).
+    """
+    s_div_engine, div_diag = score_portfolio_diversification(
+        tickers, weights, asset_types, corr
+    )
+    s_conc_engine, conc_diag = score_concentration_risk_kind_aware(
+        tickers, weights, asset_types
+    )
+    s_div = float(s_div_engine) * (HEALTH_CONSTRUCTION_DIV_MAX / _HEALTH_DIV_ENGINE_MAX)
+    s_conc = float(s_conc_engine) * (HEALTH_CONSTRUCTION_CONC_MAX / _HEALTH_CONC_ENGINE_MAX)
+    total = float(np.clip(s_div + s_conc, 0.0, 30.0))
+    return total, {
+        "diversification_pts": s_div,
+        "diversification_max": HEALTH_CONSTRUCTION_DIV_MAX,
+        "concentration_pts": s_conc,
+        "concentration_max": HEALTH_CONSTRUCTION_CONC_MAX,
+        "div_engine_pts": float(s_div_engine),
+        "conc_engine_pts": float(s_conc_engine),
+        "div_diag": div_diag,
+        "conc_diag": conc_diag,
+        "points": total,
+        "max_points": HEALTH_CORE_PILLAR_MAX["Portfolio Construction"],
+    }
+
+
+def score_risk_appropriateness(
+    portfolio_returns: pd.Series,
+    policy_returns: pd.Series | None,
+    *,
+    vol_max_pts: float = 16.0,
+    dd_max_pts: float = 4.0,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Risk Appropriateness pillar (0–20) — policy-relative, objective-aware.
+
+    Compares portfolio risk to the **same objective policy benchmark** (SPY/AGG/BIL
+    mix) over identical date-aligned observations. Absolute volatility ladders are
+    intentionally not used: Capital Preservation and Aggressive Growth are judged
+    against their own policy risk, not a shared vol threshold.
+
+    Formula
+    -------
+    Align ``portfolio_returns`` and ``policy_returns`` (inner join, dropna).
+    Require ≥ 6 observations; otherwise score 0.
+
+    **Volatility subscore (0–16)** — ``r = port_vol / policy_vol``
+    (annualized stdev × √252 on the aligned window):
+
+    - |r − 1| ≤ 0.15 → 16
+    - |r − 1| ≤ 0.30 → 12
+    - |r − 1| ≤ 0.50 → 8
+    - |r − 1| ≤ 0.75 → 4
+    - else → 0
+
+    If ``policy_vol`` ≤ 0: award 0 unless ``port_vol`` is also ≈ 0 (then full 16).
+
+    **Drawdown subscore (0–4)** — policy-relative only (not absolute DD grades):
+    ``excess = |port_dd| / |policy_dd|`` on the aligned window:
+
+    - excess ≤ 1.15 → 4
+    - excess ≤ 1.35 → 2
+    - else → 0
+
+    If ``|policy_dd|`` ≈ 0: award 4 when ``|port_dd|`` ≈ 0, else 0.
+
+    **Total** = vol_pts + dd_pts, clipped to 20.
+
+    Historical max drawdown remains a visible diagnostic outside this grade.
+    """
+    max_total = float(vol_max_pts + dd_max_pts)
+    empty = {
+        "ok": False,
+        "n_aligned": 0,
+        "port_vol": 0.0,
+        "policy_vol": 0.0,
+        "vol_ratio": float("nan"),
+        "vol_pts": 0.0,
+        "port_dd": 0.0,
+        "policy_dd": 0.0,
+        "dd_excess": float("nan"),
+        "dd_pts": 0.0,
+        "points": 0.0,
+        "max_points": max_total,
+        "vol_max_pts": float(vol_max_pts),
+        "dd_max_pts": float(dd_max_pts),
+    }
+    if policy_returns is None or portfolio_returns is None:
+        return 0.0, empty
+    port = portfolio_returns.copy()
+    pol = policy_returns.copy()
+    if not isinstance(port.index, pd.DatetimeIndex):
+        port.index = pd.to_datetime(port.index)
+    if not isinstance(pol.index, pd.DatetimeIndex):
+        pol.index = pd.to_datetime(pol.index)
+    aligned = pd.concat([port.rename("port"), pol.rename("policy")], axis=1, join="inner").dropna()
+    n = int(len(aligned))
+    if n < 6:
+        empty["n_aligned"] = n
+        return 0.0, empty
+
+    port_vol = annualized_volatility(aligned["port"])
+    policy_vol = annualized_volatility(aligned["policy"])
+    port_dd = maximum_drawdown(aligned["port"])
+    policy_dd = maximum_drawdown(aligned["policy"])
+
+    if policy_vol <= 1e-12:
+        vol_ratio = 1.0 if port_vol <= 1e-12 else float("inf")
+        vol_pts = float(vol_max_pts) if port_vol <= 1e-12 else 0.0
+    else:
+        vol_ratio = float(port_vol / policy_vol)
+        abs_dev = abs(vol_ratio - 1.0)
+        if abs_dev <= 0.15:
+            vol_pts = float(vol_max_pts)
+        elif abs_dev <= 0.30:
+            vol_pts = float(vol_max_pts) * 0.75
+        elif abs_dev <= 0.50:
+            vol_pts = float(vol_max_pts) * 0.50
+        elif abs_dev <= 0.75:
+            vol_pts = float(vol_max_pts) * 0.25
+        else:
+            vol_pts = 0.0
+
+    pol_dd_mag = abs(float(policy_dd))
+    port_dd_mag = abs(float(port_dd))
+    if pol_dd_mag <= 1e-12:
+        dd_excess = 1.0 if port_dd_mag <= 1e-12 else float("inf")
+        dd_pts = float(dd_max_pts) if port_dd_mag <= 1e-12 else 0.0
+    else:
+        dd_excess = float(port_dd_mag / pol_dd_mag)
+        if dd_excess <= 1.15:
+            dd_pts = float(dd_max_pts)
+        elif dd_excess <= 1.35:
+            dd_pts = float(dd_max_pts) * 0.5
+        else:
+            dd_pts = 0.0
+
+    total = float(np.clip(vol_pts + dd_pts, 0.0, max_total))
+    return total, {
+        "ok": True,
+        "n_aligned": n,
+        "port_vol": float(port_vol),
+        "policy_vol": float(policy_vol),
+        "vol_ratio": float(vol_ratio) if np.isfinite(vol_ratio) else float("nan"),
+        "vol_pts": float(vol_pts),
+        "port_dd": float(port_dd),
+        "policy_dd": float(policy_dd),
+        "dd_excess": float(dd_excess) if np.isfinite(dd_excess) else float("nan"),
+        "dd_pts": float(dd_pts),
+        "points": total,
+        "max_points": max_total,
+        "vol_max_pts": float(vol_max_pts),
+        "dd_max_pts": float(dd_max_pts),
+    }
+
+
+def compute_macro_environment_check(
+    profile: dict[str, float],
+    assumptions: ForwardMacroAssumptions,
+) -> tuple[float, list[str]]:
+    """
+    Environment / Macro Check (0–10) — diagnostic only; never added to Core Health.
+
+    Same rule logic as the former Macro Regime Fit Health component.
+    """
+    s_macro = 5.0
+    recession_prob = assumptions.recession_probability
+    notes: list[str] = []
+    if assumptions.rate_environment == "Falling Rates" and float(profile["equity"]) >= 0.45:
+        s_macro += 1.5
+    if assumptions.rate_environment in ("Rising Rates", "High Rate Environment") and float(profile["tbills"]) >= 0.10:
+        s_macro += 1.5
+    if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) <= 0.15:
+        s_macro += 1.0
+    elif assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.25:
+        s_macro -= 1.5
+    if recession_prob >= 0.5 and float(profile["equity"]) <= 0.55:
+        s_macro += 1.0
+    elif recession_prob >= 0.5 and float(profile["equity"]) > 0.70:
+        s_macro -= 2.0
+    if assumptions.economic_regime == "AI / Tech Boom" and float(profile["tech"]) >= 0.15:
+        s_macro += 1.0
+    if assumptions.economic_regime == "Credit Crisis" and float(profile["tbills"]) >= 0.15:
+        s_macro += 1.0
+    s_macro = float(np.clip(s_macro, 0, 10))
+
+    if assumptions.rate_environment == "Falling Rates":
+        notes.append(
+            "Falling-rate assumptions can support longer-duration bonds and rate-sensitive equities in this model."
+        )
+    if assumptions.rate_environment in ("Rising Rates", "High Rate Environment"):
+        notes.append(
+            "Rising/high-rate assumptions may favor shorter duration and cash-like buffers in stress scenarios."
+        )
+    if assumptions.inflation == "High Inflation":
+        notes.append("High inflation may pressure bond holdings, especially long-duration positions.")
+    if recession_prob >= 0.45:
+        notes.append("High recession probability suggests reviewing equity concentration and defensive buffers.")
+    if float(profile["tbills"]) >= 0.10:
+        notes.append("T-bill exposure may help during high-rate or uncertain environments in stress scenarios.")
+    if float(profile.get("tech", 0.0)) >= 0.15:
+        if assumptions.economic_regime == "AI / Tech Boom":
+            notes.append("A tech-heavy portfolio may benefit in an AI/Tech Boom regime in this framework.")
+        if assumptions.economic_regime == "Credit Crisis":
+            notes.append("A tech-heavy portfolio may suffer more in credit stress under modeled assumptions.")
+    if assumptions.valuation == "Expensive":
+        notes.append("An expensive valuation environment may limit forward upside in the model.")
+    if not notes:
+        notes.append(
+            "Environment check is informational only — it does not change the Core Portfolio Health Score."
+        )
+    notes.insert(
+        0,
+        f"Environment / Macro Check: {s_macro:.1f}/10 (not part of Core Health).",
+    )
+    return s_macro, notes
 
 
 def _economic_sleeve_weights(
@@ -2011,13 +2300,16 @@ def compute_forward_projection_with_profile(
 
 
 def _health_score_label(score: float) -> tuple[str, str]:
-    if score >= 80:
-        return "Healthy / On Track", "green"
-    if score >= 60:
-        return "Watch Carefully", "yellow"
+    """Labels for Core Health = construction + objective fit + risk fit + policy delivery."""
+    if score >= 85:
+        return "Well Aligned", "green"
+    if score >= 70:
+        return "Mostly On Plan", "green"
+    if score >= 55:
+        return "Mixed Alignment", "yellow"
     if score >= 40:
-        return "Needs Review", "orange"
-    return "High Risk / Rebalance Consideration", "red"
+        return "Needs Attention", "orange"
+    return "Off Plan", "red"
 
 
 def _macro_sensitivity_by_type() -> dict[str, dict[str, float]]:
@@ -2245,17 +2537,18 @@ def evaluate_portfolio_health(
 
     port_rets = portfolio_daily_returns(asset_returns, w, tickers=tickers)
     policy_meta = dict(policy_benchmark_meta or {})
-    s_return, port_ann_aligned, policy_ann, n_aligned = score_return_vs_policy_benchmark(
+    s_perf, port_ann_aligned, policy_ann, n_aligned = score_policy_relative_performance(
         port_rets, policy_benchmark_returns
     )
     # Do not fall back to 100% SPY for Health return scoring.
     if policy_benchmark_returns is None or n_aligned < 6:
-        s_return = 0.0
+        s_perf = 0.0
         policy_label = str(policy_meta.get("label") or "Policy benchmark unavailable")
         policy_detail = str(
             policy_meta.get("detail")
             or policy_meta.get("error")
-            or "Policy benchmark series missing or too short after date alignment — Return vs Policy scored 0."
+            or "Policy benchmark series missing or too short after date alignment — "
+            "Policy-Relative Performance scored 0."
         )
     else:
         policy_label = str(policy_meta.get("label") or "Policy benchmark")
@@ -2274,83 +2567,127 @@ def evaluate_portfolio_health(
     if benchmark_returns is not None and len(benchmark_returns.dropna()) > 5:
         spy_ann = annualized_return(benchmark_returns.dropna())
 
-    # Vol / Sharpe / Max DD Health points use the same ticker-aligned portfolio
-    # return series as Return vs Policy (not positional metrics that may ignore
-    # holdings→column identity when market data is alphabetically ordered).
+    # Diagnostics from ticker-aligned portfolio series (not Core Health points).
     port_ann = annualized_return(port_rets)
     vol = annualized_volatility(port_rets)
     raw_sharpe = sharpe_ratio(port_ann, vol, risk_free_rate)
     dd = maximum_drawdown(port_rets)
     port_sortino = sortino_ratio(port_rets, risk_free_rate)
 
-    # ── Score components (0–100) ──
+    policy_vol = 0.0
+    policy_sharpe = 0.0
+    if policy_benchmark_returns is not None and n_aligned >= 6:
+        pol = policy_benchmark_returns.copy()
+        if not isinstance(pol.index, pd.DatetimeIndex):
+            pol.index = pd.to_datetime(pol.index)
+        port_tmp = port_rets.copy()
+        if not isinstance(port_tmp.index, pd.DatetimeIndex):
+            port_tmp.index = pd.to_datetime(port_tmp.index)
+        aligned_diag = pd.concat(
+            [port_tmp.rename("port"), pol.rename("policy")], axis=1, join="inner"
+        ).dropna()
+        if len(aligned_diag) >= 6:
+            policy_vol = annualized_volatility(aligned_diag["policy"])
+            policy_sharpe = sharpe_ratio(
+                annualized_return(aligned_diag["policy"]),
+                policy_vol,
+                risk_free_rate,
+            )
+
+    # ── Option C Core Health pillars (sum = 100) ──
     ret_gap = port_ann_aligned - policy_ann if n_aligned >= 6 else port_ann - spy_ann
 
-    if vol <= 0.12:
-        s_vol = 12.0
-    elif vol <= 0.18:
-        s_vol = 10.0
-    elif vol <= 0.25:
-        s_vol = 6.0
-    else:
-        s_vol = 2.0
+    s_obj, obj_diag = score_policy_objective_fit(profile, objective)
+    avg_drift = float(obj_diag["avg_drift"])
 
-    s_sharpe = float(np.clip(raw_sharpe * 10, 0, 15))
-    if dd >= -0.10:
-        s_dd = 12.0
-    elif dd >= -0.20:
-        s_dd = 8.0
-    elif dd >= -0.30:
-        s_dd = 4.0
-    else:
-        s_dd = 0.0
-
-    s_div, div_diag = score_portfolio_diversification(tickers, w, asset_types, corr)
+    s_construction, construction_diag = score_portfolio_construction(
+        tickers, w, asset_types, corr
+    )
+    div_diag = construction_diag["div_diag"]
+    conc_diag = construction_diag["conc_diag"]
     max_corr = float(div_diag.get("max_abs_corr") or 0.0)
-
-    s_conc, conc_diag = score_concentration_risk_kind_aware(tickers, w, asset_types)
     max_w = float(conc_diag.get("top_weight") or profile["concentration"])
+    s_div = float(construction_diag["diversification_pts"])
+    s_conc = float(construction_diag["concentration_pts"])
 
-    obj_targets = _objective_type_targets(objective)
-    eq_drift = abs(float(profile["equity"]) - obj_targets["equity"])
-    bond_drift = abs(float(profile["bonds"]) - obj_targets["bonds"])
-    tbill_drift = abs(float(profile["tbills"]) - obj_targets["tbills"])
-    avg_drift = (eq_drift + bond_drift + tbill_drift) / 3
-    s_obj = float(np.clip(12 - avg_drift * 30, 0, 12))
-
-    s_macro = 5.0
-    recession_prob = assumptions.recession_probability
-    if assumptions.rate_environment == "Falling Rates" and float(profile["equity"]) >= 0.45:
-        s_macro += 1.5
-    if assumptions.rate_environment in ("Rising Rates", "High Rate Environment") and float(profile["tbills"]) >= 0.10:
-        s_macro += 1.5
-    if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) <= 0.15:
-        s_macro += 1.0
-    elif assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.25:
-        s_macro -= 1.5
-    if recession_prob >= 0.5 and float(profile["equity"]) <= 0.55:
-        s_macro += 1.0
-    elif recession_prob >= 0.5 and float(profile["equity"]) > 0.70:
-        s_macro -= 2.0
-    if assumptions.economic_regime == "AI / Tech Boom" and float(profile["tech"]) >= 0.15:
-        s_macro += 1.0
-    if assumptions.economic_regime == "Credit Crisis" and float(profile["tbills"]) >= 0.15:
-        s_macro += 1.0
-    s_macro = float(np.clip(s_macro, 0, 10))
+    s_risk, risk_diag = score_risk_appropriateness(port_rets, policy_benchmark_returns)
 
     breakdown = {
-        "Return vs Policy Benchmark": s_return,
-        "Volatility Level": s_vol,
-        # Score points (sharpe × 10, capped) — not the raw Sharpe ratio.
-        "Sharpe Score (pts)": s_sharpe,
-        "Max Drawdown": s_dd,
-        "Diversification": s_div,
-        "Concentration Risk": s_conc,
-        "Objective Alignment": s_obj,
-        "Macro Regime Fit": s_macro,
+        "Policy / Objective Fit": float(s_obj),
+        "Portfolio Construction": float(s_construction),
+        "Risk Appropriateness": float(s_risk),
+        "Policy-Relative Performance": float(s_perf),
     }
+    assert abs(sum(HEALTH_CORE_PILLAR_MAX.values()) - 100.0) < 1e-9
     score = float(np.clip(sum(breakdown.values()), 0, 100))
     score_label, score_color = _health_score_label(score)
+
+    pillar_explanations = {
+        "Policy / Objective Fit": (
+            f"{s_obj:.1f}/{HEALTH_CORE_PILLAR_MAX['Policy / Objective Fit']:.0f} — "
+            f"Category mix vs objective "
+            f"(equity {obj_diag['current']['equity']*100:.0f}% / "
+            f"bonds {obj_diag['current']['bonds']*100:.0f}% / "
+            f"T-Bills {obj_diag['current']['tbills']*100:.0f}% vs target "
+            f"{obj_diag['targets']['equity']*100:.0f}% / "
+            f"{obj_diag['targets']['bonds']*100:.0f}% / "
+            f"{obj_diag['targets']['tbills']*100:.0f}%; "
+            f"avg drift {avg_drift*100:.1f}%)."
+        ),
+        "Portfolio Construction": (
+            f"{s_construction:.1f}/{HEALTH_CORE_PILLAR_MAX['Portfolio Construction']:.0f} — "
+            f"Diversification {s_div:.1f}/{HEALTH_CONSTRUCTION_DIV_MAX:.0f} "
+            f"(sleeves, effective N, avg |corr|) + "
+            f"Concentration {s_conc:.1f}/{HEALTH_CONSTRUCTION_CONC_MAX:.0f} "
+            f"(kind-aware; top {conc_diag.get('top_ticker')} "
+            f"{max_w*100:.0f}% as {str(conc_diag.get('kind','')).replace('_',' ')}). "
+            f"Max pairwise |corr|={max_corr:.2f} is diagnostic only."
+        ),
+        "Risk Appropriateness": (
+            f"{s_risk:.1f}/{HEALTH_CORE_PILLAR_MAX['Risk Appropriateness']:.0f} — "
+            f"Policy-relative risk on {int(risk_diag.get('n_aligned') or 0)} aligned days: "
+            f"port vol {float(risk_diag.get('port_vol') or 0)*100:.1f}% vs "
+            f"policy vol {float(risk_diag.get('policy_vol') or 0)*100:.1f}% "
+            f"(vol pts {float(risk_diag.get('vol_pts') or 0):.1f}/"
+            f"{float(risk_diag.get('vol_max_pts') or 16):.0f}; "
+            f"DD-vs-policy pts {float(risk_diag.get('dd_pts') or 0):.1f}/"
+            f"{float(risk_diag.get('dd_max_pts') or 4):.0f}). "
+            f"Absolute max drawdown is not graded here."
+        ),
+        "Policy-Relative Performance": (
+            f"{s_perf:.1f}/{HEALTH_CORE_PILLAR_MAX['Policy-Relative Performance']:.0f} — "
+            f"Aligned ann. return gap vs objective policy "
+            f"({port_ann_aligned*100:.2f}% vs {policy_ann*100:.2f}%; "
+            f"gap {(ret_gap if n_aligned >= 6 else 0)*100:.2f} pp). "
+            f"Not an absolute SPY-beating score."
+        ),
+    }
+    construction_subscores = {
+        "Diversification": s_div,
+        "Concentration": s_conc,
+    }
+
+    # Environment / Macro Check — diagnostic only (does not enter Core Health).
+    s_macro, macro_fit = compute_macro_environment_check(profile, assumptions)
+    recession_prob = assumptions.recession_probability
+
+    health_diagnostics = {
+        "annual_return": float(port_ann),
+        "policy_annual_return": float(policy_ann) if n_aligned >= 6 else float("nan"),
+        "annual_volatility": float(vol),
+        "policy_volatility": float(policy_vol) if policy_vol > 0 else float(
+            risk_diag.get("policy_vol") or float("nan")
+        ),
+        "raw_sharpe": float(raw_sharpe),
+        "policy_sharpe": float(policy_sharpe),
+        "sortino": float(port_sortino),
+        "max_drawdown": float(dd),
+        "max_pairwise_abs_corr": float(max_corr),
+        "macro_check_score": float(s_macro),
+        "risk_vol_ratio": float(risk_diag["vol_ratio"])
+        if risk_diag.get("ok") and np.isfinite(risk_diag.get("vol_ratio", np.nan))
+        else float("nan"),
+    }
 
     # ── What's working / not ──
     whats_working: list[str] = []
@@ -2393,7 +2730,7 @@ def evaluate_portfolio_health(
                 f"{row['Ticker']} experienced a deep drawdown ({row['Max Drawdown'] * 100:.1f}%) — a potential risk contributor."
             )
 
-    if s_conc <= 4.0:
+    if float(construction_diag.get("conc_engine_pts") or 0) <= 4.0:
         whats_not.append(
             f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% "
             f"({str(conc_diag.get('kind', 'unknown')).replace('_', ' ')}) — concentration may be worth reviewing."
@@ -2480,7 +2817,7 @@ def evaluate_portfolio_health(
                 },
             )
         )
-    if s_conc <= 4.0:
+    if float(construction_diag.get("conc_engine_pts") or 0) <= 4.0:
         top_kind = str(conc_diag.get("kind") or "unknown")
         recommendation_details.append(
             _make_rec_detail(
@@ -2493,14 +2830,18 @@ def evaluate_portfolio_health(
                 ),
                 triggered_by=(
                     f"Largest holding = {profile['top_ticker']} at {max_w * 100:.1f}% "
-                    f"(kind={top_kind}; concentration score {s_conc:.0f}/12)."
+                    f"(kind={top_kind}; concentration score "
+                    f"{float(construction_diag.get('conc_engine_pts') or 0):.0f}/12 engine, "
+                    f"{s_conc:.1f}/{HEALTH_CONSTRUCTION_CONC_MAX:.0f} pillar)."
                 ),
                 possible_benefit="Greater diversification and lower concentration risk.",
                 evidence={
                     "Largest holding": profile["top_ticker"],
                     "Largest holding weight": f"{max_w * 100:.1f}%",
                     "Security kind": top_kind,
-                    "Concentration points": f"{s_conc:.0f}/12",
+                    "Concentration points": (
+                        f"{s_conc:.1f}/{HEALTH_CONSTRUCTION_CONC_MAX:.0f}"
+                    ),
                     "Equity allocation": f"{equity_pct:.0f}%",
                     "Portfolio objective": obj_label,
                 },
@@ -2598,31 +2939,9 @@ def evaluate_portfolio_health(
             )
         )
 
-    # ── Macro fit commentary ──
-    macro_fit: list[str] = []
-    if assumptions.rate_environment == "Falling Rates":
-        macro_fit.append(
-            "This portfolio may be relatively well-positioned for falling rates because growth exposure could benefit in the model."
-        )
-    elif assumptions.rate_environment in ("Rising Rates", "High Rate Environment"):
-        macro_fit.append(
-            "Rising or high-rate environments may favor T-bill/cash exposure — review bond duration accordingly."
-        )
-    if assumptions.inflation == "High Inflation":
-        macro_fit.append("High inflation may pressure bond holdings, especially long-duration positions.")
-    if recession_prob >= 0.50:
-        macro_fit.append("High recession probability suggests reviewing equity concentration and defensive buffers.")
-    if float(profile["tbills"]) >= 0.10:
-        macro_fit.append("T-bill exposure may help during high-rate or uncertain environments in stress scenarios.")
-    if float(profile["tech"]) >= 0.20:
-        if assumptions.economic_regime == "AI / Tech Boom":
-            macro_fit.append("A tech-heavy portfolio may benefit in an AI/Tech Boom regime in this framework.")
-        elif assumptions.economic_regime == "Credit Crisis":
-            macro_fit.append("A tech-heavy portfolio may suffer more in credit stress under modeled assumptions.")
-    if assumptions.valuation in ("Expensive", "Bubble-like"):
-        macro_fit.append("An expensive valuation environment may limit forward upside in the model.")
-
+    # Macro narrative comes from Environment / Macro Check (not Core Health).
     # ── Rebalance / drift table (category-preserving ticker targets) ──
+    obj_targets = obj_diag["targets"]
     obj_eq, obj_bond, obj_tb = obj_targets["equity"], obj_targets["bonds"], obj_targets["tbills"]
     obj_w, obj_orphans = build_category_preserving_ticker_targets(tickers, asset_types, obj_targets)
 
@@ -2785,20 +3104,36 @@ def evaluate_portfolio_health(
         ]
 
     # ── Status message ──
-    health_word = "strong" if score >= 80 else "moderately healthy" if score >= 60 else "mixed" if score >= 40 else "stressed"
-    beta_note = (
-        f"lower market sensitivity than SPY (beta {metrics.beta_spy:.2f})"
-        if metrics.beta_spy < 0.95
-        else f"market-like sensitivity (beta {metrics.beta_spy:.2f})"
+    health_word = (
+        "well aligned with your plan"
+        if score >= 85
+        else "mostly on plan"
+        if score >= 70
+        else "mixed in plan alignment"
+        if score >= 55
+        else "needing attention vs your plan"
+        if score >= 40
+        else "off plan versus your stated objective"
     )
-    sharpe_note = "strong" if raw_sharpe >= 0.8 else "adequate" if raw_sharpe >= 0.4 else "weak"
+    weak_pillars = sorted(
+        ((k, v) for k, v in breakdown.items()),
+        key=lambda kv: kv[1] / HEALTH_CORE_PILLAR_MAX[kv[0]],
+    )
+    weakest_name, weakest_pts = weak_pillars[0]
+    weakest_max = HEALTH_CORE_PILLAR_MAX[weakest_name]
     conc_note = ""
     if max_w >= 0.30:
-        conc_note = f", but {profile['top_ticker']} concentration ({max_w * 100:.0f}%) should be monitored"
+        conc_note = (
+            f" Largest holding {profile['top_ticker']} is {max_w * 100:.0f}% — "
+            "review concentration diagnostics."
+        )
     status_message = (
-        f"Your portfolio appears {health_word} (score {score:.0f}/100). "
-        f"It has {beta_note} because of the current mix, "
-        f"but the Sharpe ratio is {sharpe_note}{conc_note}. "
+        f"Core Portfolio Health is {health_word} ({score:.0f}/100) based on "
+        f"objective fit, construction, risk appropriateness, and policy-relative delivery. "
+        f"Lowest pillar right now: {weakest_name} ({weakest_pts:.1f}/{weakest_max:.0f})."
+        f"{conc_note} "
+        f"Sharpe ({raw_sharpe:.2f}) and Sortino ({port_sortino:.2f}) are diagnostics — "
+        f"not Health points. "
         f"This is model-based commentary for educational purposes — not financial advice."
     )
 
@@ -2832,6 +3167,11 @@ def evaluate_portfolio_health(
         policy_benchmark_label=policy_label,
         policy_benchmark_detail=policy_detail,
         max_pairwise_abs_corr=float(max_corr),
+        pillar_explanations=pillar_explanations,
+        construction_subscores=construction_subscores,
+        health_diagnostics=health_diagnostics,
+        macro_check_score=float(s_macro),
+        macro_check_max=10.0,
     )
 
 

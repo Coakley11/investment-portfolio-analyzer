@@ -3046,33 +3046,83 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
 
             section_header(
                 "Portfolio Health Score",
-                "Composite score from return, risk, diversification, objective, and macro fit.",
+                "Core Health = objective fit + construction + risk appropriateness + policy-relative delivery (100 pts).",
             )
             sc1, sc2 = st.columns([1, 2])
             with sc1:
                 render_health_score_card(health)
             with sc2:
-                breakdown_df = pd.DataFrame(
-                    {"Component": list(health.score_breakdown.keys()), "Points": list(health.score_breakdown.values())}
+                pillar_rows = []
+                for name, pts in health.score_breakdown.items():
+                    mx = float(core.HEALTH_CORE_PILLAR_MAX.get(name, 0.0))
+                    pillar_rows.append(
+                        {
+                            "Pillar": name,
+                            "Points": round(float(pts), 2),
+                            "Max": int(mx),
+                        }
+                    )
+                st.dataframe(pd.DataFrame(pillar_rows), use_container_width=True, hide_index=True)
+                for name, expl in (getattr(health, "pillar_explanations", None) or {}).items():
+                    st.caption(expl)
+                subs = getattr(health, "construction_subscores", None) or {}
+                if subs:
+                    st.caption(
+                        "Construction split — "
+                        f"Diversification {subs.get('Diversification', 0):.1f}/15 · "
+                        f"Concentration {subs.get('Concentration', 0):.1f}/15."
+                    )
+
+            diag = getattr(health, "health_diagnostics", None) or {}
+            section_header(
+                "Health diagnostics (not part of the 100)",
+                "Risk-adjusted ratios, drawdown, and correlations remain visible as analytics.",
+            )
+            dcols = st.columns(4)
+            with dcols[0]:
+                st.metric("Raw Sharpe", f"{float(diag.get('raw_sharpe', metrics.sharpe_ratio)):.3f}")
+                st.metric("Sortino", f"{float(diag.get('sortino', metrics.sortino_ratio)):.3f}")
+            with dcols[1]:
+                pol_sh = diag.get("policy_sharpe")
+                st.metric(
+                    "Sharpe vs policy",
+                    (
+                        f"{float(diag.get('raw_sharpe', 0)):.3f} / {float(pol_sh):.3f}"
+                        if pol_sh is not None and np.isfinite(float(pol_sh))
+                        else "n/a"
+                    ),
                 )
-                st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+                st.metric(
+                    "Ann. return",
+                    f"{float(diag.get('annual_return', metrics.annual_return)) * 100:.2f}%",
+                )
+            with dcols[2]:
+                st.metric(
+                    "Ann. volatility",
+                    f"{float(diag.get('annual_volatility', metrics.volatility)) * 100:.2f}%",
+                )
+                pol_vol = diag.get("policy_volatility")
+                st.metric(
+                    "Policy volatility",
+                    f"{float(pol_vol) * 100:.2f}%" if pol_vol is not None and np.isfinite(float(pol_vol)) else "n/a",
+                )
+            with dcols[3]:
+                st.metric(
+                    "Max drawdown",
+                    f"{float(diag.get('max_drawdown', metrics.max_drawdown)) * 100:.2f}%",
+                )
+                st.metric(
+                    "Max |pairwise ρ|",
+                    f"{float(getattr(health, 'max_pairwise_abs_corr', 0.0)):.2f}",
+                )
+            if getattr(health, "policy_benchmark_label", ""):
                 st.caption(
-                    f"**Sharpe Score (pts)** is a 0–15 health component "
-                    f"(≈ raw Sharpe × 10, capped) — not the Sharpe ratio itself. "
-                    f"Live portfolio Sharpe ratio: **{metrics.sharpe_ratio:.3f}**."
+                    f"**Policy benchmark:** {health.policy_benchmark_label}. "
+                    f"{getattr(health, 'policy_benchmark_detail', '')}"
                 )
-                if getattr(health, "policy_benchmark_label", ""):
-                    st.caption(
-                        f"**Return vs Policy Benchmark:** {health.policy_benchmark_label}. "
-                        f"{getattr(health, 'policy_benchmark_detail', '')}"
-                    )
-                if getattr(health, "max_pairwise_abs_corr", None) is not None:
-                    st.caption(
-                        f"**Diversification diagnostic:** max pairwise |correlation| = "
-                        f"**{float(health.max_pairwise_abs_corr):.2f}** "
-                        f"(informational — the diversification component uses sleeve breadth, "
-                        f"effective number of holdings, and average correlation)."
-                    )
+            st.caption(
+                "Sharpe and Sortino are diagnostics — they do **not** add points to Core Health."
+            )
 
             section_header("What's Working / What's Not", "Plain summary of strengths and things to watch.")
             wn1, wn2 = st.columns(2)
@@ -3146,7 +3196,13 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 if "($)" in col:
                     cat_disp[col] = cat_disp[col].map(lambda x: _money(float(x)) if pd.notna(x) else x)
             st.dataframe(cat_disp, use_container_width=True, hide_index=True)
-            section_header("Macro Environment Fit", "Commentary based on your macro assumptions and portfolio mix.")
+            section_header(
+                "Environment / Macro Check",
+                "Near-term regime commentary from your assumptions — not part of Core Portfolio Health.",
+            )
+            macro_pts = float(getattr(health, "macro_check_score", 0.0))
+            macro_max = float(getattr(health, "macro_check_max", 10.0))
+            st.caption(f"**Check score:** {macro_pts:.1f}/{macro_max:.0f} (diagnostic only).")
             for note in health.macro_fit:
                 st.markdown(f"- {note}")
 

@@ -133,9 +133,9 @@ class TestExtendedMetricsTickerAlignment(unittest.TestCase):
             )
             scores.append(
                 (
-                    health.score_breakdown["Volatility Level"],
-                    health.score_breakdown["Sharpe Score (pts)"],
-                    health.score_breakdown["Max Drawdown"],
+                    health.score_breakdown["Risk Appropriateness"],
+                    health.score_breakdown["Policy-Relative Performance"],
+                    health.score_breakdown["Portfolio Construction"],
                     health.score,
                 )
             )
@@ -172,7 +172,7 @@ class TestExtendedMetricsTickerAlignment(unittest.TestCase):
                 policy_benchmark_returns=policy,
                 policy_benchmark_meta=meta,
             )
-            s_vals.append(health.score_breakdown["Return vs Policy Benchmark"])
+            s_vals.append(health.score_breakdown["Policy-Relative Performance"])
         self.assertEqual(s_vals[0], s_vals[1])
 
 

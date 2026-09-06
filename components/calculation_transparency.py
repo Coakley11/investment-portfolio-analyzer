@@ -14,7 +14,7 @@ DRIFT_SCORE = """
 2. Look up objective targets from `OBJECTIVE_ALLOCATIONS` for your selected objective.
 3. Per-category absolute drift: `|current_category − objective_category|`
 4. **Average drift** (0–1 scale): `(eq_drift + bond_drift + tbill_drift) / 3`
-5. **Objective Alignment subscore** (0–12 of 100 health points): `clip(12 − avg_drift × 30, 0, 12)`
+5. **Policy / Objective Fit** (0–30 of 100 Core Health points): `clip(30 − avg_drift × 75, 0, 30)`
 
 **Not included in drift score**
 

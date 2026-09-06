@@ -1,4 +1,4 @@
-"""Regression: Risk Contribution ticker/weight alignment + Sharpe points vs ratio."""
+"""Regression: Risk Contribution ticker/weight alignment + Sharpe as diagnostic only."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ def _synthetic_returns(columns: list[str], *, seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2020-01-01", periods=80, freq="B")
     data = rng.normal(0.0004, 0.01, size=(len(idx), len(columns)))
-    # Make BND lower vol so risk shares differ from weights.
     for i, col in enumerate(columns):
         if col == "BND":
             data[:, i] *= 0.35
@@ -31,7 +30,6 @@ def _synthetic_returns(columns: list[str], *, seed: int = 0) -> pd.DataFrame:
 
 class TestComputeRiskPackStreamlitPath(unittest.TestCase):
     def test_build_risk_pack_preserves_pilot_weights_with_reordered_columns(self) -> None:
-        """Same contract as streamlit_app.compute_risk_pack → core.build_risk_pack."""
         rets = _synthetic_returns(sorted(_PILOT_TICKERS))
         pack = core.build_risk_pack(
             rets,
@@ -50,7 +48,6 @@ class TestComputeRiskPackStreamlitPath(unittest.TestCase):
         self.assertEqual(len(pack["port_rets"]), len(rets))
 
     def test_streamlit_compute_risk_pack_signature_matches_app(self) -> None:
-        """Import the cached Streamlit wrapper and call it like streamlit_app does."""
         from streamlit_app import compute_risk_pack
 
         rets = _synthetic_returns(sorted(_PILOT_TICKERS))
@@ -68,7 +65,6 @@ class TestComputeRiskPackStreamlitPath(unittest.TestCase):
         self.assertAlmostEqual(weight_map["VXUS"], 0.20, places=6)
         self.assertAlmostEqual(weight_map["BND"], 0.30, places=6)
         self.assertAlmostEqual(weight_map["VNQ"], 0.10, places=6)
-
 
     def test_return_and_drawdown_contribution_siblings_align(self) -> None:
         rets = _synthetic_returns(sorted(_PILOT_TICKERS))
@@ -91,7 +87,7 @@ class TestComputeRiskPackStreamlitPath(unittest.TestCase):
         np.testing.assert_allclose(w, _PILOT_WEIGHTS)
 
 
-class TestSharpePointsVsRatio(unittest.TestCase):
+class TestSharpeIsDiagnosticNotCoreHealth(unittest.TestCase):
     def _metrics(self, sharpe: float) -> core.ExtendedPortfolioMetrics:
         return core.ExtendedPortfolioMetrics(
             annual_return=0.05,
@@ -104,9 +100,8 @@ class TestSharpePointsVsRatio(unittest.TestCase):
             projected_value=105_000.0,
         )
 
-    def test_breakdown_uses_sharpe_score_pts_not_ratio_label(self) -> None:
+    def test_breakdown_has_no_sharpe_score_pts(self) -> None:
         rets = _synthetic_returns(_PILOT_TICKERS, seed=1)
-        # Deliberately wrong metrics sharpe — Health must score from aligned port_rets.
         metrics = self._metrics(0.99)
         assumptions = core.ForwardMacroAssumptions(
             rate_environment="Stable Rates",
@@ -117,15 +112,6 @@ class TestSharpePointsVsRatio(unittest.TestCase):
         )
         rc = core.risk_contribution(rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS)
         corr = rets.corr()
-        port_rets = core.portfolio_daily_returns(
-            rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS
-        )
-        raw = core.sharpe_ratio(
-            core.annualized_return(port_rets),
-            core.annualized_volatility(port_rets),
-            0.04,
-        )
-        expected_pts = float(np.clip(raw * 10, 0, 15))
         health = core.evaluate_portfolio_health(
             list(_PILOT_TICKERS),
             _PILOT_WEIGHTS,
@@ -139,13 +125,23 @@ class TestSharpePointsVsRatio(unittest.TestCase):
             risk_free_rate=0.04,
             initial_value=100_000.0,
         )
-        self.assertIn("Sharpe Score (pts)", health.score_breakdown)
+        self.assertNotIn("Sharpe Score (pts)", health.score_breakdown)
         self.assertNotIn("Sharpe Ratio", health.score_breakdown)
-        pts = float(health.score_breakdown["Sharpe Score (pts)"])
-        self.assertAlmostEqual(pts, expected_pts, places=5)
-        # Must not trust the planted metrics.sharpe_ratio (0.99 → 9.9 pts).
-        self.assertNotAlmostEqual(pts, metrics.sharpe_ratio * 10, places=1)
+        self.assertIn("raw_sharpe", health.health_diagnostics)
+        self.assertEqual(
+            set(health.score_breakdown),
+            set(core.HEALTH_CORE_PILLAR_MAX),
+        )
 
+        port_rets = core.portfolio_daily_returns(
+            rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS
+        )
+        raw = core.sharpe_ratio(
+            core.annualized_return(port_rets),
+            core.annualized_volatility(port_rets),
+            0.04,
+        )
+        self.assertAlmostEqual(health.health_diagnostics["raw_sharpe"], raw, places=6)
         if raw < 0.4:
             sharpe_recs = [
                 d
@@ -153,11 +149,7 @@ class TestSharpePointsVsRatio(unittest.TestCase):
                 if "Sharpe" in d.issue or "sharpe" in d.triggered_by.lower()
             ]
             self.assertTrue(sharpe_recs)
-            self.assertIn("below 0.4", sharpe_recs[0].triggered_by.lower())
-            self.assertEqual(
-                sharpe_recs[0].evidence.get("Sharpe ratio"),
-                f"{raw:.2f}",
-            )
+
 
 class TestRecommendationsRenderFallback(unittest.TestCase):
     def test_blank_detail_text_falls_back_to_recommendations_list(self) -> None:
@@ -171,7 +163,7 @@ class TestRecommendationsRenderFallback(unittest.TestCase):
         )
         health = core.PortfolioHealthResult(
             score=50.0,
-            score_label="Fair",
+            score_label="Needs Attention",
             score_color="#f59e0b",
             status_message="ok",
             whats_working=["a"],
