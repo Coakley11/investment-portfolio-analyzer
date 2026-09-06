@@ -6,7 +6,7 @@ UI lives in streamlit_app.py; keep formulas stable when changing the dashboard.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -251,6 +251,131 @@ def normalize_weights(weights: Iterable[float]) -> np.ndarray:
     if w.sum() <= 0:
         raise ValueError("Portfolio weights must sum to a positive value.")
     return w / w.sum()
+
+
+# Health/Guided: Equity sleeve includes REIT / Dividend ETF (same as allocation_profile).
+_EQUITY_BUCKET_TYPES: tuple[str, ...] = ("Equity", "REIT", "Dividend ETF")
+_ORPHAN_SLEEVE_LABELS: dict[str, str] = {
+    "equity": "Equity (unrepresented)",
+    "bonds": "Bonds (unrepresented)",
+    "tbills": "Cash / T-Bills (unrepresented)",
+}
+_WEIGHT_DUST_EPS = 1e-8
+
+
+def threshold_weight_dust(
+    weights: Iterable[float],
+    *,
+    eps: float = _WEIGHT_DUST_EPS,
+    renormalize: bool = True,
+) -> np.ndarray:
+    """Zero numerical dust (e.g. SLSQP ~1e-12) so displays do not show fake precision."""
+    w = np.asarray(list(weights), dtype=float)
+    w = np.where(np.abs(w) < eps, 0.0, w)
+    if renormalize and float(w.sum()) > 0:
+        return normalize_weights(w)
+    return w
+
+
+def format_weight_pct(weight: float, *, decimals: int = 2, eps: float = _WEIGHT_DUST_EPS) -> str:
+    """Format a portfolio weight as a percentage, treating dust as 0%."""
+    w = 0.0 if abs(float(weight)) < eps else float(weight)
+    return f"{w * 100:.{decimals}f}%"
+
+
+def build_category_preserving_ticker_targets(
+    tickers: Sequence[str],
+    asset_types: Sequence[str],
+    category_targets: dict[str, float],
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """
+    Split category objective weights across eligible holdings without renormalizing
+    missing sleeves into represented securities.
+
+    Returns
+    -------
+    ticker_weights
+        Absolute target weight per holding (may sum to less than 1.0).
+    orphan_sleeves
+        Explicit unrepresented category targets (e.g. T-Bills when no T-Bill holding).
+        Each dict: ticker label, weight, asset_type, category key, orphan=True.
+    """
+    n = len(tickers)
+    if n != len(asset_types):
+        raise ValueError("tickers and asset_types must have the same length.")
+    w = np.zeros(n, dtype=float)
+    orphans: list[dict[str, Any]] = []
+
+    eq_idx = [i for i, at in enumerate(asset_types) if at in _EQUITY_BUCKET_TYPES]
+    bond_idx = [i for i, at in enumerate(asset_types) if at == "Bonds"]
+    tb_idx = [i for i, at in enumerate(asset_types) if at == "T-Bills"]
+
+    eq_t = float(category_targets.get("equity", 0.0) or 0.0)
+    bond_t = float(category_targets.get("bonds", 0.0) or 0.0)
+    tb_t = float(category_targets.get("tbills", 0.0) or 0.0)
+
+    def _assign(indices: list[int], target: float, category: str, asset_type: str) -> None:
+        if target <= 0:
+            return
+        if indices:
+            share = target / len(indices)
+            for i in indices:
+                w[i] = share
+            return
+        orphans.append(
+            {
+                "Ticker": _ORPHAN_SLEEVE_LABELS[category],
+                "weight": float(target),
+                "Asset Type": asset_type,
+                "category": category,
+                "orphan": True,
+            }
+        )
+
+    _assign(eq_idx, eq_t, "equity", "Equity")
+    _assign(bond_idx, bond_t, "bonds", "Bonds")
+    _assign(tb_idx, tb_t, "tbills", "T-Bills")
+    return w, orphans
+
+
+def is_orphan_rebalance_row(row: Any) -> bool:
+    """True for explicit unrepresented category sleeves in the rebalance table."""
+    try:
+        if bool(row.get("Orphan Sleeve")) if hasattr(row, "get") else bool(row["Orphan Sleeve"]):
+            return True
+    except Exception:
+        pass
+    try:
+        ticker = str(row.get("Ticker", "") if hasattr(row, "get") else row["Ticker"])
+    except Exception:
+        return False
+    return "(unrepresented)" in ticker
+
+
+def aggregate_guided_category_exposure(
+    tickers: Sequence[str],
+    asset_types: Sequence[str],
+    ticker_weights: Iterable[float],
+    orphan_sleeves: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, float]:
+    """Roll ticker + orphan sleeve weights into Equity / Bonds / T-Bills (Health rules)."""
+    w = np.asarray(list(ticker_weights), dtype=float)
+    equity = float(
+        sum(w[i] for i, at in enumerate(asset_types) if i < len(w) and at in _EQUITY_BUCKET_TYPES)
+    )
+    bonds = float(sum(w[i] for i, at in enumerate(asset_types) if i < len(w) and at == "Bonds"))
+    tbills = float(sum(w[i] for i, at in enumerate(asset_types) if i < len(w) and at == "T-Bills"))
+    for sleeve in orphan_sleeves or ():
+        wt = float(sleeve.get("weight", 0.0) or 0.0)
+        cat = str(sleeve.get("category") or "").strip().lower()
+        at = str(sleeve.get("Asset Type") or "")
+        if cat == "equity" or at in _EQUITY_BUCKET_TYPES:
+            equity += wt
+        elif cat == "bonds" or at == "Bonds":
+            bonds += wt
+        elif cat == "tbills" or at == "T-Bills":
+            tbills += wt
+    return {"equity": equity, "bonds": bonds, "tbills": tbills}
 
 
 def align_returns_and_weights(
@@ -561,7 +686,7 @@ def optimize_max_sharpe(
     bounds = tuple((0.0, 1.0) for _ in range(n_assets))
     x0 = np.ones(n_assets) / n_assets
     result = minimize(neg_sharpe, x0, method="SLSQP", bounds=bounds, constraints=constraints)
-    w = normalize_weights(result.x)
+    w = threshold_weight_dust(normalize_weights(result.x))
     r, v = _portfolio_stats(w, mean_returns, cov)
     return OptimizerResult(
         weights=w,
@@ -586,7 +711,7 @@ def optimize_min_volatility(
     bounds = tuple((0.0, 1.0) for _ in range(n_assets))
     x0 = np.ones(n_assets) / n_assets
     result = minimize(vol, x0, method="SLSQP", bounds=bounds, constraints=constraints)
-    w = normalize_weights(result.x)
+    w = threshold_weight_dust(normalize_weights(result.x))
     r, v = _portfolio_stats(w, mean_returns, cov)
     return OptimizerResult(
         weights=w,
@@ -2148,34 +2273,15 @@ def evaluate_portfolio_health(
     if assumptions.valuation in ("Expensive", "Bubble-like"):
         macro_fit.append("An expensive valuation environment may limit forward upside in the model.")
 
-    # ── Rebalance / drift table ──
+    # ── Rebalance / drift table (category-preserving ticker targets) ──
     obj_eq, obj_bond, obj_tb = obj_targets["equity"], obj_targets["bonds"], obj_targets["tbills"]
-    type_to_obj = {
-        "Equity": obj_eq,
-        "REIT": obj_eq * 0.5,
-        "Dividend ETF": obj_eq * 0.5,
-        "Bonds": obj_bond,
-        "T-Bills": obj_tb,
-        "Other": 0.05,
-    }
-    obj_w = np.array([type_to_obj.get(at, 0.05) for at in asset_types], dtype=float)
-    obj_w = normalize_weights(obj_w)
+    obj_w, obj_orphans = build_category_preserving_ticker_targets(tickers, asset_types, obj_targets)
 
     opt_w = optimizer_weights if optimizer_weights is not None else w.copy()
+    if optimizer_weights is not None:
+        opt_w = threshold_weight_dust(opt_w)
     rec_mix = recommended_type_mix or obj_targets
-    rec_w = np.zeros(len(tickers))
-    for i, at in enumerate(asset_types):
-        if at in ("Equity", "REIT", "Dividend ETF"):
-            rec_w[i] = rec_mix.get("equity", 0.6) / max(
-                sum(1 for a in asset_types if a in ("Equity", "REIT", "Dividend ETF")), 1
-            )
-        elif at == "Bonds":
-            rec_w[i] = rec_mix.get("bonds", 0.3) / max(sum(1 for a in asset_types if a == "Bonds"), 1)
-        elif at == "T-Bills":
-            rec_w[i] = rec_mix.get("tbills", 0.1) / max(sum(1 for a in asset_types if a == "T-Bills"), 1)
-        else:
-            rec_w[i] = 0.02
-    rec_w = normalize_weights(rec_w)
+    rec_w, rec_orphans = build_category_preserving_ticker_targets(tickers, asset_types, rec_mix)
 
     rebalance_rows = []
     for i, t in enumerate(tickers):
@@ -2195,16 +2301,74 @@ def evaluate_portfolio_health(
                 "Ticker": t,
                 "Current (%)": round(w[i] * 100, 1),
                 "Objective (%)": round(obj_w[i] * 100, 1),
-                "Optimizer (%)": round(opt_w[i] * 100, 1),
+                "Optimizer (%)": round(float(opt_w[i]) * 100, 1),
                 "Recommended (%)": round(rec_w[i] * 100, 1),
                 "Drift vs Objective (%)": round(drift_obj, 1),
                 "Drift vs Optimizer (%)": round(drift_opt, 1),
                 "Model Note": suggestion or "Within tolerance",
+                "Orphan Sleeve": False,
             }
         )
+
+    for sleeve in obj_orphans:
+        orphan_w = float(sleeve["weight"])
+        orphan_ticker = str(sleeve["Ticker"])
+        # Recommended orphan for same missing category (if present)
+        rec_match = next(
+            (s for s in rec_orphans if s.get("category") == sleeve.get("category")),
+            None,
+        )
+        rec_orphan_w = float(rec_match["weight"]) if rec_match else 0.0
+        drift_obj = (0.0 - orphan_w) * 100
+        rebalance_rows.append(
+            {
+                "Ticker": orphan_ticker,
+                "Current (%)": 0.0,
+                "Objective (%)": round(orphan_w * 100, 1),
+                "Optimizer (%)": 0.0,
+                "Recommended (%)": round(rec_orphan_w * 100, 1),
+                "Drift vs Objective (%)": round(drift_obj, 1),
+                "Drift vs Optimizer (%)": 0.0,
+                "Model Note": (
+                    f"No holding maps to this category — keep {orphan_w * 100:.0f}% as an explicit "
+                    f"{sleeve.get('Asset Type', 'category')} target (e.g. BIL/SGOV/cash). "
+                    "Not added to My Portfolio automatically."
+                ),
+                "Orphan Sleeve": True,
+            }
+        )
+        recommendation_details.append(
+            _make_rec_detail(
+                f"Objective includes {orphan_w * 100:.0f}% {sleeve.get('Asset Type', 'unrepresented')} "
+                f"with no matching holding.",
+                issue="A category in your objective is not represented in current holdings.",
+                why_it_matters=(
+                    "Without that sleeve, applying only existing tickers cannot fully match the "
+                    "stated category objective."
+                ),
+                triggered_by=(
+                    f"{orphan_ticker}: objective {orphan_w * 100:.1f}% vs current 0% "
+                    f"(not auto-added to the portfolio)."
+                ),
+                possible_benefit=(
+                    "Adding an appropriate cash/T-Bill (or other) holding would let the portfolio "
+                    "match the full objective mix."
+                ),
+                evidence={
+                    "Ticker": orphan_ticker,
+                    "Current weight": "0%",
+                    "Objective weight": f"{orphan_w * 100:.1f}%",
+                    "Portfolio objective": obj_label,
+                    "Orphan sleeve": "yes",
+                },
+            )
+        )
+
     rebalance_df = pd.DataFrame(rebalance_rows)
 
     for row in rebalance_rows:
+        if row.get("Orphan Sleeve"):
+            continue
         note = row["Model Note"]
         if not note or note == "Within tolerance":
             continue
@@ -2249,11 +2413,15 @@ def evaluate_portfolio_health(
                 float(profile["bonds"]) * 100,
                 float(profile["tbills"]) * 100,
             ],
-            "Objective (%)": [obj_eq * 100, obj_bond * 100, obj_tb * 100],
+            "Objective (%)": [
+                round(obj_eq * 100, 1),
+                round(obj_bond * 100, 1),
+                round(obj_tb * 100, 1),
+            ],
             "Recommended (%)": [
-                rec_mix.get("equity", obj_eq) * 100,
-                rec_mix.get("bonds", obj_bond) * 100,
-                rec_mix.get("tbills", obj_tb) * 100,
+                round(float(rec_mix.get("equity", obj_eq)) * 100, 1),
+                round(float(rec_mix.get("bonds", obj_bond)) * 100, 1),
+                round(float(rec_mix.get("tbills", obj_tb)) * 100, 1),
             ],
         }
     )
@@ -2261,7 +2429,11 @@ def evaluate_portfolio_health(
         opt_eq = sum(opt_w[i] for i, at in enumerate(asset_types) if at in ("Equity", "REIT", "Dividend ETF"))
         opt_bond = sum(opt_w[i] for i, at in enumerate(asset_types) if at == "Bonds")
         opt_tb = sum(opt_w[i] for i, at in enumerate(asset_types) if at == "T-Bills")
-        alloc_compare["Optimizer (%)"] = [opt_eq * 100, opt_bond * 100, opt_tb * 100]
+        alloc_compare["Optimizer (%)"] = [
+            round(float(opt_eq) * 100, 1),
+            round(float(opt_bond) * 100, 1),
+            round(float(opt_tb) * 100, 1),
+        ]
 
     # ── Status message ──
     health_word = "strong" if score >= 80 else "moderately healthy" if score >= 60 else "mixed" if score >= 40 else "stressed"
@@ -2542,11 +2714,21 @@ def suggested_weights_from_rebalance(
     *,
     target_column: str = "Objective (%)",
 ) -> np.ndarray:
-    """Build weight vector from rebalance table target column."""
+    """Build weight vector from rebalance table target column.
+
+    Skips explicit unrepresented (orphan) sleeve rows so Apply does not invent
+    holdings. Represented ticker targets are then normalized to a valid 100%
+    book among current holdings only.
+    """
     w = normalize_weights(current_weights)
     if target_column not in rebalance_df.columns:
         return w
-    lookup = {row["Ticker"]: row[target_column] / 100.0 for _, row in rebalance_df.iterrows()}
+    lookup: dict[str, float] = {}
+    for _, row in rebalance_df.iterrows():
+        if is_orphan_rebalance_row(row):
+            continue
+        ticker = str(row["Ticker"])
+        lookup[ticker] = float(row[target_column]) / 100.0
     new_w = np.array([lookup.get(t, w[i]) for i, t in enumerate(tickers)], dtype=float)
     if new_w.sum() <= 0:
         return w

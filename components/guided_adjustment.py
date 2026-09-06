@@ -51,18 +51,43 @@ def _build_adjustment_table(
         ch = obj - cur
         if abs(ch) < 1.0:
             continue
+        cur_d = cur / 100 * initial_value
+        obj_d = obj / 100 * initial_value
+        ch_d = ch / 100 * initial_value
         rows.append(
             {
                 "Asset": r["Ticker"],
                 "Current %": f"{cur:.1f}%",
                 "Suggested %": f"{obj:.1f}%",
                 "Change %": f"{ch:+.1f}%",
-                "Current $": _money(cur / 100 * initial_value),
-                "Suggested $": _money(obj / 100 * initial_value),
-                "Dollar Change": _money(ch / 100 * initial_value),
+                "Current $": _money(cur_d),
+                "Suggested $": _money(obj_d),
+                "Dollar Change": _money(ch_d),
+                "_cur_pct": cur,
+                "_sug_pct": obj,
+                "_cur_dol": cur_d,
+                "_sug_dol": obj_d,
+                "_chg_dol": ch_d,
+                "_orphan": core.is_orphan_rebalance_row(r),
             }
         )
     return pd.DataFrame(rows)
+
+
+def format_guided_step4_example(
+    asset: str,
+    cur_pct: float,
+    cur_dol: float,
+    sug_pct: float,
+    sug_dol: float,
+    chg_dol: float,
+) -> str:
+    """Clean Step 4 prose: percent with dollar amounts in parentheses."""
+    direction = "a change of approximately"
+    return (
+        f"Adjust **{asset}** from {cur_pct:.1f}% ({_money(cur_dol)}) toward "
+        f"{sug_pct:.1f}% ({_money(sug_dol)}), {direction} {_money(abs(chg_dol))}."
+    )
 
 
 def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[str, str, str]:
@@ -99,7 +124,14 @@ def _render_preview_apply_section(
     initial_value = float(settings["initial_value"])
 
     if has_changes:
-        st.dataframe(adj_table, use_container_width=True, hide_index=True)
+        st.dataframe(
+            adj_table.drop(
+                columns=[c for c in adj_table.columns if str(c).startswith("_")],
+                errors="ignore",
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -121,6 +153,13 @@ def _render_preview_apply_section(
         preview_df = pd.DataFrame(core.holdings_records_from_weights(tickers, suggested_w, asset_types))
         preview_df["Value ($)"] = (preview_df["Weight (%)"] / 100 * initial_value).map(_money)
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
+        if health.rebalance_df is not None and not health.rebalance_df.empty:
+            if health.rebalance_df.apply(core.is_orphan_rebalance_row, axis=1).any():
+                st.caption(
+                    "Preview / Apply adjusts **among your current holdings only**. "
+                    "Unrepresented objective sleeves (e.g. Cash / T-Bills) are shown in Guided "
+                    "targets but are **not** added to My Portfolio automatically."
+                )
         m1, m2, m3 = st.columns(3)
         m1.metric(
             "Est. volatility" if beginner else "Volatility",
@@ -237,9 +276,18 @@ def render_guided_portfolio_adjustment(
     with st.container(border=True):
         st.markdown("### Step 3 — Suggested allocation to test")
         if has_changes:
-            st.dataframe(adj_table, use_container_width=True, hide_index=True)
+            st.dataframe(
+                adj_table.drop(
+                    columns=[c for c in adj_table.columns if str(c).startswith("_")],
+                    errors="ignore",
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
             st.caption(
-                "Based on your objective, the model suggests testing weights closer to the **Suggested %** column."
+                "Based on your objective, the model suggests testing weights closer to the **Suggested %** column. "
+                "Unrepresented sleeves (marked in the full rebalance table) stay explicit and are not "
+                "silently redistributed into other tickers."
             )
         else:
             st.info("No large per-ticker drift detected — review category-level suggestions in Portfolio Health.")
@@ -248,11 +296,22 @@ def render_guided_portfolio_adjustment(
     with st.container(border=True):
         st.markdown("### Step 4 — How you could test the change")
         if has_changes:
-            top = adj_table.iloc[0]
+            # Prefer a real holding for the example (not an orphan sleeve row).
+            example = adj_table
+            if "_orphan" in adj_table.columns:
+                real = adj_table.loc[~adj_table["_orphan"].astype(bool)]
+                if not real.empty:
+                    example = real
+            top = example.iloc[0]
             st.markdown(
-                f"Example: adjust **{top['Asset']}** from {top['Current %']} ({top['Current $']}) "
-                f"toward {top['Suggested %']} ({top['Suggested $']}). "
-                f"That is about **{top['Dollar Change']}** in dollar terms."
+                format_guided_step4_example(
+                    str(top["Asset"]),
+                    float(top.get("_cur_pct", 0)),
+                    float(top.get("_cur_dol", 0)),
+                    float(top.get("_sug_pct", 0)),
+                    float(top.get("_sug_dol", 0)),
+                    float(top.get("_chg_dol", 0)),
+                )
             )
             st.markdown(
                 "You might shift money from overweight holdings to underweight ones "

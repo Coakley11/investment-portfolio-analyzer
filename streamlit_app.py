@@ -647,7 +647,7 @@ HELP_ADVANCED = {
 
 
 def _pct(x: float) -> str:
-    return f"{x * 100:.2f}%"
+    return core.format_weight_pct(float(x), decimals=2)
 
 
 def _money(x: float) -> str:
@@ -2779,6 +2779,10 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 "Include optimizer allocation in drift analysis",
                 value=not beginner_mode,
                 key="health_run_optimizer",
+                help=(
+                    "Adds a historical long-only mean-variance (Max Sharpe) column for comparison only. "
+                    "It is not the Guided recommendation and may corner on a single asset (e.g. 100% BND)."
+                ),
             )
 
     if beginner_mode:
@@ -3137,6 +3141,13 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     charts.allocation_comparison_chart(health.allocation_compare_df),
                     use_container_width=True,
                 )
+                if "Optimizer (%)" in health.allocation_compare_df.columns:
+                    st.caption(
+                        "**Optimizer** (when shown) is a historical long-only mean-variance experiment — "
+                        "not the primary Guided recommendation. Guided follows your stated category objective. "
+                        "A 100% weight in one asset (e.g. BND) is a mathematical corner solution, not an "
+                        "instruction to put the entire portfolio into that holding."
+                    )
             d5, d6 = st.columns(2)
             with d5:
                 st.plotly_chart(
@@ -3148,12 +3159,30 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     cmp_prices = load_comparison_prices(settings["start"], settings["end"])
                     cmp_rets = compute_daily_returns(cmp_prices)
                     port_rets = base_risk_pack["port_rets"]
-                    mini = pd.DataFrame({"Date": port_rets.index})
-                    mini["Portfolio"] = settings["initial_value"] * (1 + port_rets).cumprod()
-                    for bc in cmp_rets.columns:
-                        if bc.upper() in ("SPY", "QQQ"):
-                            mini[bc.upper()] = settings["initial_value"] * (1 + cmp_rets[bc]).cumprod()
-                    st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
+                    mini = charts.build_aligned_benchmark_growth(
+                        port_rets,
+                        cmp_rets,
+                        float(settings["initial_value"]),
+                        benchmark_symbols=("SPY", "QQQ"),
+                    )
+                    finite_ok = all(
+                        col in mini.columns
+                        and np.isfinite(pd.to_numeric(mini[col], errors="coerce")).any()
+                        for col in ("Portfolio", "SPY", "QQQ")
+                    )
+                    if finite_ok:
+                        st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
+                    else:
+                        mini_port = mini[["Date", "Portfolio"]] if "Portfolio" in mini.columns else None
+                        if mini_port is not None and np.isfinite(
+                            pd.to_numeric(mini_port["Portfolio"], errors="coerce")
+                        ).any():
+                            st.plotly_chart(
+                                charts.benchmark_mini_chart(mini_port, title="Portfolio Growth"),
+                                use_container_width=True,
+                            )
+                        else:
+                            raise ValueError("aligned benchmark growth has no finite observations")
                 except Exception:
                     mini = pd.DataFrame({"Date": growth.index, "Portfolio": growth.values})
                     st.plotly_chart(charts.benchmark_mini_chart(mini, title="Portfolio Growth"), use_container_width=True)
@@ -3453,7 +3482,10 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
         )
         section_header(
             "Optimizer Results",
-            "Long-only mean-variance optimization."
+            "Historical long-only mean-variance experiment (SLSQP). "
+            "May produce corner solutions such as 100% in one bond ETF — that is a mathematical optimum "
+            "for the inputs, not an instruction to put the entire portfolio into that asset. "
+            "Guided Portfolio Adjustment uses your stated category objective, not these weights."
             + (" Uses macro-adjusted expected returns and covariance." if opt_assumption_mode.startswith("Forward") else " Uses historical data."),
         )
         opt_mean = mean_rets

@@ -29,11 +29,16 @@ Optimizer comparison is optional commentary when enabled.
 REBALANCING = """
 **Baseline:** **Current portfolio weights** vs **objective mix** derived from your Portfolio Health objective.
 
-**Objective per ticker:** Category targets (equity / bonds / T-Bills) are spread across holdings by asset type,
-then normalized to sum to 100%.
+**Objective per ticker:** Category targets (equity / bonds / T-Bills) are split evenly across holdings in that
+category. Missing categories (e.g. no T-Bill holding when the objective includes T-Bills) stay as an
+**explicit unrepresented sleeve** and are **not** renormalized into other tickers. Guided Suggested %
+copies these Objective (%) values. Targets including the orphan sleeve sum to 100% and aggregate back
+to the stated category objective (e.g. Balanced Growth 60 / 30 / 10).
 
 **Suggested change:** `Change (pp) = Objective (%) − Current (%)`. Moves ≥ 1 percentage point appear in guidance.
 Model notes use ±3 pp thresholds vs objective (or vs optimizer when objective drift is small).
+
+**Apply:** Adjusts among **current holdings only**; unrepresented sleeves are not auto-added to My Portfolio.
 
 **Pre-investment:** With no deployed capital, the app labels this **Suggested Allocation Adjustment** rather than rebalancing.
 """
@@ -111,7 +116,9 @@ OPTIMIZER = """
 **Inputs:** Expected return vector `μ` and covariance `Σ` (annualized: daily mean × 252, daily cov × 252).
 Forward mode uses `adjusted_mean_returns` and `adjusted_cov` from macro projection.
 
-**Constraints:** Weights sum to 1; each weight ∈ [0, 1].
+**Constraints:** Weights sum to 1; each weight ∈ [0, 1] (no shorting). There is **no** minimum diversification constraint, so corner solutions such as **100% in one asset** (often the lowest-volatility bond ETF) are mathematically valid for the inputs.
+
+**Not primary advice:** Optimizer output is a historical / model experiment. **Guided Portfolio Adjustment** follows your stated category objective, not optimizer weights. A 100% optimizer result is **not** an instruction to put the entire portfolio into that holding.
 """
 
 OPTIMIZER_CONFIDENCE = """
@@ -120,9 +127,10 @@ OPTIMIZER_CONFIDENCE = """
 - Changing **expected returns** (historical vs forward macro) changes optimal weights.
 - Changing **macro assumptions** (recession, inflation, rates) changes forward μ and Σ, which changes recommendations.
 - Optimization finds a **mathematical optimum for your inputs** — not a forecast of future performance.
+- Long-only mean-variance often **corners** on a single name when one asset has much higher Sharpe or much lower volatility.
 - There is **no confidence interval** around optimizer outputs in the current model.
 
-Use optimizer results as **one scenario**, alongside your objective mix and qualitative judgment.
+Use optimizer results as **one scenario**, alongside your objective mix and qualitative judgment — not as the app’s primary recommended allocation.
 """
 
 EFFICIENT_FRONTIER = """

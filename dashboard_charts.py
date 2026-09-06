@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -227,22 +228,103 @@ def contribution_bar_chart(
     return apply_axes(fig, y_label, "Ticker")
 
 
+def allocation_percentage_columns(alloc_df: pd.DataFrame) -> list[str]:
+    """Weight (%) series only — never mix dollar columns onto a percentage chart."""
+    return [c for c in alloc_df.columns if c != "Category" and str(c).endswith("(%)")]
+
+
 def allocation_comparison_chart(alloc_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     categories = alloc_df["Category"].tolist()
-    series_cols = [c for c in alloc_df.columns if c != "Category"]
+    series_cols = allocation_percentage_columns(alloc_df)
     for i, col in enumerate(series_cols):
         fig.add_trace(
             go.Bar(
-                name=col.replace(" (%)", ""),
+                name=str(col).replace(" (%)", ""),
                 x=categories,
                 y=alloc_df[col],
                 marker_color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)],
                 hovertemplate=f"<b>{col}</b><br>%{{x}}: %{{y:.1f}}%<extra></extra>",
             )
         )
-    fig.update_layout(**base_layout(title="Current vs Recommended Allocation", height=400, barmode="group"))
+    fig.update_layout(
+        **base_layout(
+            title="Current vs Objective / Recommended (Weight %)",
+            height=420,
+            barmode="group",
+            margin=dict(l=48, r=24, t=88, b=40),
+            legend=dict(orientation="h", yanchor="bottom", y=1.12, x=0),
+        )
+    )
     return apply_axes(fig, "Weight (%)", "Category")
+
+
+def build_aligned_benchmark_growth(
+    port_rets: pd.Series,
+    benchmark_rets: pd.DataFrame,
+    initial_value: float,
+    *,
+    benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ"),
+) -> pd.DataFrame:
+    """
+    Build a Portfolio / SPY / QQQ growth frame on a common DatetimeIndex.
+
+    Aligns by date intersection so series assignment cannot produce all-NaN
+    columns (RangeIndex vs DatetimeIndex bug).
+    """
+    if port_rets is None or len(port_rets) == 0:
+        return pd.DataFrame(columns=["Date", "Portfolio", *benchmark_symbols])
+
+    port = port_rets.copy()
+    if not isinstance(port.index, pd.DatetimeIndex):
+        port.index = pd.to_datetime(port.index)
+    port = port.sort_index()
+    port.name = "Portfolio"
+
+    pieces: list[pd.Series] = [port]
+    if benchmark_rets is not None and not benchmark_rets.empty:
+        cmp = benchmark_rets.copy()
+        if not isinstance(cmp.index, pd.DatetimeIndex):
+            cmp.index = pd.to_datetime(cmp.index)
+        cmp = cmp.sort_index()
+        col_map = {str(c).strip().upper(): c for c in cmp.columns}
+        for sym in benchmark_symbols:
+            raw = col_map.get(sym.upper())
+            if raw is None:
+                continue
+            pieces.append(cmp[raw].rename(sym.upper()))
+
+    aligned = pd.concat(pieces, axis=1, join="inner").dropna(how="any")
+    if aligned.empty:
+        # Fall back to portfolio-only if benchmarks do not overlap.
+        aligned = port.to_frame(name="Portfolio").dropna()
+    growth = (1.0 + aligned).cumprod() * float(initial_value)
+    out = growth.reset_index()
+    date_col = out.columns[0]
+    out = out.rename(columns={date_col: "Date"})
+    return out
+
+
+def benchmark_mini_chart(growth_df: pd.DataFrame, title: str = "Portfolio vs Benchmark") -> go.Figure:
+    fig = go.Figure()
+    for i, col in enumerate(growth_df.columns):
+        if col == "Date":
+            continue
+        series = growth_df[col]
+        if series is None or len(series) == 0 or not np.isfinite(pd.to_numeric(series, errors="coerce")).any():
+            continue
+        width = 3.0 if col.upper() in ("PORTFOLIO", "SPY") else 1.8
+        fig.add_trace(
+            go.Scatter(
+                x=growth_df["Date"],
+                y=series,
+                mode="lines",
+                name=col,
+                line=dict(color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)], width=width),
+            )
+        )
+    fig.update_layout(**base_layout(title=title, height=320, margin=dict(l=48, r=24, t=64, b=40)))
+    return apply_axes(fig, "Value ($)", "Date")
 
 
 def macro_sensitivity_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
@@ -267,22 +349,3 @@ def macro_sensitivity_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
     )
     fig.update_layout(**base_layout(title="Macro Sensitivity by Asset Class (Model)", height=380))
     return apply_axes(fig, "", "Asset Type")
-
-
-def benchmark_mini_chart(growth_df: pd.DataFrame, title: str = "Portfolio vs Benchmark") -> go.Figure:
-    fig = go.Figure()
-    for i, col in enumerate(growth_df.columns):
-        if col == "Date":
-            continue
-        width = 3.0 if col.upper() in ("PORTFOLIO", "SPY") else 1.8
-        fig.add_trace(
-            go.Scatter(
-                x=growth_df["Date"],
-                y=growth_df[col],
-                mode="lines",
-                name=col,
-                line=dict(color=CHART_SEQUENCE[i % len(CHART_SEQUENCE)], width=width),
-            )
-        )
-    fig.update_layout(**base_layout(title=title, height=320))
-    return apply_axes(fig, "Value ($)", "Date")
