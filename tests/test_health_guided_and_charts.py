@@ -55,7 +55,9 @@ class TestCategoryPreservingGuidedTargets(unittest.TestCase):
             index=idx,
             columns=_PILOT_TICKERS,
         )
-        metrics = core.compute_extended_metrics(rets, _PILOT_WEIGHTS, 0.04, 4250.0)
+        metrics = core.compute_extended_metrics(
+            rets, _PILOT_WEIGHTS, 0.04, 4250.0, tickers=_PILOT_TICKERS
+        )
         corr = rets.corr()
         risk = core.risk_contribution(rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS)
         assumptions = core.ForwardMacroAssumptions(

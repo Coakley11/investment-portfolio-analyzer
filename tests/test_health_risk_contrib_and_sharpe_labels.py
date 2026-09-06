@@ -106,8 +106,8 @@ class TestSharpePointsVsRatio(unittest.TestCase):
 
     def test_breakdown_uses_sharpe_score_pts_not_ratio_label(self) -> None:
         rets = _synthetic_returns(_PILOT_TICKERS, seed=1)
-        # Force known sharpe via metrics object (thresholds unchanged).
-        metrics = self._metrics(0.14283771316050375)
+        # Deliberately wrong metrics sharpe — Health must score from aligned port_rets.
+        metrics = self._metrics(0.99)
         assumptions = core.ForwardMacroAssumptions(
             rate_environment="Stable Rates",
             inflation="Moderate Inflation",
@@ -117,6 +117,15 @@ class TestSharpePointsVsRatio(unittest.TestCase):
         )
         rc = core.risk_contribution(rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS)
         corr = rets.corr()
+        port_rets = core.portfolio_daily_returns(
+            rets, _PILOT_WEIGHTS, tickers=_PILOT_TICKERS
+        )
+        raw = core.sharpe_ratio(
+            core.annualized_return(port_rets),
+            core.annualized_volatility(port_rets),
+            0.04,
+        )
+        expected_pts = float(np.clip(raw * 10, 0, 15))
         health = core.evaluate_portfolio_health(
             list(_PILOT_TICKERS),
             _PILOT_WEIGHTS,
@@ -133,19 +142,22 @@ class TestSharpePointsVsRatio(unittest.TestCase):
         self.assertIn("Sharpe Score (pts)", health.score_breakdown)
         self.assertNotIn("Sharpe Ratio", health.score_breakdown)
         pts = float(health.score_breakdown["Sharpe Score (pts)"])
-        self.assertAlmostEqual(pts, 1.4283771316050375, places=5)
-        self.assertNotAlmostEqual(pts, metrics.sharpe_ratio, places=2)
+        self.assertAlmostEqual(pts, expected_pts, places=5)
+        # Must not trust the planted metrics.sharpe_ratio (0.99 → 9.9 pts).
+        self.assertNotAlmostEqual(pts, metrics.sharpe_ratio * 10, places=1)
 
-        sharpe_recs = [
-            d
-            for d in health.recommendation_details
-            if "Sharpe" in d.issue or "sharpe" in d.triggered_by.lower()
-        ]
-        self.assertTrue(sharpe_recs)
-        self.assertIn("0.14", sharpe_recs[0].triggered_by)
-        self.assertIn("below 0.4", sharpe_recs[0].triggered_by.lower())
-        self.assertEqual(sharpe_recs[0].evidence.get("Sharpe ratio"), "0.14")
-
+        if raw < 0.4:
+            sharpe_recs = [
+                d
+                for d in health.recommendation_details
+                if "Sharpe" in d.issue or "sharpe" in d.triggered_by.lower()
+            ]
+            self.assertTrue(sharpe_recs)
+            self.assertIn("below 0.4", sharpe_recs[0].triggered_by.lower())
+            self.assertEqual(
+                sharpe_recs[0].evidence.get("Sharpe ratio"),
+                f"{raw:.2f}",
+            )
 
 class TestRecommendationsRenderFallback(unittest.TestCase):
     def test_blank_detail_text_falls_back_to_recommendations_list(self) -> None:

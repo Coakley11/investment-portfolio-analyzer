@@ -206,7 +206,11 @@ def _render_preview_apply_section(
     if preview or st.session_state.get(preview_key):
         st.session_state[preview_key] = True
         preview_metrics = core.compute_extended_metrics(
-            returns, suggested_w, settings["risk_free"], initial_value
+            returns,
+            suggested_w,
+            settings["risk_free"],
+            initial_value,
+            tickers=tickers,
         )
         preview_df = pd.DataFrame(core.holdings_records_from_weights(tickers, suggested_w, asset_types))
         preview_df["Value ($)"] = (preview_df["Weight (%)"] / 100 * initial_value).map(_money)

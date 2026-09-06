@@ -107,7 +107,7 @@ class TestPolicyBenchmarkConstruction(unittest.TestCase):
         policy, meta = core.build_policy_benchmark_returns(
             pd.DataFrame({"SPY": spy, "AGG": agg, "BIL": bil}), "balanced growth"
         )
-        metrics = core.compute_extended_metrics(rets, _PILOT_W, 0.04, 4250.0)
+        metrics = core.compute_extended_metrics(rets, _PILOT_W, 0.04, 4250.0, tickers=_PILOT)
         health = core.evaluate_portfolio_health(
             tickers=_PILOT,
             weights=_PILOT_W,
@@ -228,7 +228,7 @@ class TestObjectiveAlignmentUnchanged(unittest.TestCase):
             ),
             "balanced growth",
         )
-        metrics = core.compute_extended_metrics(rets, _PILOT_W, 0.04, 4250.0)
+        metrics = core.compute_extended_metrics(rets, _PILOT_W, 0.04, 4250.0, tickers=_PILOT)
         health = core.evaluate_portfolio_health(
             tickers=_PILOT,
             weights=_PILOT_W,

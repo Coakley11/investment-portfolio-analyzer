@@ -795,9 +795,15 @@ def compute_portfolio_metrics(
     risk_free_rate: float,
     initial_value: float,
     years_forward: float = 1.0,
+    tickers: Sequence[str] | None = None,
 ) -> PortfolioMetrics:
     ext = compute_extended_metrics(
-        asset_returns, weights, risk_free_rate, initial_value, years_forward
+        asset_returns,
+        weights,
+        risk_free_rate,
+        initial_value,
+        years_forward,
+        tickers=tickers,
     )
     return PortfolioMetrics(
         annual_return=ext.annual_return,
@@ -906,9 +912,17 @@ def compute_extended_metrics(
     initial_value: float,
     years_forward: float = 1.0,
     benchmark_rets: pd.Series | None = None,
+    tickers: Sequence[str] | None = None,
 ) -> ExtendedPortfolioMetrics:
-    port_rets = portfolio_daily_returns(asset_returns, weights)
-    growth = portfolio_growth_series(asset_returns, weights, initial_value)
+    """Compute portfolio metrics with ticker-aware weight alignment.
+
+    Pass ``tickers`` in holdings order whenever ``weights`` follow holdings rather
+    than ``asset_returns.columns`` order (market data is often alphabetical).
+    """
+    port_rets = portfolio_daily_returns(asset_returns, weights, tickers=tickers)
+    growth = portfolio_growth_series(
+        asset_returns, weights, initial_value, tickers=tickers
+    )
     ann_ret = annualized_return(port_rets)
     ann_vol = annualized_volatility(port_rets)
     sharpe = sharpe_ratio(ann_ret, ann_vol, risk_free_rate)
@@ -936,8 +950,9 @@ def portfolio_growth_series(
     asset_returns: pd.DataFrame,
     weights: np.ndarray,
     initial_value: float,
+    tickers: Sequence[str] | None = None,
 ) -> pd.Series:
-    port_rets = portfolio_daily_returns(asset_returns, weights)
+    port_rets = portfolio_daily_returns(asset_returns, weights, tickers=tickers)
     growth = (1 + port_rets).cumprod() * initial_value
     growth.name = "Portfolio Value"
     return growth
@@ -1078,6 +1093,7 @@ def monte_carlo_simulation(
     expected_annual_return: float | None = None,
     expected_annual_volatility: float | None = None,
     returns: pd.DataFrame | None = None,
+    tickers: Sequence[str] | None = None,
 ) -> MonteCarloResult:
     """
     Geometric Brownian motion on portfolio returns.
@@ -1097,7 +1113,7 @@ def monte_carlo_simulation(
 
     rng = np.random.default_rng(seed)
     if asset_returns is not None and weights is not None:
-        port_rets = portfolio_daily_returns(asset_returns, weights)
+        port_rets = portfolio_daily_returns(asset_returns, weights, tickers=tickers)
         hist_ann_ret = float(port_rets.mean() * TRADING_DAYS)
         hist_ann_vol = float(port_rets.std() * np.sqrt(TRADING_DAYS))
         use_ann_ret = ann_ret if ann_ret is not None else hist_ann_ret
@@ -1337,6 +1353,7 @@ def scenario_analysis(
     weights: np.ndarray,
     initial_value: float,
     scenarios: dict[str, float] | None = None,
+    tickers: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """
     Apply one-period return shocks to the portfolio.
@@ -1345,7 +1362,7 @@ def scenario_analysis(
     if scenarios is None:
         scenarios = {
             "Base Case (historical ann.)": annualized_return(
-                portfolio_daily_returns(asset_returns, weights)
+                portfolio_daily_returns(asset_returns, weights, tickers=tickers)
             ),
             "Mild Downturn (-10%)": -0.10,
             "Bear Market (-20%)": -0.20,
@@ -2257,10 +2274,18 @@ def evaluate_portfolio_health(
     if benchmark_returns is not None and len(benchmark_returns.dropna()) > 5:
         spy_ann = annualized_return(benchmark_returns.dropna())
 
-    # ── Score components (0–100) ──
-    ret_gap = port_ann_aligned - policy_ann if n_aligned >= 6 else metrics.annual_return - spy_ann
+    # Vol / Sharpe / Max DD Health points use the same ticker-aligned portfolio
+    # return series as Return vs Policy (not positional metrics that may ignore
+    # holdings→column identity when market data is alphabetically ordered).
+    port_ann = annualized_return(port_rets)
+    vol = annualized_volatility(port_rets)
+    raw_sharpe = sharpe_ratio(port_ann, vol, risk_free_rate)
+    dd = maximum_drawdown(port_rets)
+    port_sortino = sortino_ratio(port_rets, risk_free_rate)
 
-    vol = metrics.volatility
+    # ── Score components (0–100) ──
+    ret_gap = port_ann_aligned - policy_ann if n_aligned >= 6 else port_ann - spy_ann
+
     if vol <= 0.12:
         s_vol = 12.0
     elif vol <= 0.18:
@@ -2270,8 +2295,7 @@ def evaluate_portfolio_health(
     else:
         s_vol = 2.0
 
-    s_sharpe = float(np.clip(metrics.sharpe_ratio * 10, 0, 15))
-    dd = metrics.max_drawdown
+    s_sharpe = float(np.clip(raw_sharpe * 10, 0, 15))
     if dd >= -0.10:
         s_dd = 12.0
     elif dd >= -0.20:
@@ -2426,32 +2450,32 @@ def evaluate_portfolio_health(
                 },
             )
         )
-    if metrics.sharpe_ratio < 0.4:
+    if raw_sharpe < 0.4:
         recommendation_details.append(
             _make_rec_detail(
                 "Sharpe ratio below 0.4 suggests risk-adjusted return may be weak — consider reviewing the risk/return mix.",
                 issue="Risk-adjusted return appears weak in the model.",
                 why_it_matters="You may be taking risk without commensurate return relative to the risk-free rate.",
-                triggered_by=f"Sharpe ratio = {metrics.sharpe_ratio:.2f} (below 0.4 threshold).",
+                triggered_by=f"Sharpe ratio = {raw_sharpe:.2f} (below 0.4 threshold).",
                 possible_benefit="Adjusting the mix may improve return per unit of risk taken.",
                 evidence={
-                    "Sharpe ratio": f"{metrics.sharpe_ratio:.2f}",
-                    "Annual return": f"{metrics.annual_return * 100:.1f}%",
-                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                    "Sharpe ratio": f"{raw_sharpe:.2f}",
+                    "Annual return": f"{port_ann * 100:.1f}%",
+                    "Volatility": f"{vol * 100:.1f}%",
                 },
             )
         )
-    if metrics.max_drawdown < -0.25:
+    if dd < -0.25:
         recommendation_details.append(
             _make_rec_detail(
                 "Max drawdown worse than -25% flags drawdown risk in the historical window — may be worth reviewing defensive buffers.",
                 issue="Historical drawdown risk is elevated.",
                 why_it_matters="Large past drops may indicate the portfolio could fall sharply again in stress periods.",
-                triggered_by=f"Max drawdown = {metrics.max_drawdown * 100:.1f}% (worse than -25%).",
+                triggered_by=f"Max drawdown = {dd * 100:.1f}% (worse than -25%).",
                 possible_benefit="Adding stabilizers (bonds/cash) or reducing risk assets may lower drawdown severity in the model.",
                 evidence={
-                    "Max drawdown": f"{metrics.max_drawdown * 100:.1f}%",
-                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                    "Max drawdown": f"{dd * 100:.1f}%",
+                    "Volatility": f"{vol * 100:.1f}%",
                     "Beta vs SPY": f"{metrics.beta_spy:.2f}",
                 },
             )
@@ -2497,18 +2521,18 @@ def evaluate_portfolio_health(
                 },
             )
         )
-    if metrics.sortino_ratio < 0.35:
+    if port_sortino < 0.35:
         recommendation_details.append(
             _make_rec_detail(
                 "Sortino ratio is low — downside volatility may be elevated relative to return.",
                 issue="Downside risk appears elevated vs. return.",
                 why_it_matters="Bad drops may outweigh gains relative to what the model considers acceptable.",
-                triggered_by=f"Sortino ratio = {metrics.sortino_ratio:.2f} (below 0.35).",
+                triggered_by=f"Sortino ratio = {port_sortino:.2f} (below 0.35).",
                 possible_benefit="Reviewing defensive assets or diversification may reduce downside swings.",
                 evidence={
-                    "Sortino ratio": f"{metrics.sortino_ratio:.2f}",
-                    "Max drawdown": f"{metrics.max_drawdown * 100:.1f}%",
-                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                    "Sortino ratio": f"{port_sortino:.2f}",
+                    "Max drawdown": f"{dd * 100:.1f}%",
+                    "Volatility": f"{vol * 100:.1f}%",
                 },
             )
         )
@@ -2523,7 +2547,7 @@ def evaluate_portfolio_health(
                 evidence={
                     "Beta vs SPY": f"{metrics.beta_spy:.2f}",
                     "Equity allocation": f"{equity_pct:.0f}%",
-                    "Volatility": f"{metrics.volatility * 100:.1f}%",
+                    "Volatility": f"{vol * 100:.1f}%",
                 },
             )
         )
@@ -2767,7 +2791,7 @@ def evaluate_portfolio_health(
         if metrics.beta_spy < 0.95
         else f"market-like sensitivity (beta {metrics.beta_spy:.2f})"
     )
-    sharpe_note = "strong" if metrics.sharpe_ratio >= 0.8 else "adequate" if metrics.sharpe_ratio >= 0.4 else "weak"
+    sharpe_note = "strong" if raw_sharpe >= 0.8 else "adequate" if raw_sharpe >= 0.4 else "weak"
     conc_note = ""
     if max_w >= 0.30:
         conc_note = f", but {profile['top_ticker']} concentration ({max_w * 100:.0f}%) should be monitored"

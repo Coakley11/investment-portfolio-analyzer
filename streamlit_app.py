@@ -798,8 +798,10 @@ def compute_monte_carlo(
     target_value: float,
     expected_annual_return: float | None = None,
     expected_annual_volatility: float | None = None,
+    tickers_tuple: tuple[str, ...] | None = None,
 ):
     weights = np.asarray(weights_tuple, dtype=float)
+    tickers = list(tickers_tuple) if tickers_tuple else None
     return core.monte_carlo_simulation(
         returns=returns,
         weights=weights,
@@ -809,6 +811,7 @@ def compute_monte_carlo(
         target_value=target_value,
         expected_annual_return=expected_annual_return,
         expected_annual_volatility=expected_annual_volatility,
+        tickers=tickers,
     )
 
 
@@ -2324,10 +2327,18 @@ if _load_analytics:
             returns = compute_daily_returns(prices)
             mean_rets = returns.mean().values * core.TRADING_DAYS
             cov = returns.cov() * core.TRADING_DAYS
+            ticker_labels = [str(t).strip().upper() for t in tickers]
             metrics = core.compute_extended_metrics(
-                returns, weights, settings["risk_free"], settings["initial_value"], benchmark_rets=bench_rets
+                returns,
+                weights,
+                settings["risk_free"],
+                settings["initial_value"],
+                benchmark_rets=bench_rets,
+                tickers=ticker_labels,
             )
-            growth = core.portfolio_growth_series(returns, weights, settings["initial_value"])
+            growth = core.portfolio_growth_series(
+                returns, weights, settings["initial_value"], tickers=ticker_labels
+            )
             st.session_state.plan_compare_return = metrics.annual_return
         except Exception as ex:
             st.error(f"Analysis failed: {ex}")
@@ -3447,6 +3458,7 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
                     float(mc_target),
                     expected_annual_return=mc_fwd_ret,
                     expected_annual_volatility=mc_fwd_vol,
+                    tickers_tuple=tuple(str(t).strip().upper() for t in tickers),
                 )
             st.session_state.mc_cached_summary = mc.summary
             mode_label = "Forward macro-adjusted" if mc_fwd_ret is not None else "Historical"
