@@ -387,8 +387,36 @@ HEALTH_CORE_PILLAR_MAX: dict[str, float] = {
 }
 HEALTH_CONSTRUCTION_DIV_MAX = 15.0
 HEALTH_CONSTRUCTION_CONC_MAX = 15.0
-# Bump when Health diagnostic key schema changes (forces session cache refresh).
-HEALTH_DIAGNOSTICS_SCHEMA_VERSION = 3
+# Visible on Health diagnostics so live vs local provenance is unambiguous.
+HEALTH_RUNTIME_BUILD_ID = "2026-09-06-health-provenance-v1"
+
+
+def health_runtime_provenance() -> str:
+    """Short branch@sha (best-effort) plus HEALTH_RUNTIME_BUILD_ID."""
+    sha = "unknown"
+    branch = "unknown"
+    try:
+        import subprocess
+
+        sha = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            or "unknown"
+        )
+        branch = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            or "unknown"
+        )
+    except Exception:
+        pass
+    return f"{branch}@{sha} · {HEALTH_RUNTIME_BUILD_ID}"
 # Diversification / concentration engines still score 0–12 internally.
 _HEALTH_DIV_ENGINE_MAX = 12.0
 _HEALTH_CONC_ENGINE_MAX = 12.0

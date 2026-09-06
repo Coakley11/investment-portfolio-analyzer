@@ -3118,6 +3118,7 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 "Health diagnostics (not part of the 100)",
                 "Risk-adjusted ratios, drawdown, and correlations remain visible as analytics.",
             )
+            st.caption(f"Runtime provenance: `{core.health_runtime_provenance()}`")
             dcols = st.columns(4)
             with dcols[0]:
                 st.metric(
