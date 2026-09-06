@@ -861,7 +861,47 @@ def get_health_cache_status(tickers: list[str], weights: np.ndarray) -> str:
         return "portfolio_stale"
     if st.session_state.get("health_settings_fingerprint") != health_settings_fingerprint():
         return "settings_stale"
+    # Diagnostic schema mismatch (e.g. Sharpe-vs-policy key fix) → force refresh.
+    health_obj = st.session_state.get("health_result")
+    diag = getattr(health_obj, "health_diagnostics", None) or {}
+    try:
+        ver = float(diag.get("_schema_version", 0) or 0)
+    except (TypeError, ValueError):
+        ver = 0.0
+    if ver != float(core.HEALTH_DIAGNOSTICS_SCHEMA_VERSION):
+        st.session_state.pop("health_result", None)
+        st.session_state.pop("health_result_fingerprint", None)
+        st.session_state.pop("health_summary", None)
+        return "missing"
     return "fresh"
+
+
+def render_sharpe_vs_policy_metric(diag: dict) -> str:
+    """Exact UI/caller path for Sharpe-vs-policy. Keyword floats only — never Sortino."""
+    port = diag.get("portfolio_sharpe", diag.get("raw_sharpe"))
+    pol = diag.get("policy_benchmark_sharpe", diag.get("policy_sharpe"))
+    try:
+        port_f = float(port)
+        pol_f = float(pol)
+    except (TypeError, ValueError):
+        return "n/a"
+    # Integrity: refuse if policy slot equals portfolio Sortino while policy Sortino differs.
+    sortino = diag.get("sortino")
+    pol_sortino = diag.get("policy_sortino")
+    try:
+        if (
+            sortino is not None
+            and abs(pol_f - float(sortino)) < 1e-12
+            and pol_sortino is not None
+            and abs(pol_f - float(pol_sortino)) > 1e-4
+        ):
+            return "n/a"
+    except (TypeError, ValueError):
+        pass
+    return core.build_sharpe_vs_policy_metric_value(
+        portfolio_sharpe=port_f,
+        policy_benchmark_sharpe=pol_f,
+    )
 
 
 def cache_health_summary(health: core.PortfolioHealthResult, tickers: list[str], weights: np.ndarray) -> None:
@@ -3080,15 +3120,27 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
             )
             dcols = st.columns(4)
             with dcols[0]:
-                st.metric("Raw Sharpe", f"{float(diag.get('raw_sharpe', metrics.sharpe_ratio)):.3f}")
+                st.metric(
+                    "Raw Sharpe",
+                    f"{float(diag.get('portfolio_sharpe', diag.get('raw_sharpe', metrics.sharpe_ratio))):.3f}",
+                )
                 st.metric("Sortino", f"{float(diag.get('sortino', metrics.sortino_ratio)):.3f}")
             with dcols[1]:
-                sharpe_vs = diag.get("sharpe_vs_policy_display") or core.format_sharpe_vs_policy_display(diag)
+                # Always rebuild from unambiguous float keys — never trust a cached display string.
+                sharpe_vs = render_sharpe_vs_policy_metric(diag)
                 st.metric("Sharpe vs policy", sharpe_vs)
-                st.caption(
-                    "Portfolio Sharpe / **policy-benchmark Sharpe** (same window & rf). "
-                    "The right-hand value is not Sortino."
-                )
+                pol_bench = diag.get("policy_benchmark_sharpe", diag.get("policy_sharpe"))
+                if pol_bench is not None and np.isfinite(float(pol_bench)):
+                    st.caption(
+                        "Left = **portfolio Sharpe**; right = **policy-benchmark Sharpe** "
+                        f"({float(pol_bench):.3f}). "
+                        "Built from portfolio_sharpe / policy_benchmark_sharpe only — not Sortino."
+                    )
+                else:
+                    st.caption(
+                        "Left = portfolio Sharpe; right = policy-benchmark Sharpe "
+                        "(refresh Health if n/a)."
+                    )
                 st.metric(
                     "Ann. return",
                     f"{float(diag.get('annual_return', metrics.annual_return)) * 100:.2f}%",
@@ -3111,6 +3163,14 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 st.metric(
                     "Max |pairwise corr|",
                     f"{float(getattr(health, 'max_pairwise_abs_corr', 0.0)):.2f}",
+                )
+            # Standalone policy Sharpe so a combined-string bug cannot hide the true value.
+            pol_only = diag.get("policy_benchmark_sharpe", diag.get("policy_sharpe"))
+            if pol_only is not None and np.isfinite(float(pol_only)):
+                st.caption(
+                    f"**Policy-benchmark Sharpe (standalone):** {float(pol_only):.3f} · "
+                    f"**Portfolio Sharpe:** "
+                    f"{float(diag.get('portfolio_sharpe', diag.get('raw_sharpe', 0))):.3f}."
                 )
             pol_sort = diag.get("policy_sortino")
             if pol_sort is not None and np.isfinite(float(pol_sort)):

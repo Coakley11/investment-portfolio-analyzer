@@ -387,6 +387,8 @@ HEALTH_CORE_PILLAR_MAX: dict[str, float] = {
 }
 HEALTH_CONSTRUCTION_DIV_MAX = 15.0
 HEALTH_CONSTRUCTION_CONC_MAX = 15.0
+# Bump when Health diagnostic key schema changes (forces session cache refresh).
+HEALTH_DIAGNOSTICS_SCHEMA_VERSION = 3
 # Diversification / concentration engines still score 0–12 internally.
 _HEALTH_DIV_ENGINE_MAX = 12.0
 _HEALTH_CONC_ENGINE_MAX = 12.0
@@ -1189,12 +1191,55 @@ def compute_aligned_sharpe_sortino_diagnostics(
 
 
 def format_sharpe_vs_policy_display(diagnostics: dict[str, float]) -> str:
-    """UI helper: portfolio Sharpe / policy Sharpe — never Sortino."""
-    port_sh = diagnostics.get("raw_sharpe")
-    pol_sh = diagnostics.get("policy_sharpe")
+    """UI helper: portfolio Sharpe / policy-benchmark Sharpe — never Sortino.
+
+    Reads only:
+      - ``portfolio_sharpe`` (preferred) or ``raw_sharpe``
+      - ``policy_benchmark_sharpe`` (preferred) or ``policy_sharpe``
+
+    Never reads ``sortino`` / ``policy_sortino`` for either side. If the policy
+    slot equals portfolio Sortino while a distinct policy Sortino exists, treats
+    the policy Sharpe as corrupt and returns ``n/a`` (caller should refresh Health).
+    """
+    port_sh = diagnostics.get("portfolio_sharpe", diagnostics.get("raw_sharpe"))
+    pol_sh = diagnostics.get(
+        "policy_benchmark_sharpe", diagnostics.get("policy_sharpe")
+    )
     try:
         port_f = float(port_sh) if port_sh is not None else float("nan")
         pol_f = float(pol_sh) if pol_sh is not None else float("nan")
+    except (TypeError, ValueError):
+        return "n/a"
+    if not (np.isfinite(port_f) and np.isfinite(pol_f)):
+        return "n/a"
+
+    # Detect Sortino leakage into the policy-Sharpe slot.
+    sortino = diagnostics.get("sortino")
+    pol_sortino = diagnostics.get("policy_sortino")
+    try:
+        if (
+            sortino is not None
+            and np.isfinite(float(sortino))
+            and abs(pol_f - float(sortino)) < 1e-12
+            and pol_sortino is not None
+            and np.isfinite(float(pol_sortino))
+            and abs(pol_f - float(pol_sortino)) > 1e-4
+        ):
+            return "n/a"
+    except (TypeError, ValueError):
+        pass
+    return f"{port_f:.3f} / {pol_f:.3f}"
+
+
+def build_sharpe_vs_policy_metric_value(
+    *,
+    portfolio_sharpe: float,
+    policy_benchmark_sharpe: float,
+) -> str:
+    """Caller-level builder: keyword-only — Sortino cannot be passed positionally."""
+    try:
+        port_f = float(portfolio_sharpe)
+        pol_f = float(policy_benchmark_sharpe)
     except (TypeError, ValueError):
         return "n/a"
     if not (np.isfinite(port_f) and np.isfinite(pol_f)):
@@ -2791,12 +2836,17 @@ def evaluate_portfolio_health(
     recession_prob = assumptions.recession_probability
 
     health_diagnostics = {
+        "_schema_version": float(HEALTH_DIAGNOSTICS_SCHEMA_VERSION),
         "annual_return": float(port_ann),
         "policy_annual_return": float(policy_ann) if n_aligned >= 6 else float("nan"),
         "annual_volatility": float(vol),
         "policy_volatility": float(policy_vol) if policy_vol > 0 else float(
             risk_diag.get("policy_vol") or float("nan")
         ),
+        # Unambiguous Sharpe keys for the UI (prefer these over legacy aliases).
+        "portfolio_sharpe": float(raw_sharpe),
+        "policy_benchmark_sharpe": float(policy_sharpe),
+        # Legacy aliases (same floats).
         "raw_sharpe": float(raw_sharpe),
         "policy_sharpe": float(policy_sharpe),
         "sortino": float(port_sortino),
@@ -2807,9 +2857,6 @@ def evaluate_portfolio_health(
         "risk_vol_ratio": float(risk_diag["vol_ratio"])
         if risk_diag.get("ok") and np.isfinite(risk_diag.get("vol_ratio", np.nan))
         else float("nan"),
-        "sharpe_vs_policy_display": format_sharpe_vs_policy_display(
-            {"raw_sharpe": raw_sharpe, "policy_sharpe": policy_sharpe}
-        ),
     }
 
     # ── What's working / not ──

@@ -34,7 +34,14 @@ class TestSharpeVsPolicyDiagnostic(unittest.TestCase):
         self.assertAlmostEqual(d["policy_sortino"], expect_pol_sortino, places=10)
         # Guard: Sortino must not populate policy Sharpe.
         self.assertGreater(abs(d["policy_sharpe"] - d["sortino"]), 1e-4)
-        display = core.format_sharpe_vs_policy_display(d)
+        display = core.format_sharpe_vs_policy_display(
+            {
+                "portfolio_sharpe": d["raw_sharpe"],
+                "policy_benchmark_sharpe": d["policy_sharpe"],
+                "sortino": d["sortino"],
+                "policy_sortino": d["policy_sortino"],
+            }
+        )
         self.assertEqual(display, f"{d['raw_sharpe']:.3f} / {d['policy_sharpe']:.3f}")
         self.assertNotIn(f"{d['sortino']:.3f}", display.split(" / ")[1])
 
@@ -42,8 +49,52 @@ class TestSharpeVsPolicyDiagnostic(unittest.TestCase):
         # Malicious / confused dict: only sortino present as a lookalike.
         bad = {"raw_sharpe": 0.284, "sortino": 0.407}
         self.assertEqual(core.format_sharpe_vs_policy_display(bad), "n/a")
-        good = {"raw_sharpe": 0.284, "policy_sharpe": 0.413, "sortino": 0.407}
+        good = {
+            "portfolio_sharpe": 0.284,
+            "policy_benchmark_sharpe": 0.413,
+            "sortino": 0.407,
+        }
         self.assertEqual(core.format_sharpe_vs_policy_display(good), "0.284 / 0.413")
+
+    def test_keyword_builder_rejects_positional_sortino_confusion(self) -> None:
+        self.assertEqual(
+            core.build_sharpe_vs_policy_metric_value(
+                portfolio_sharpe=0.11, policy_benchmark_sharpe=0.22
+            ),
+            "0.110 / 0.220",
+        )
+
+    def test_ui_caller_render_sharpe_vs_policy_metric_sentinels(self) -> None:
+        """Caller-level regression: UI path must use 0.11/0.22, never Sortino."""
+        from streamlit_app import render_sharpe_vs_policy_metric
+
+        diag = {
+            "portfolio_sharpe": 0.11,
+            "policy_benchmark_sharpe": 0.22,
+            "sortino": 0.33,
+            "policy_sortino": 0.44,
+            "raw_sharpe": 0.11,
+            "policy_sharpe": 0.22,
+            # Poisoned legacy display string — must be ignored by UI caller.
+            "sharpe_vs_policy_display": "0.110 / 0.330",
+        }
+        rendered = render_sharpe_vs_policy_metric(diag)
+        self.assertEqual(rendered, "0.110 / 0.220")
+        self.assertNotIn("0.33", rendered)
+        self.assertNotIn("0.44", rendered)
+        self.assertNotEqual(rendered, "0.110 / 0.330")
+        self.assertNotEqual(rendered, "0.110 / 0.440")
+
+    def test_ui_caller_detects_sortino_in_policy_slot(self) -> None:
+        from streamlit_app import render_sharpe_vs_policy_metric
+
+        poisoned = {
+            "portfolio_sharpe": 0.284,
+            "policy_benchmark_sharpe": 0.407,  # wrongly equals portfolio Sortino
+            "sortino": 0.407,
+            "policy_sortino": 0.575,
+        }
+        self.assertEqual(render_sharpe_vs_policy_metric(poisoned), "n/a")
 
 
 class TestConcentrationNarrativeKindAware(unittest.TestCase):
@@ -125,19 +176,28 @@ class TestStabilizerExposureWording(unittest.TestCase):
         self.assertIn("broad-market ETF bands", health.status_message)
         self.assertNotIn("review concentration diagnostics", health.status_message)
         # Policy Sharpe diagnostic distinct from Sortino.
-        self.assertIn("policy_sharpe", health.health_diagnostics)
+        self.assertIn("policy_benchmark_sharpe", health.health_diagnostics)
         self.assertNotAlmostEqual(
-            health.health_diagnostics["policy_sharpe"],
+            health.health_diagnostics["policy_benchmark_sharpe"],
             health.health_diagnostics["sortino"],
             places=3,
         )
-        disp = health.health_diagnostics["sharpe_vs_policy_display"]
+        from streamlit_app import render_sharpe_vs_policy_metric
+
+        disp = render_sharpe_vs_policy_metric(health.health_diagnostics)
         self.assertEqual(
             disp,
-            core.format_sharpe_vs_policy_display(health.health_diagnostics),
+            core.build_sharpe_vs_policy_metric_value(
+                portfolio_sharpe=float(health.health_diagnostics["portfolio_sharpe"]),
+                policy_benchmark_sharpe=float(
+                    health.health_diagnostics["policy_benchmark_sharpe"]
+                ),
+            ),
         )
         right = disp.split(" / ")[1]
-        self.assertAlmostEqual(float(right), health.health_diagnostics["policy_sharpe"], places=3)
+        self.assertAlmostEqual(
+            float(right), health.health_diagnostics["policy_benchmark_sharpe"], places=3
+        )
 
 
 if __name__ == "__main__":
