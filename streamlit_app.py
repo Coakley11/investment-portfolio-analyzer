@@ -864,11 +864,7 @@ def get_health_cache_status(tickers: list[str], weights: np.ndarray) -> str:
     # Diagnostic schema mismatch (e.g. Sharpe-vs-policy key fix) → force refresh.
     health_obj = st.session_state.get("health_result")
     diag = getattr(health_obj, "health_diagnostics", None) or {}
-    try:
-        ver = float(diag.get("_schema_version", 0) or 0)
-    except (TypeError, ValueError):
-        ver = 0.0
-    if ver != float(core.HEALTH_DIAGNOSTICS_SCHEMA_VERSION):
+    if not core.health_diagnostics_schema_is_current(diag):
         st.session_state.pop("health_result", None)
         st.session_state.pop("health_result_fingerprint", None)
         st.session_state.pop("health_summary", None)

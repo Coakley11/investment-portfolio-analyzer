@@ -387,6 +387,8 @@ HEALTH_CORE_PILLAR_MAX: dict[str, float] = {
 }
 HEALTH_CONSTRUCTION_DIV_MAX = 15.0
 HEALTH_CONSTRUCTION_CONC_MAX = 15.0
+# Bump when Health diagnostic key schema changes (forces session cache refresh).
+HEALTH_DIAGNOSTICS_SCHEMA_VERSION = 3
 # Visible on Health diagnostics so live vs local provenance is unambiguous.
 HEALTH_RUNTIME_BUILD_ID = "2026-09-06-health-provenance-v1"
 
@@ -417,6 +419,52 @@ def health_runtime_provenance() -> str:
     except Exception:
         pass
     return f"{branch}@{sha} · {HEALTH_RUNTIME_BUILD_ID}"
+
+
+def normalize_health_diagnostics_schema_version(value: Any) -> int | None:
+    """
+    Coerce a stored/current Health diagnostics schema version for comparison.
+
+    Accepts int/float/numeric strings. Missing, blank, bool, NaN, or malformed
+    values return None (treat as outdated / invalidate).
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def health_diagnostics_schema_is_current(diagnostics: Any) -> bool:
+    """True when diagnostics carry the current HEALTH_DIAGNOSTICS_SCHEMA_VERSION."""
+    if not isinstance(diagnostics, dict):
+        return False
+    stored = normalize_health_diagnostics_schema_version(
+        diagnostics.get("_schema_version")
+    )
+    current = normalize_health_diagnostics_schema_version(
+        HEALTH_DIAGNOSTICS_SCHEMA_VERSION
+    )
+    if stored is None or current is None:
+        return False
+    return stored == current
+
+
 # Diversification / concentration engines still score 0–12 internally.
 _HEALTH_DIV_ENGINE_MAX = 12.0
 _HEALTH_CONC_ENGINE_MAX = 12.0
@@ -2864,7 +2912,7 @@ def evaluate_portfolio_health(
     recession_prob = assumptions.recession_probability
 
     health_diagnostics = {
-        "_schema_version": float(HEALTH_DIAGNOSTICS_SCHEMA_VERSION),
+        "_schema_version": HEALTH_DIAGNOSTICS_SCHEMA_VERSION,
         "annual_return": float(port_ann),
         "policy_annual_return": float(policy_ann) if n_aligned >= 6 else float("nan"),
         "annual_volatility": float(vol),
