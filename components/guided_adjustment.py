@@ -149,11 +149,12 @@ def parse_suggested_pct_sum(adj_table: pd.DataFrame) -> float:
 
 
 def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[str, str, str]:
-    """Return (issue, why, triggered_by) in plain language."""
-    for d in health.recommendation_details[:3]:
-        issue = translate_for_beginner(d.issue) if beginner else d.issue
-        why = translate_for_beginner(d.why_it_matters) if beginner else d.why_it_matters
-        triggered = str(d.triggered_by or "").strip()
+    """Return (issue, why, triggered_by) from Option C core primary — not diagnostic Sharpe."""
+    primary = core.select_primary_recommendation_detail(health.recommendation_details)
+    if primary is not None:
+        issue = translate_for_beginner(primary.issue) if beginner else primary.issue
+        why = translate_for_beginner(primary.why_it_matters) if beginner else primary.why_it_matters
+        triggered = str(primary.triggered_by or "").strip()
         return issue, why, triggered
     return (
         "Your portfolio weights may have drifted from your selected objective.",
@@ -278,6 +279,12 @@ def render_guided_portfolio_adjustment(
         adj_tabs = None
 
     issue, why, triggered_by = _primary_issue(health, beginner)
+    primary = core.select_primary_recommendation_detail(health.recommendation_details)
+    diagnostic_notes = [
+        d
+        for d in (health.recommendation_details or [])
+        if getattr(d, "rec_class", core.REC_CLASS_CORE) == core.REC_CLASS_DIAGNOSTIC
+    ]
     adj_table = _build_adjustment_table(health.rebalance_df, initial_value, include_unchanged=True)
     has_material_changes = guided_table_has_material_changes(adj_table)
     has_changes = not adj_table.empty
@@ -298,9 +305,8 @@ def render_guided_portfolio_adjustment(
         with adj_tabs[1]:
             st.markdown("#### Why it may matter")
             st.markdown(why)
-            if health.recommendation_details:
-                d0 = health.recommendation_details[0]
-                st.markdown(f"**Suggestion:** {translate_for_beginner(d0.text) if beginner else d0.text}")
+            if primary is not None:
+                st.markdown(f"**Suggestion:** {translate_for_beginner(primary.text) if beginner else primary.text}")
             render_rebalancing_panel(health, settings=settings, key_prefix=f"{key_prefix}_guided")
         with adj_tabs[2]:
             _render_preview_apply_section(
@@ -327,13 +333,20 @@ def render_guided_portfolio_adjustment(
     with st.container(border=True):
         st.markdown("### Step 2 — Why it may matter")
         st.markdown(why)
-        if health.recommendation_details:
-            d0 = health.recommendation_details[0]
-            st.markdown(f"**In plain terms:** {translate_for_beginner(d0.text) if beginner else d0.text}")
-            if d0.evidence:
-                sharpe_ev = d0.evidence.get("Sharpe ratio")
-                if sharpe_ev:
-                    st.caption(f"Model Sharpe ratio used for this flag: **{sharpe_ev}**")
+        if primary is not None:
+            st.markdown(f"**In plain terms:** {translate_for_beginner(primary.text) if beginner else primary.text}")
+            if primary.evidence:
+                role = primary.evidence.get("Role")
+                if role:
+                    st.caption(f"Recommendation role: **{role}**")
+        if diagnostic_notes:
+            st.caption(
+                "Diagnostic context (not a Core Health allocation trigger): "
+                + "; ".join(
+                    f"{d.issue.rstrip('.')} ({d.evidence.get('Sharpe ratio') or d.evidence.get('Sortino ratio') or d.evidence.get('Beta vs SPY') or d.evidence.get('Max correlation') or 'see details'})"
+                    for d in diagnostic_notes[:3]
+                )
+            )
 
     # Step 3
     with st.container(border=True):

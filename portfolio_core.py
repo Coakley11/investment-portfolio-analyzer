@@ -203,6 +203,14 @@ class RecommendationDetail:
     triggered_by: str
     possible_benefit: str
     evidence: dict[str, str]
+    # Option C: core = actionable allocation/plan; diagnostic = context only;
+    # macro = Environment / Macro coaching (not Core Health allocation).
+    rec_class: str = "core"
+
+
+REC_CLASS_CORE = "core"
+REC_CLASS_DIAGNOSTIC = "diagnostic"
+REC_CLASS_MACRO = "macro"
 
 
 @dataclass(frozen=True)
@@ -2680,7 +2688,12 @@ def _make_rec_detail(
     triggered_by: str,
     possible_benefit: str,
     evidence: dict[str, str],
+    *,
+    rec_class: str = REC_CLASS_CORE,
 ) -> RecommendationDetail:
+    cls = str(rec_class or REC_CLASS_CORE).strip().lower()
+    if cls not in (REC_CLASS_CORE, REC_CLASS_DIAGNOSTIC, REC_CLASS_MACRO):
+        cls = REC_CLASS_CORE
     return RecommendationDetail(
         text=text,
         issue=issue,
@@ -2688,7 +2701,64 @@ def _make_rec_detail(
         triggered_by=triggered_by,
         possible_benefit=possible_benefit,
         evidence=evidence,
+        rec_class=cls,
     )
+
+
+def select_primary_recommendation_detail(
+    details: list[RecommendationDetail] | None,
+) -> RecommendationDetail | None:
+    """
+    Guided / coach primary issue: first Option C *core* actionable detail.
+
+    Skips diagnostic-only Sharpe/Sortino/etc. and prefers core over macro.
+    """
+    if not details:
+        return None
+    core = [d for d in details if getattr(d, "rec_class", REC_CLASS_CORE) == REC_CLASS_CORE]
+    pool = core or [
+        d for d in details if getattr(d, "rec_class", REC_CLASS_CORE) == REC_CLASS_MACRO
+    ]
+    if not pool:
+        return None
+    actionable = [
+        d
+        for d in pool
+        if not str(d.text or "").lower().startswith("no urgent")
+        and not str(d.issue or "").lower().startswith("no urgent")
+    ]
+    return actionable[0] if actionable else pool[0]
+
+
+def _core_recommendation_sort_key(detail: RecommendationDetail) -> tuple[int, str]:
+    """Prefer objective / missing-sleeve / drift issues ahead of other core flags."""
+    issue = str(detail.issue or "").lower()
+    text = str(detail.text or "").lower()
+    if "not represented" in issue or "unrepresented" in text or "orphan" in str(
+        detail.evidence.get("Orphan sleeve", "")
+    ).lower():
+        return (0, issue)
+    if "drifted" in issue or "drift" in issue:
+        return (1, issue)
+    if "objective" in issue or "bond/cash" in issue or "short-term cash" in issue:
+        return (2, issue)
+    if "concentration" in issue:
+        return (3, issue)
+    if "drawdown" in issue:
+        return (4, issue)
+    if issue.startswith("no urgent"):
+        return (9, issue)
+    return (5, issue)
+
+
+def finalize_recommendation_details(
+    core: list[RecommendationDetail],
+    macro: list[RecommendationDetail],
+    diagnostic: list[RecommendationDetail],
+) -> list[RecommendationDetail]:
+    """Order: Option C core (objective-first) → macro coaching → diagnostics."""
+    core_sorted = sorted(core, key=_core_recommendation_sort_key)
+    return list(core_sorted) + list(macro) + list(diagnostic)
 
 
 def _build_portfolio_action_plan(
@@ -2701,8 +2771,19 @@ def _build_portfolio_action_plan(
     max_w: float,
 ) -> PortfolioActionPlan:
     obj_label = objective.strip().replace("_", " ").title()
+    # Urgency from Option C / constraint core issues only — not diagnostic Sharpe/etc.
     urgent = any(
-        d.issue.lower().startswith(("portfolio concentration", "recession", "drawdown", "objective"))
+        getattr(d, "rec_class", REC_CLASS_CORE) == REC_CLASS_CORE
+        and d.issue.lower().startswith(
+            (
+                "portfolio concentration",
+                "objective",
+                "a category",
+                "equity weight",
+                "bond/cash",
+                "portfolio weight drifted",
+            )
+        )
         for d in recommendation_details
         if not d.text.lower().startswith("no urgent")
     )
@@ -2998,16 +3079,20 @@ def evaluate_portfolio_health(
     if not whats_not:
         whats_not.append("No major model flags detected — continue monitoring drift and macro assumptions.")
 
-    # ── Recommendations (rule-based, educational) with transparent reasoning ──
-    recommendation_details: list[RecommendationDetail] = []
+    # ── Recommendations (Option C core + macro coaching + diagnostic context) ──
+    core_recs: list[RecommendationDetail] = []
+    macro_recs: list[RecommendationDetail] = []
+    diagnostic_recs: list[RecommendationDetail] = []
     obj_key = objective.strip().lower()
     obj_label = objective.strip().replace("_", " ").title()
     equity_pct = float(profile["equity"]) * 100
     bond_cash_pct = (float(profile["bonds"]) + float(profile["tbills"])) * 100
     long_bond_pct = float(profile["long_duration_bonds"]) * 100
+    risk_max = float(HEALTH_CORE_PILLAR_MAX["Risk Appropriateness"])
+    construction_max = float(HEALTH_CORE_PILLAR_MAX["Portfolio Construction"])
 
     if recession_prob > 0.50 and float(profile["equity"]) > 0.70:
-        recommendation_details.append(
+        macro_recs.append(
             _make_rec_detail(
                 "Based on the model, recession probability above 50% with equity above 70% may be worth reviewing for equity exposure.",
                 issue="High equity exposure during elevated recession risk.",
@@ -3020,10 +3105,11 @@ def evaluate_portfolio_health(
                     "Portfolio objective": obj_label,
                     "Portfolio Health Score": f"{score:.0f}/100",
                 },
+                rec_class=REC_CLASS_MACRO,
             )
         )
     if assumptions.inflation == "High Inflation" and float(profile["long_duration_bonds"]) > 0.20:
-        recommendation_details.append(
+        macro_recs.append(
             _make_rec_detail(
                 "High inflation assumptions combined with long-duration bonds may warrant reviewing bond sensitivity (for educational purposes).",
                 issue="Long-duration bond exposure under high-inflation assumptions.",
@@ -3035,41 +3121,68 @@ def evaluate_portfolio_health(
                     "Long-duration bonds": f"{long_bond_pct:.0f}%",
                     "Bond/cash allocation": f"{bond_cash_pct:.0f}%",
                 },
+                rec_class=REC_CLASS_MACRO,
             )
         )
     if raw_sharpe < 0.4:
-        recommendation_details.append(
+        diagnostic_recs.append(
             _make_rec_detail(
-                "Sharpe ratio below 0.4 suggests risk-adjusted return may be weak — consider reviewing the risk/return mix.",
-                issue="Risk-adjusted return appears weak in the model.",
-                why_it_matters="You may be taking risk without commensurate return relative to the risk-free rate.",
-                triggered_by=f"Sharpe ratio = {raw_sharpe:.2f} (below 0.4 threshold).",
-                possible_benefit="Adjusting the mix may improve return per unit of risk taken.",
+                "Sharpe ratio below 0.4 is a diagnostic flag for risk-adjusted return — supporting context only, not a Core Health allocation trigger.",
+                issue="Risk-adjusted return appears weak in the model (diagnostic).",
+                why_it_matters=(
+                    "Sharpe is outside Option C Core Health. Use it as context alongside policy fit, "
+                    "construction, risk appropriateness, and policy-relative performance."
+                ),
+                triggered_by=f"Sharpe ratio = {raw_sharpe:.2f} (below 0.4 diagnostic threshold).",
+                possible_benefit="Review pillar diagnostics; do not reallocate solely on this absolute Sharpe flag.",
                 evidence={
                     "Sharpe ratio": f"{raw_sharpe:.2f}",
                     "Annual return": f"{port_ann * 100:.1f}%",
                     "Volatility": f"{vol * 100:.1f}%",
+                    "Role": "diagnostic context",
                 },
+                rec_class=REC_CLASS_DIAGNOSTIC,
             )
         )
     if dd < -0.25:
-        recommendation_details.append(
+        # Absolute DD is diagnostic unless Risk Appropriateness is already weak.
+        dd_rec_class = (
+            REC_CLASS_CORE
+            if float(s_risk) < 0.5 * risk_max
+            else REC_CLASS_DIAGNOSTIC
+        )
+        dd_bucket = core_recs if dd_rec_class == REC_CLASS_CORE else diagnostic_recs
+        dd_bucket.append(
             _make_rec_detail(
                 "Max drawdown worse than -25% flags drawdown risk in the historical window — may be worth reviewing defensive buffers.",
                 issue="Historical drawdown risk is elevated.",
-                why_it_matters="Large past drops may indicate the portfolio could fall sharply again in stress periods.",
+                why_it_matters=(
+                    "Large past drops may indicate the portfolio could fall sharply again in stress periods. "
+                    + (
+                        "Risk Appropriateness is also weak vs policy, so this reinforces a Core risk review."
+                        if dd_rec_class == REC_CLASS_CORE
+                        else "Shown as diagnostic context because Risk Appropriateness vs policy is not weak."
+                    )
+                ),
                 triggered_by=f"Max drawdown = {dd * 100:.1f}% (worse than -25%).",
                 possible_benefit="Adding stabilizers (bonds/cash) or reducing risk assets may lower drawdown severity in the model.",
                 evidence={
                     "Max drawdown": f"{dd * 100:.1f}%",
                     "Volatility": f"{vol * 100:.1f}%",
                     "Beta vs SPY": f"{metrics.beta_spy:.2f}",
+                    "Risk Appropriateness": f"{float(s_risk):.1f}/{risk_max:.0f}",
+                    "Role": (
+                        "core (policy risk weak)"
+                        if dd_rec_class == REC_CLASS_CORE
+                        else "diagnostic context"
+                    ),
                 },
+                rec_class=dd_rec_class,
             )
         )
     if float(construction_diag.get("conc_engine_pts") or 0) <= 4.0:
         top_kind = str(conc_diag.get("kind") or "unknown")
-        recommendation_details.append(
+        core_recs.append(
             _make_rec_detail(
                 f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% "
                 f"({top_kind.replace('_', ' ')}) — concentration may deserve attention.",
@@ -3095,10 +3208,11 @@ def evaluate_portfolio_health(
                     "Equity allocation": f"{equity_pct:.0f}%",
                     "Portfolio objective": obj_label,
                 },
+                rec_class=REC_CLASS_CORE,
             )
         )
     if obj_key == "short-term cash management" and float(profile["equity"]) > 0.40:
-        recommendation_details.append(
+        core_recs.append(
             _make_rec_detail(
                 "For a short-term cash objective, equity above 40% may not align with the selected objective in this model.",
                 issue="Equity weight may exceed short-term cash objective.",
@@ -3110,40 +3224,51 @@ def evaluate_portfolio_health(
                     "Equity allocation": f"{equity_pct:.0f}%",
                     "T-Bills/cash allocation": f"{float(profile['tbills']) * 100:.0f}%",
                 },
+                rec_class=REC_CLASS_CORE,
             )
         )
     if port_sortino < 0.35:
-        recommendation_details.append(
+        diagnostic_recs.append(
             _make_rec_detail(
-                "Sortino ratio is low — downside volatility may be elevated relative to return.",
-                issue="Downside risk appears elevated vs. return.",
-                why_it_matters="Bad drops may outweigh gains relative to what the model considers acceptable.",
-                triggered_by=f"Sortino ratio = {port_sortino:.2f} (below 0.35).",
-                possible_benefit="Reviewing defensive assets or diversification may reduce downside swings.",
+                "Sortino ratio is low — downside volatility may be elevated relative to return (diagnostic context).",
+                issue="Downside risk appears elevated vs. return (diagnostic).",
+                why_it_matters=(
+                    "Sortino is outside Option C Core Health. Treat as supporting downside context, "
+                    "not a standalone reason to reallocate a Mostly-On-Plan book."
+                ),
+                triggered_by=f"Sortino ratio = {port_sortino:.2f} (below 0.35 diagnostic threshold).",
+                possible_benefit="Review defensive assets if Risk Appropriateness or objective fit also flag concern.",
                 evidence={
                     "Sortino ratio": f"{port_sortino:.2f}",
                     "Max drawdown": f"{dd * 100:.1f}%",
                     "Volatility": f"{vol * 100:.1f}%",
+                    "Role": "diagnostic context",
                 },
+                rec_class=REC_CLASS_DIAGNOSTIC,
             )
         )
     if metrics.beta_spy > 1.15:
-        recommendation_details.append(
+        diagnostic_recs.append(
             _make_rec_detail(
-                "Beta above 1.15 vs SPY suggests higher market sensitivity than the benchmark.",
-                issue="Portfolio moves more than the broad market.",
-                why_it_matters="In market downturns, a high-beta portfolio may fall more than SPY.",
-                triggered_by=f"Beta vs SPY = {metrics.beta_spy:.2f} (above 1.15).",
-                possible_benefit="Adding lower-beta assets may reduce market-linked swings.",
+                "Beta above 1.15 vs SPY is contextual risk information — not an independent Option C allocation trigger.",
+                issue="Portfolio moves more than the broad market (diagnostic).",
+                why_it_matters=(
+                    "High beta can amplify market swings. Prefer policy-relative Risk Appropriateness "
+                    "and objective fit when deciding whether allocation changes are warranted."
+                ),
+                triggered_by=f"Beta vs SPY = {metrics.beta_spy:.2f} (above 1.15 diagnostic threshold).",
+                possible_benefit="Use as risk context when reviewing stabilizers or equity weight vs objective.",
                 evidence={
                     "Beta vs SPY": f"{metrics.beta_spy:.2f}",
                     "Equity allocation": f"{equity_pct:.0f}%",
                     "Volatility": f"{vol * 100:.1f}%",
+                    "Role": "diagnostic context",
                 },
+                rec_class=REC_CLASS_DIAGNOSTIC,
             )
         )
     if bond_min_pct is not None and (float(profile["bonds"]) + float(profile["tbills"])) * 100 < bond_min_pct:
-        recommendation_details.append(
+        core_recs.append(
             _make_rec_detail(
                 f"Bond/cash allocation is below the selected minimum constraint ({bond_min_pct:.0f}%) — may be worth reviewing.",
                 issue="Bond/cash weight is below your stated minimum.",
@@ -3155,37 +3280,45 @@ def evaluate_portfolio_health(
                     "Minimum constraint": f"{bond_min_pct:.0f}%",
                     "Portfolio objective": obj_label,
                 },
+                rec_class=REC_CLASS_CORE,
             )
         )
     if max_corr >= 0.80:
-        recommendation_details.append(
+        # Correlation is construction context; do not override a strong construction pillar.
+        corr_rec_class = (
+            REC_CLASS_DIAGNOSTIC
+            if float(s_construction) >= 0.67 * construction_max
+            else REC_CLASS_CORE
+        )
+        corr_bucket = (
+            diagnostic_recs if corr_rec_class == REC_CLASS_DIAGNOSTIC else core_recs
+        )
+        corr_bucket.append(
             _make_rec_detail(
                 "Some holdings appear highly correlated — diversification benefits may be limited.",
                 issue="Holdings move together more than ideal.",
-                why_it_matters="If assets rise and fall together, the portfolio may not be as diversified as it looks.",
+                why_it_matters=(
+                    "If assets rise and fall together, the portfolio may not be as diversified as it looks. "
+                    + (
+                        "Construction score is already strong, so this stays diagnostic context."
+                        if corr_rec_class == REC_CLASS_DIAGNOSTIC
+                        else "Construction is soft, so correlation reinforces a Core construction review."
+                    )
+                ),
                 triggered_by=f"Maximum pairwise correlation ≈ {max_corr:.2f} (≥ 0.80).",
                 possible_benefit="Adding less-correlated assets may smooth combined volatility.",
                 evidence={
                     "Max correlation": f"{max_corr:.2f}",
                     "Number of holdings": str(len(tickers)),
                     "Portfolio objective": obj_label,
+                    "Portfolio Construction": f"{float(s_construction):.1f}/{construction_max:.0f}",
+                    "Role": (
+                        "diagnostic context"
+                        if corr_rec_class == REC_CLASS_DIAGNOSTIC
+                        else "core construction"
+                    ),
                 },
-            )
-        )
-
-    if not recommendation_details:
-        recommendation_details.append(
-            _make_rec_detail(
-                "No urgent model flags — continue monitoring allocation drift and macro assumptions.",
-                issue="No urgent model flags detected.",
-                why_it_matters="Regular checkups help catch drift before it becomes a larger gap from your plan.",
-                triggered_by=f"Portfolio Health Score = {score:.0f}/100 with no rule triggers active.",
-                possible_benefit="Staying on your current plan while monitoring monthly.",
-                evidence={
-                    "Portfolio Health Score": f"{score:.0f}/100",
-                    "Portfolio objective": obj_label,
-                    "Recession probability": f"{recession_prob * 100:.0f}%",
-                },
+                rec_class=corr_rec_class,
             )
         )
 
@@ -3255,7 +3388,7 @@ def evaluate_portfolio_health(
                 "Orphan Sleeve": True,
             }
         )
-        recommendation_details.append(
+        core_recs.append(
             _make_rec_detail(
                 f"Objective includes {orphan_w * 100:.0f}% {sleeve.get('Asset Type', 'unrepresented')} "
                 f"with no matching holding.",
@@ -3279,6 +3412,7 @@ def evaluate_portfolio_health(
                     "Portfolio objective": obj_label,
                     "Orphan sleeve": "yes",
                 },
+                rec_class=REC_CLASS_CORE,
             )
         )
 
@@ -3291,7 +3425,7 @@ def evaluate_portfolio_health(
         if not note or note == "Within tolerance":
             continue
         ticker = row["Ticker"]
-        recommendation_details.append(
+        core_recs.append(
             _make_rec_detail(
                 note,
                 issue="Portfolio weight drifted from a reference mix.",
@@ -3309,8 +3443,51 @@ def evaluate_portfolio_health(
                     "Drift vs objective": f"{row['Drift vs Objective (%)']:+.1f}%",
                     "Portfolio objective": obj_label,
                 },
+                rec_class=REC_CLASS_CORE,
             )
         )
+
+    if not core_recs and not macro_recs and not diagnostic_recs:
+        core_recs.append(
+            _make_rec_detail(
+                "No urgent model flags — continue monitoring allocation drift and macro assumptions.",
+                issue="No urgent model flags detected.",
+                why_it_matters="Regular checkups help catch drift before it becomes a larger gap from your plan.",
+                triggered_by=f"Portfolio Health Score = {score:.0f}/100 with no rule triggers active.",
+                possible_benefit="Staying on your current plan while monitoring monthly.",
+                evidence={
+                    "Portfolio Health Score": f"{score:.0f}/100",
+                    "Portfolio objective": obj_label,
+                    "Recession probability": f"{recession_prob * 100:.0f}%",
+                },
+                rec_class=REC_CLASS_CORE,
+            )
+        )
+    elif not core_recs:
+        # Diagnostics/macro alone must not invent a Core allocation crisis.
+        core_recs.append(
+            _make_rec_detail(
+                "No urgent Core Health allocation flags — diagnostic/macro notes below are supporting context.",
+                issue="No urgent Core Health allocation flags detected.",
+                why_it_matters=(
+                    "Option C Core Health did not surface an objective, construction, risk, or "
+                    "constraint action. Review diagnostics as context only."
+                ),
+                triggered_by=f"Portfolio Health Score = {score:.0f}/100; Core actionable list empty.",
+                possible_benefit="Stay on plan unless objective drift or a Core pillar flags a change.",
+                evidence={
+                    "Portfolio Health Score": f"{score:.0f}/100",
+                    "Portfolio objective": obj_label,
+                    "Diagnostic notes": str(len(diagnostic_recs)),
+                    "Macro notes": str(len(macro_recs)),
+                },
+                rec_class=REC_CLASS_CORE,
+            )
+        )
+
+    recommendation_details = finalize_recommendation_details(
+        core_recs, macro_recs, diagnostic_recs
+    )
     recommendations = [d.text for d in recommendation_details]
 
     action_plan = _build_portfolio_action_plan(
@@ -3645,6 +3822,7 @@ def enrich_recommendation_details_with_dollars(
                 triggered_by=d.triggered_by,
                 possible_benefit=d.possible_benefit,
                 evidence=ev,
+                rec_class=getattr(d, "rec_class", REC_CLASS_CORE),
             )
         )
     return enriched

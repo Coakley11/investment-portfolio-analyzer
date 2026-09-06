@@ -149,6 +149,15 @@ class TestSharpeIsDiagnosticNotCoreHealth(unittest.TestCase):
                 if "Sharpe" in d.issue or "sharpe" in d.triggered_by.lower()
             ]
             self.assertTrue(sharpe_recs)
+            self.assertTrue(
+                all(d.rec_class == core.REC_CLASS_DIAGNOSTIC for d in sharpe_recs)
+            )
+            primary = core.select_primary_recommendation_detail(
+                health.recommendation_details
+            )
+            self.assertIsNotNone(primary)
+            self.assertNotEqual(primary.rec_class, core.REC_CLASS_DIAGNOSTIC)
+            self.assertNotIn("Sharpe", primary.issue)
 
 
 class TestRecommendationsRenderFallback(unittest.TestCase):

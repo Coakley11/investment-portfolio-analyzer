@@ -416,7 +416,8 @@ def render_beginner_analyze_results(health: core.PortfolioHealthResult, *, objec
             "returns have roughly kept up with your policy — without requiring formulas."
         )
         if health.recommendation_details:
-            d0 = health.recommendation_details[0]
+            primary = core.select_primary_recommendation_detail(health.recommendation_details)
+            d0 = primary or health.recommendation_details[0]
             st.markdown(f"**Top note:** {d0.issue}")
             st.markdown(f"**Why it may matter:** {d0.why_it_matters}")
         st.caption("Switch to **Advanced Mode** for score breakdowns, charts, and full methodology.")

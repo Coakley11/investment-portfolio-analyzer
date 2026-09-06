@@ -81,6 +81,12 @@ def render_recommendation_detail(
     issue = translate_for_beginner(detail.issue) if beginner else detail.issue
     why = translate_for_beginner(detail.why_it_matters) if beginner else detail.why_it_matters
     dollars = detail.evidence.get("Approx. dollar amount") or detail.evidence.get("About how much money is involved")
+    rec_class = getattr(detail, "rec_class", core.REC_CLASS_CORE)
+    role_caption = None
+    if rec_class == core.REC_CLASS_DIAGNOSTIC:
+        role_caption = "Diagnostic context — not a Core Health allocation trigger."
+    elif rec_class == core.REC_CLASS_MACRO:
+        role_caption = "Environment / Macro coaching — separate from Core Health scoring."
 
     if beginner:
         st.markdown(
@@ -95,6 +101,8 @@ def render_recommendation_detail(
             """,
             unsafe_allow_html=True,
         )
+        if role_caption:
+            st.caption(role_caption)
         st.markdown(f"**What is the issue?** {issue}")
         st.markdown(f"**Why does it matter?** {why}")
         st.markdown(f"**What might I consider doing?** {detail.possible_benefit}")
@@ -113,6 +121,8 @@ def render_recommendation_detail(
         with st.container(border=True):
             st.markdown(f"**Recommendation {index + 1}**")
             st.markdown(display_text)
+            if role_caption:
+                st.caption(role_caption)
             st.markdown(f"**What is the issue?** {issue}")
             st.markdown(f"**Why does it matter?** {why}")
             st.markdown(f"**What might you consider?** {detail.possible_benefit}")
