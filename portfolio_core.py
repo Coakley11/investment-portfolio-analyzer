@@ -234,6 +234,9 @@ class PortfolioHealthResult:
     score_breakdown: dict[str, float]
     avg_drift: float
     objective: str
+    policy_benchmark_label: str = ""
+    policy_benchmark_detail: str = ""
+    max_pairwise_abs_corr: float = 0.0
 
 
 OBJECTIVE_ALLOCATIONS: dict[str, dict[str, float]] = {
@@ -244,6 +247,308 @@ OBJECTIVE_ALLOCATIONS: dict[str, dict[str, float]] = {
     "retirement": {"equity": 0.45, "bonds": 0.40, "tbills": 0.15},
     "short-term cash management": {"equity": 0.10, "bonds": 0.20, "tbills": 0.70},
 }
+
+# Proxies for objective-aware Health Return vs Policy Benchmark (must exist in market data).
+POLICY_BENCHMARK_PROXIES: dict[str, str] = {
+    "equity": "SPY",
+    "bonds": "AGG",
+    "tbills": "BIL",
+}
+
+_INTL_EQUITY_TICKERS = frozenset({"VXUS", "VEA", "IEFA", "EFA", "IXUS", "VWO", "IEMG", "ACWX"})
+
+
+def policy_benchmark_proxy_tickers() -> tuple[str, ...]:
+    return tuple(POLICY_BENCHMARK_PROXIES.values())
+
+
+def build_policy_benchmark_returns(
+    proxy_returns: pd.DataFrame,
+    objective: str,
+) -> tuple[pd.Series | None, dict[str, Any]]:
+    """
+    Build a date-aligned policy benchmark return series from objective category weights.
+
+    Uses SPY (equity), AGG (bonds), BIL (T-Bills). Returns (None, meta) when any
+    required proxy column is missing or the aligned series is too short — callers
+    must not silently fall back to 100% SPY for Health scoring.
+    """
+    targets = _objective_type_targets(objective)
+    meta: dict[str, Any] = {
+        "objective": objective.strip().lower(),
+        "weights": {
+            "equity": float(targets["equity"]),
+            "bonds": float(targets["bonds"]),
+            "tbills": float(targets["tbills"]),
+        },
+        "proxies": dict(POLICY_BENCHMARK_PROXIES),
+        "ok": False,
+        "n_obs": 0,
+    }
+    if proxy_returns is None or getattr(proxy_returns, "empty", True):
+        meta["error"] = "empty_proxy_returns"
+        return None, meta
+
+    col_map = {str(c).strip().upper(): c for c in proxy_returns.columns}
+    pieces: list[pd.Series] = []
+    for sleeve, proxy in POLICY_BENCHMARK_PROXIES.items():
+        raw = col_map.get(proxy.upper())
+        if raw is None:
+            meta["error"] = f"missing_proxy:{proxy}"
+            return None, meta
+        pieces.append(proxy_returns[raw].rename(proxy.upper()))
+
+    aligned = pd.concat(pieces, axis=1, join="inner").dropna(how="any")
+    if len(aligned) < 6:
+        meta["error"] = "insufficient_aligned_observations"
+        meta["n_obs"] = int(len(aligned))
+        return None, meta
+
+    w_eq = float(targets["equity"])
+    w_bond = float(targets["bonds"])
+    w_tb = float(targets["tbills"])
+    series = (
+        w_eq * aligned["SPY"]
+        + w_bond * aligned["AGG"]
+        + w_tb * aligned["BIL"]
+    )
+    series.name = "policy_benchmark"
+    meta["ok"] = True
+    meta["n_obs"] = int(len(series))
+    meta["label"] = (
+        f"Policy ({meta['objective']}: "
+        f"{w_eq * 100:.0f}% SPY / {w_bond * 100:.0f}% AGG / {w_tb * 100:.0f}% BIL)"
+    )
+    meta["detail"] = (
+        f"Objective-aware policy benchmark = "
+        f"{w_eq * 100:.0f}% equity (SPY) + {w_bond * 100:.0f}% bonds (AGG) + "
+        f"{w_tb * 100:.0f}% T-Bills (BIL), date-aligned."
+    )
+    return series, meta
+
+
+def score_return_vs_policy_benchmark(
+    portfolio_returns: pd.Series,
+    policy_returns: pd.Series | None,
+) -> tuple[float, float, float, int]:
+    """
+    Return (s_return, port_ann, policy_ann, n_aligned) using the same gap thresholds
+    as the legacy Return vs Benchmark ladder, on an explicit date intersection.
+    """
+    if policy_returns is None or portfolio_returns is None:
+        return 0.0, 0.0, 0.0, 0
+    port = portfolio_returns.copy()
+    pol = policy_returns.copy()
+    if not isinstance(port.index, pd.DatetimeIndex):
+        port.index = pd.to_datetime(port.index)
+    if not isinstance(pol.index, pd.DatetimeIndex):
+        pol.index = pd.to_datetime(pol.index)
+    aligned = pd.concat([port.rename("port"), pol.rename("policy")], axis=1, join="inner").dropna()
+    n = int(len(aligned))
+    if n < 6:
+        return 0.0, 0.0, 0.0, n
+    port_ann = annualized_return(aligned["port"])
+    policy_ann = annualized_return(aligned["policy"])
+    ret_gap = port_ann - policy_ann
+    if ret_gap >= 0.02:
+        s_return = 15.0
+    elif ret_gap >= 0:
+        s_return = 12.0
+    elif ret_gap >= -0.02:
+        s_return = 8.0
+    elif ret_gap >= -0.05:
+        s_return = 4.0
+    else:
+        s_return = 0.0
+    return float(s_return), float(port_ann), float(policy_ann), n
+
+
+def _economic_sleeve_weights(
+    tickers: Sequence[str],
+    weights: np.ndarray,
+    asset_types: Sequence[str],
+) -> dict[str, float]:
+    """Map holdings into economic sleeves for diversification breadth."""
+    w = normalize_weights(weights)
+    sleeves = {
+        "us_equity": 0.0,
+        "intl_equity": 0.0,
+        "bonds": 0.0,
+        "tbills": 0.0,
+        "reit": 0.0,
+        "dividend": 0.0,
+        "other": 0.0,
+    }
+    for ti, wi, at in zip(tickers, w, asset_types):
+        sym = str(ti).strip().upper()
+        if at == "Bonds":
+            sleeves["bonds"] += float(wi)
+        elif at == "T-Bills":
+            sleeves["tbills"] += float(wi)
+        elif at == "REIT":
+            sleeves["reit"] += float(wi)
+        elif at == "Dividend ETF":
+            sleeves["dividend"] += float(wi)
+        elif at == "Equity":
+            if sym in _INTL_EQUITY_TICKERS:
+                sleeves["intl_equity"] += float(wi)
+            else:
+                sleeves["us_equity"] += float(wi)
+        else:
+            sleeves["other"] += float(wi)
+    return sleeves
+
+
+def score_portfolio_diversification(
+    tickers: Sequence[str],
+    weights: np.ndarray,
+    asset_types: Sequence[str],
+    corr: pd.DataFrame,
+    *,
+    sleeve_min_weight: float = 0.05,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Portfolio-level diversification score (0–12).
+
+    Combines:
+    - economic sleeve breadth (0–4)
+    - weight dispersion via effective N = 1/HHI (0–4)
+    - average |pairwise correlation| (0–4)
+
+    Worst pairwise correlation is reported as a diagnostic only.
+    """
+    w = normalize_weights(weights)
+    sleeves = _economic_sleeve_weights(tickers, w, asset_types)
+    n_sleeves = sum(1 for v in sleeves.values() if v >= sleeve_min_weight)
+    if n_sleeves >= 4:
+        s_breadth = 4.0
+    elif n_sleeves == 3:
+        s_breadth = 3.0
+    elif n_sleeves == 2:
+        s_breadth = 2.0
+    elif n_sleeves == 1:
+        s_breadth = 0.0
+    else:
+        s_breadth = 0.0
+
+    hhi = float(np.sum(np.square(w)))
+    n_eff = (1.0 / hhi) if hhi > 0 else 1.0
+    if n_eff >= 3.5:
+        s_disp = 4.0
+    elif n_eff >= 2.5:
+        s_disp = 3.0
+    elif n_eff >= 1.75:
+        s_disp = 2.0
+    elif n_eff >= 1.25:
+        s_disp = 1.0
+    else:
+        s_disp = 0.0
+
+    max_corr = 0.0
+    avg_corr = 1.0
+    if corr is not None and not corr.empty and len(corr) >= 2:
+        off = corr.values.copy().astype(float)
+        np.fill_diagonal(off, np.nan)
+        abs_off = np.abs(off)
+        if np.isfinite(abs_off).any():
+            max_corr = float(np.nanmax(abs_off))
+            avg_corr = float(np.nanmean(abs_off))
+    if len(w) < 2:
+        s_corr = 0.0
+    elif avg_corr < 0.40:
+        s_corr = 4.0
+    elif avg_corr < 0.55:
+        s_corr = 3.0
+    elif avg_corr < 0.70:
+        s_corr = 2.0
+    elif avg_corr < 0.85:
+        s_corr = 1.0
+    else:
+        s_corr = 0.0
+
+    total = float(np.clip(s_breadth + s_disp + s_corr, 0, 12))
+    diag = {
+        "sleeve_weights": sleeves,
+        "n_sleeves_ge_min": n_sleeves,
+        "breadth_pts": s_breadth,
+        "hhi": hhi,
+        "n_eff": n_eff,
+        "dispersion_pts": s_disp,
+        "avg_abs_corr": avg_corr,
+        "max_abs_corr": max_corr,
+        "corr_pts": s_corr,
+        "total": total,
+    }
+    return total, diag
+
+
+def _classify_health_holding(ticker: str, asset_type: str) -> str:
+    try:
+        from investment_ami.decision_support.real_portfolio_security_types import (
+            classify_ticker_security,
+        )
+
+        at = str(asset_type or "")
+        engine = ""
+        if at == "Bonds":
+            engine = "Bonds"
+        elif at == "T-Bills":
+            engine = "Cash"
+        clf = classify_ticker_security(ticker, asset_type_label=at, engine_asset_class=engine)
+        return str(clf.kind)
+    except Exception:
+        at = str(asset_type or "")
+        if at == "Bonds":
+            return "bond_etf_or_bond_fund"
+        if at == "T-Bills":
+            return "cash"
+        if at == "REIT":
+            return "narrow_or_thematic_etf"
+        return "unknown"
+
+
+def score_concentration_risk_kind_aware(
+    tickers: Sequence[str],
+    weights: np.ndarray,
+    asset_types: Sequence[str],
+) -> tuple[float, dict[str, Any]]:
+    """
+    Concentration score (0–12) using AMI security-kind bands on the largest holding.
+
+    Broad-market ETFs and bond funds use softer weight bands than individual equities;
+    narrow/thematic ETFs remain relatively strict.
+    """
+    w = normalize_weights(weights)
+    top_idx = int(np.argmax(w))
+    top_w = float(w[top_idx])
+    top_t = str(tickers[top_idx])
+    top_at = str(asset_types[top_idx]) if top_idx < len(asset_types) else ""
+    kind = _classify_health_holding(top_t, top_at)
+
+    # (max_weight_inclusive, points) ladders by kind — first match wins.
+    bands: dict[str, list[tuple[float, float]]] = {
+        "individual_equity": [(0.20, 12.0), (0.30, 8.0), (0.40, 4.0), (1.01, 0.0)],
+        "unknown": [(0.20, 12.0), (0.30, 8.0), (0.40, 4.0), (1.01, 0.0)],
+        "other": [(0.25, 12.0), (0.35, 8.0), (0.45, 4.0), (1.01, 0.0)],
+        "narrow_or_thematic_etf": [(0.25, 12.0), (0.35, 8.0), (0.45, 4.0), (1.01, 0.0)],
+        "diversified_sector_or_factor_etf": [(0.30, 12.0), (0.40, 8.0), (0.50, 4.0), (1.01, 0.0)],
+        "broad_market_etf": [(0.45, 12.0), (0.60, 8.0), (0.75, 4.0), (1.01, 0.0)],
+        "bond_etf_or_bond_fund": [(0.50, 12.0), (0.70, 8.0), (0.85, 4.0), (1.01, 0.0)],
+        "cash": [(0.70, 12.0), (0.85, 8.0), (0.95, 4.0), (1.01, 0.0)],
+    }
+    ladder = bands.get(kind, bands["other"])
+    s_conc = 0.0
+    for limit, pts in ladder:
+        if top_w <= limit:
+            s_conc = pts
+            break
+
+    return float(s_conc), {
+        "top_ticker": top_t,
+        "top_weight": top_w,
+        "kind": kind,
+        "points": float(s_conc),
+    }
 
 
 def normalize_weights(weights: Iterable[float]) -> np.ndarray:
@@ -1911,6 +2216,8 @@ def evaluate_portfolio_health(
     optimizer_weights: np.ndarray | None = None,
     recommended_type_mix: dict[str, float] | None = None,
     bond_min_pct: float | None = None,
+    policy_benchmark_returns: pd.Series | None = None,
+    policy_benchmark_meta: dict[str, Any] | None = None,
 ) -> PortfolioHealthResult:
     w = normalize_weights(weights)
     profile = allocation_profile(tickers, w, asset_types)
@@ -1919,22 +2226,39 @@ def evaluate_portfolio_health(
     risk_df = risk_contrib_df.copy()
     macro_heatmap = _macro_heatmap_df(asset_types)
 
-    bench_ret = 0.0
+    port_rets = portfolio_daily_returns(asset_returns, w, tickers=tickers)
+    policy_meta = dict(policy_benchmark_meta or {})
+    s_return, port_ann_aligned, policy_ann, n_aligned = score_return_vs_policy_benchmark(
+        port_rets, policy_benchmark_returns
+    )
+    # Do not fall back to 100% SPY for Health return scoring.
+    if policy_benchmark_returns is None or n_aligned < 6:
+        s_return = 0.0
+        policy_label = str(policy_meta.get("label") or "Policy benchmark unavailable")
+        policy_detail = str(
+            policy_meta.get("detail")
+            or policy_meta.get("error")
+            or "Policy benchmark series missing or too short after date alignment — Return vs Policy scored 0."
+        )
+    else:
+        policy_label = str(policy_meta.get("label") or "Policy benchmark")
+        policy_detail = str(
+            policy_meta.get("detail")
+            or "Objective-aware policy benchmark (category-weighted proxies)."
+        )
+        policy_detail = (
+            f"{policy_detail} Aligned observations: {n_aligned}. "
+            f"Portfolio ann. return (aligned): {port_ann_aligned * 100:.2f}%; "
+            f"policy ann. return: {policy_ann * 100:.2f}%."
+        )
+
+    # Legacy SPY series retained only for narrative beta context (not return score).
+    spy_ann = 0.0
     if benchmark_returns is not None and len(benchmark_returns.dropna()) > 5:
-        bench_ret = annualized_return(benchmark_returns.dropna())
+        spy_ann = annualized_return(benchmark_returns.dropna())
 
     # ── Score components (0–100) ──
-    ret_gap = metrics.annual_return - bench_ret
-    if ret_gap >= 0.02:
-        s_return = 15.0
-    elif ret_gap >= 0:
-        s_return = 12.0
-    elif ret_gap >= -0.02:
-        s_return = 8.0
-    elif ret_gap >= -0.05:
-        s_return = 4.0
-    else:
-        s_return = 0.0
+    ret_gap = port_ann_aligned - policy_ann if n_aligned >= 6 else metrics.annual_return - spy_ann
 
     vol = metrics.volatility
     if vol <= 0.12:
@@ -1957,27 +2281,11 @@ def evaluate_portfolio_health(
     else:
         s_dd = 0.0
 
-    off_diag = corr.values.copy()
-    np.fill_diagonal(off_diag, np.nan)
-    max_corr = float(np.nanmax(np.abs(off_diag))) if off_diag.size else 0.0
-    if max_corr < 0.50:
-        s_div = 12.0
-    elif max_corr < 0.70:
-        s_div = 8.0
-    elif max_corr < 0.85:
-        s_div = 4.0
-    else:
-        s_div = 0.0
+    s_div, div_diag = score_portfolio_diversification(tickers, w, asset_types, corr)
+    max_corr = float(div_diag.get("max_abs_corr") or 0.0)
 
-    max_w = float(profile["concentration"])
-    if max_w <= 0.25:
-        s_conc = 12.0
-    elif max_w <= 0.35:
-        s_conc = 8.0
-    elif max_w <= 0.45:
-        s_conc = 4.0
-    else:
-        s_conc = 0.0
+    s_conc, conc_diag = score_concentration_risk_kind_aware(tickers, w, asset_types)
+    max_w = float(conc_diag.get("top_weight") or profile["concentration"])
 
     obj_targets = _objective_type_targets(objective)
     eq_drift = abs(float(profile["equity"]) - obj_targets["equity"])
@@ -2007,7 +2315,7 @@ def evaluate_portfolio_health(
     s_macro = float(np.clip(s_macro, 0, 10))
 
     breakdown = {
-        "Return vs Benchmark": s_return,
+        "Return vs Policy Benchmark": s_return,
         "Volatility Level": s_vol,
         # Score points (sharpe × 10, capped) — not the raw Sharpe ratio.
         "Sharpe Score (pts)": s_sharpe,
@@ -2038,10 +2346,16 @@ def evaluate_portfolio_health(
     for t in stabilizers[:3]:
         whats_working.append(f"{t} may act as a lower-volatility stabilizer in the model.")
 
-    if ret_gap > 0:
-        whats_working.append("Portfolio return is above the SPY benchmark over the selected period (model-based).")
+    if n_aligned >= 6 and ret_gap > 0:
+        whats_working.append(
+            "Portfolio return is above the objective policy benchmark over the selected period (model-based)."
+        )
     if max_corr < 0.65:
         whats_working.append("Holdings show moderate correlation — diversification may be helping.")
+    if float(div_diag.get("n_sleeves_ge_min") or 0) >= 3:
+        whats_working.append(
+            "Multiple economic sleeves (e.g. equity / bonds / REIT) contribute portfolio-level diversification."
+        )
     if metrics.beta_spy < 0.85 and float(profile["bonds"] + profile["tbills"]) >= 0.20:
         whats_working.append("Lower market sensitivity than SPY may be supported by bond/T-bill exposure.")
 
@@ -2141,17 +2455,27 @@ def evaluate_portfolio_health(
                 },
             )
         )
-    if max_w > 0.35:
+    if s_conc <= 4.0:
+        top_kind = str(conc_diag.get("kind") or "unknown")
         recommendation_details.append(
             _make_rec_detail(
-                f"Largest holding exceeds 35% ({profile['top_ticker']}) — concentration risk may deserve attention.",
-                issue="Portfolio concentration is high.",
-                why_it_matters="A large position in one asset can increase risk if that holding falls sharply.",
-                triggered_by=f"Largest holding = {profile['top_ticker']} at {max_w * 100:.1f}%.",
+                f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% "
+                f"({top_kind.replace('_', ' ')}) — concentration may deserve attention.",
+                issue="Portfolio concentration is elevated for this security type.",
+                why_it_matters=(
+                    "A large position can increase portfolio sensitivity if that holding falls sharply. "
+                    "Broad-market funds are treated more leniently than individual stocks or thematic ETFs."
+                ),
+                triggered_by=(
+                    f"Largest holding = {profile['top_ticker']} at {max_w * 100:.1f}% "
+                    f"(kind={top_kind}; concentration score {s_conc:.0f}/12)."
+                ),
                 possible_benefit="Greater diversification and lower concentration risk.",
                 evidence={
                     "Largest holding": profile["top_ticker"],
                     "Largest holding weight": f"{max_w * 100:.1f}%",
+                    "Security kind": top_kind,
+                    "Concentration points": f"{s_conc:.0f}/12",
                     "Equity allocation": f"{equity_pct:.0f}%",
                     "Portfolio objective": obj_label,
                 },
@@ -2480,6 +2804,9 @@ def evaluate_portfolio_health(
         score_breakdown=breakdown,
         avg_drift=float(avg_drift),
         objective=objective,
+        policy_benchmark_label=policy_label,
+        policy_benchmark_detail=policy_detail,
+        max_pairwise_abs_corr=float(max_corr),
     )
 
 

@@ -732,6 +732,16 @@ def load_benchmark_returns(start: str, end: str | None):
 
 
 @st.cache_data(show_spinner=False)
+def load_policy_benchmark_bundle(start: str, end: str | None, objective: str):
+    """Load SPY/AGG/BIL proxies and build the objective-aware policy return series."""
+    proxies = list(core.policy_benchmark_proxy_tickers())
+    prices = core.fetch_price_history(proxies, start, end)
+    proxy_rets = core.daily_returns(prices)
+    series, meta = core.build_policy_benchmark_returns(proxy_rets, objective)
+    return series, meta
+
+
+@st.cache_data(show_spinner=False)
 def load_comparison_prices(start: str, end: str | None):
     return core.fetch_price_history(list(core.BENCHMARK_TICKERS), start, end)
 
@@ -939,6 +949,15 @@ def evaluate_portfolio_health_if_needed(
             opt_pack = compute_optimizer_pack(tuple(mean_rets.tolist()), cov, settings["risk_free"])
             opt_weights = opt_pack["max_sharpe"].weights
 
+    policy_rets = None
+    policy_meta: dict = {}
+    try:
+        policy_rets, policy_meta = load_policy_benchmark_bundle(
+            settings["start"], settings["end"], str(health_objective)
+        )
+    except Exception as _policy_exc:
+        policy_meta = {"ok": False, "error": str(_policy_exc)}
+
     rec = core.recommend_portfolio(35, 15, "Medium", "Medium", health_objective)
     with st.spinner("Evaluating portfolio health…"):
         health = core.evaluate_portfolio_health(
@@ -957,6 +976,8 @@ def evaluate_portfolio_health_if_needed(
             optimizer_weights=opt_weights,
             recommended_type_mix=rec.allocation,
             bond_min_pct=float(health_bond_min) if health_bond_min > 0 else None,
+            policy_benchmark_returns=policy_rets,
+            policy_benchmark_meta=policy_meta,
         )
     cache_health_summary(health, tickers, weights)
     st.session_state.run_health = False
@@ -3029,6 +3050,18 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     f"(≈ raw Sharpe × 10, capped) — not the Sharpe ratio itself. "
                     f"Live portfolio Sharpe ratio: **{metrics.sharpe_ratio:.3f}**."
                 )
+                if getattr(health, "policy_benchmark_label", ""):
+                    st.caption(
+                        f"**Return vs Policy Benchmark:** {health.policy_benchmark_label}. "
+                        f"{getattr(health, 'policy_benchmark_detail', '')}"
+                    )
+                if getattr(health, "max_pairwise_abs_corr", None) is not None:
+                    st.caption(
+                        f"**Diversification diagnostic:** max pairwise |correlation| = "
+                        f"**{float(health.max_pairwise_abs_corr):.2f}** "
+                        f"(informational — the diversification component uses sleeve breadth, "
+                        f"effective number of holdings, and average correlation)."
+                    )
 
             section_header("What's Working / What's Not", "Plain summary of strengths and things to watch.")
             wn1, wn2 = st.columns(2)

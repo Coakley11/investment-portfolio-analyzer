@@ -105,28 +105,34 @@ def _fund_info_for(ticker: str, metadata: dict[str, dict[str, str]] | None) -> d
         return {}
 
 
-def classify_holding_security(
-    holding: RealHoldingSnapshot,
+def classify_ticker_security(
+    ticker: str,
     *,
+    asset_type_label: str = "",
+    engine_asset_class: str = "",
     security_metadata: dict[str, dict[str, str]] | None = None,
 ) -> SecurityClassification:
-    """Classify a holding using engine asset class plus fund metadata when available."""
-    sym = str(holding.ticker or "").strip().upper()
+    """
+    Shared ticker classification used by AMI and Portfolio Health.
+
+    Prefer this over ad-hoc Health-only lists so concentration semantics stay aligned.
+    """
+    sym = str(ticker or "").strip().upper()
     if not sym:
         return SecurityClassification(sym, "unknown", "empty_ticker", confidence="low")
 
     info = _fund_info_for(sym, security_metadata)
-    asset_type_label = str(info.get("asset_type") or holding.asset_class or "")
+    resolved_asset = str(asset_type_label or info.get("asset_type") or "").strip()
     category_label = str(info.get("category_label") or "")
     cat_lower = category_label.lower()
-    engine_class = str(holding.asset_class or "")
+    engine_class = str(engine_asset_class or "").strip()
 
     if engine_class == "Stocks":
         return SecurityClassification(
             sym,
             "individual_equity",
             "engine_asset_class",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="high",
         )
@@ -138,16 +144,21 @@ def classify_holding_security(
             sym,
             "broad_market_etf",
             "ticker_or_category",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="high" if sym in BROAD_MARKET_ETF_TICKERS else "medium",
         )
-    if sym in BOND_FUND_TICKERS or engine_class == "Bonds" or asset_type_label == "Bonds" or "bond" in cat_lower:
+    if (
+        sym in BOND_FUND_TICKERS
+        or engine_class == "Bonds"
+        or resolved_asset == "Bonds"
+        or "bond" in cat_lower
+    ):
         return SecurityClassification(
             sym,
             "bond_etf_or_bond_fund",
             "ticker_or_asset_type",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="high" if sym in BOND_FUND_TICKERS else "medium",
         )
@@ -158,18 +169,37 @@ def classify_holding_security(
             sym,
             "narrow_or_thematic_etf",
             "ticker_or_category",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="high" if sym in NARROW_OR_THEMATIC_ETF_TICKERS else "medium",
         )
 
-    if engine_class == "ETFs" or asset_type_label in ("Equity", "Dividend ETF", "REIT"):
-        if asset_type_label == "Dividend ETF":
+    if resolved_asset == "T-Bills" or engine_class == "Cash":
+        return SecurityClassification(
+            sym,
+            "cash",
+            "asset_type",
+            asset_type_label=resolved_asset,
+            category_label=category_label,
+            confidence="high",
+        )
+
+    if engine_class == "ETFs" or resolved_asset in ("Equity", "Dividend ETF", "REIT"):
+        if resolved_asset == "Dividend ETF":
             return SecurityClassification(
                 sym,
                 "diversified_sector_or_factor_etf",
                 "asset_type",
-                asset_type_label=asset_type_label,
+                asset_type_label=resolved_asset,
+                category_label=category_label,
+                confidence="medium",
+            )
+        if resolved_asset == "REIT" or "reit" in cat_lower:
+            return SecurityClassification(
+                sym,
+                "narrow_or_thematic_etf",
+                "reit_asset_type",
+                asset_type_label=resolved_asset,
                 category_label=category_label,
                 confidence="medium",
             )
@@ -178,24 +208,51 @@ def classify_holding_security(
                 sym,
                 "diversified_sector_or_factor_etf",
                 "category_label",
-                asset_type_label=asset_type_label,
+                asset_type_label=resolved_asset,
                 category_label=category_label,
                 confidence="medium",
             )
         if info:
+            # Known equity ticker that is not in any ETF list → individual stock,
+            # even if fund-info metadata exists for the symbol.
+            if (
+                resolved_asset == "Equity"
+                and engine_class not in ("ETFs",)
+                and sym not in BROAD_MARKET_ETF_TICKERS
+                and sym not in NARROW_OR_THEMATIC_ETF_TICKERS
+                and sym not in BOND_FUND_TICKERS
+            ):
+                return SecurityClassification(
+                    sym,
+                    "individual_equity",
+                    "equity_asset_type_non_etf_ticker",
+                    asset_type_label=resolved_asset,
+                    category_label=category_label,
+                    confidence="medium",
+                )
             return SecurityClassification(
                 sym,
                 "other",
                 "fund_metadata_without_broad_narrow_match",
-                asset_type_label=asset_type_label,
+                asset_type_label=resolved_asset,
                 category_label=category_label,
                 confidence="medium",
+            )
+        # Health "Equity" without ETF metadata: conservative individual-equity treatment.
+        if resolved_asset == "Equity" and engine_class not in ("ETFs",):
+            return SecurityClassification(
+                sym,
+                "individual_equity",
+                "equity_asset_type_without_etf_metadata",
+                asset_type_label=resolved_asset,
+                category_label=category_label,
+                confidence="low",
             )
         return SecurityClassification(
             sym,
             "unknown",
             "etf_without_metadata",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="low",
         )
@@ -205,7 +262,7 @@ def classify_holding_security(
             sym,
             "other",
             "engine_asset_class",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="medium",
         )
@@ -215,7 +272,7 @@ def classify_holding_security(
             sym,
             "unknown",
             "insufficient_metadata",
-            asset_type_label=asset_type_label,
+            asset_type_label=resolved_asset,
             category_label=category_label,
             confidence="low",
         )
@@ -224,9 +281,24 @@ def classify_holding_security(
         sym,
         "other",
         "fallback",
-        asset_type_label=asset_type_label,
+        asset_type_label=resolved_asset,
         category_label=category_label,
         confidence="medium",
+    )
+
+
+def classify_holding_security(
+    holding: RealHoldingSnapshot,
+    *,
+    security_metadata: dict[str, dict[str, str]] | None = None,
+) -> SecurityClassification:
+    """Classify a holding using engine asset class plus fund metadata when available."""
+    info = _fund_info_for(holding.ticker, security_metadata)
+    return classify_ticker_security(
+        holding.ticker,
+        asset_type_label=str(info.get("asset_type") or holding.asset_class or ""),
+        engine_asset_class=str(holding.asset_class or ""),
+        security_metadata=security_metadata,
     )
 
 
