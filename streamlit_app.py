@@ -3083,14 +3083,11 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                 st.metric("Raw Sharpe", f"{float(diag.get('raw_sharpe', metrics.sharpe_ratio)):.3f}")
                 st.metric("Sortino", f"{float(diag.get('sortino', metrics.sortino_ratio)):.3f}")
             with dcols[1]:
-                pol_sh = diag.get("policy_sharpe")
-                st.metric(
-                    "Sharpe vs policy",
-                    (
-                        f"{float(diag.get('raw_sharpe', 0)):.3f} / {float(pol_sh):.3f}"
-                        if pol_sh is not None and np.isfinite(float(pol_sh))
-                        else "n/a"
-                    ),
+                sharpe_vs = diag.get("sharpe_vs_policy_display") or core.format_sharpe_vs_policy_display(diag)
+                st.metric("Sharpe vs policy", sharpe_vs)
+                st.caption(
+                    "Portfolio Sharpe / **policy-benchmark Sharpe** (same window & rf). "
+                    "The right-hand value is not Sortino."
                 )
                 st.metric(
                     "Ann. return",
@@ -3112,8 +3109,14 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     f"{float(diag.get('max_drawdown', metrics.max_drawdown)) * 100:.2f}%",
                 )
                 st.metric(
-                    "Max |pairwise ρ|",
+                    "Max |pairwise corr|",
                     f"{float(getattr(health, 'max_pairwise_abs_corr', 0.0)):.2f}",
+                )
+            pol_sort = diag.get("policy_sortino")
+            if pol_sort is not None and np.isfinite(float(pol_sort)):
+                st.caption(
+                    f"Policy Sortino (diagnostic): **{float(pol_sort):.3f}** · "
+                    f"Portfolio Sortino: **{float(diag.get('sortino', metrics.sortino_ratio)):.3f}**."
                 )
             if getattr(health, "policy_benchmark_label", ""):
                 st.caption(

@@ -1123,6 +1123,134 @@ def sortino_ratio(
     return (ann_ret - risk_free_rate) / downside_vol
 
 
+def compute_aligned_sharpe_sortino_diagnostics(
+    portfolio_returns: pd.Series,
+    policy_returns: pd.Series | None,
+    risk_free_rate: float,
+) -> dict[str, float]:
+    """
+    Risk-adjusted diagnostics on the same date-aligned window and rf.
+
+    Returns portfolio and policy Sharpe/Sortino. Policy values use the objective
+    policy benchmark series — never portfolio Sortino.
+    """
+    out: dict[str, float] = {
+        "n_aligned": 0.0,
+        "raw_sharpe": float("nan"),
+        "policy_sharpe": float("nan"),
+        "sortino": float("nan"),
+        "policy_sortino": float("nan"),
+        "annual_return": float("nan"),
+        "policy_annual_return": float("nan"),
+        "annual_volatility": float("nan"),
+        "policy_volatility": float("nan"),
+    }
+    if portfolio_returns is None or len(portfolio_returns.dropna()) < 2:
+        return out
+    # Portfolio-only diagnostics always available.
+    port = portfolio_returns.dropna()
+    out["annual_return"] = float(annualized_return(port))
+    out["annual_volatility"] = float(annualized_volatility(port))
+    out["raw_sharpe"] = float(
+        sharpe_ratio(out["annual_return"], out["annual_volatility"], risk_free_rate)
+    )
+    out["sortino"] = float(sortino_ratio(port, risk_free_rate))
+
+    if policy_returns is None:
+        return out
+    pol = policy_returns.copy()
+    port_a = portfolio_returns.copy()
+    if not isinstance(port_a.index, pd.DatetimeIndex):
+        port_a.index = pd.to_datetime(port_a.index)
+    if not isinstance(pol.index, pd.DatetimeIndex):
+        pol.index = pd.to_datetime(pol.index)
+    aligned = pd.concat(
+        [port_a.rename("port"), pol.rename("policy")], axis=1, join="inner"
+    ).dropna()
+    n = int(len(aligned))
+    out["n_aligned"] = float(n)
+    if n < 6:
+        return out
+
+    p_ann = float(annualized_return(aligned["port"]))
+    p_vol = float(annualized_volatility(aligned["port"]))
+    pol_ann = float(annualized_return(aligned["policy"]))
+    pol_vol = float(annualized_volatility(aligned["policy"]))
+    # Prefer aligned-window portfolio Sharpe when policy is available.
+    out["annual_return"] = p_ann
+    out["annual_volatility"] = p_vol
+    out["raw_sharpe"] = float(sharpe_ratio(p_ann, p_vol, risk_free_rate))
+    out["sortino"] = float(sortino_ratio(aligned["port"], risk_free_rate))
+    out["policy_annual_return"] = pol_ann
+    out["policy_volatility"] = pol_vol
+    out["policy_sharpe"] = float(sharpe_ratio(pol_ann, pol_vol, risk_free_rate))
+    out["policy_sortino"] = float(sortino_ratio(aligned["policy"], risk_free_rate))
+    return out
+
+
+def format_sharpe_vs_policy_display(diagnostics: dict[str, float]) -> str:
+    """UI helper: portfolio Sharpe / policy Sharpe — never Sortino."""
+    port_sh = diagnostics.get("raw_sharpe")
+    pol_sh = diagnostics.get("policy_sharpe")
+    try:
+        port_f = float(port_sh) if port_sh is not None else float("nan")
+        pol_f = float(pol_sh) if pol_sh is not None else float("nan")
+    except (TypeError, ValueError):
+        return "n/a"
+    if not (np.isfinite(port_f) and np.isfinite(pol_f)):
+        return "n/a"
+    return f"{port_f:.3f} / {pol_f:.3f}"
+
+
+def concentration_status_note(
+    *,
+    top_ticker: str,
+    top_weight: float,
+    kind: str,
+    concentration_pillar_pts: float,
+    conc_engine_pts: float,
+) -> str:
+    """Kind-aware status blurb; does not treat broad-market ETF weight as auto-problem."""
+    if top_weight < 0.30:
+        return ""
+    kind_key = str(kind or "unknown")
+    kind_label = kind_key.replace("_", " ")
+    ticker = str(top_ticker)
+    pct = top_weight * 100.0
+    # Soft bands: engine ≥ 8/12 (pillar ≥ 10/15) means within model tolerance for that kind.
+    within_bands = float(conc_engine_pts) >= 8.0
+    if kind_key == "broad_market_etf" and within_bands:
+        return (
+            f" Largest holding is {ticker} at {pct:.0f}%; concentration remains within "
+            f"the model's broad-market ETF bands."
+        )
+    if within_bands:
+        return (
+            f" Largest holding is {ticker} at {pct:.0f}% ({kind_label}); "
+            f"concentration remains within the model's bands for this security type "
+            f"({concentration_pillar_pts:.0f}/{HEALTH_CONSTRUCTION_CONC_MAX:.0f})."
+        )
+    return (
+        f" Largest holding is {ticker} at {pct:.0f}% ({kind_label}) — "
+        f"review concentration diagnostics "
+        f"({concentration_pillar_pts:.0f}/{HEALTH_CONSTRUCTION_CONC_MAX:.0f})."
+    )
+
+
+def stabilizer_exposure_phrase(profile: dict[str, float]) -> str | None:
+    """Name only sleeves that are actually present (≥5%)."""
+    parts: list[str] = []
+    if float(profile.get("bonds") or 0.0) >= 0.05:
+        parts.append("bond")
+    if float(profile.get("tbills") or 0.0) >= 0.05:
+        parts.append("T-bill")
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return f"{parts[0]} exposure"
+    return "bond and T-bill exposure"
+
+
 def cagr_from_growth(growth: pd.Series) -> float:
     if len(growth) < 2:
         return 0.0
@@ -2567,32 +2695,23 @@ def evaluate_portfolio_health(
     if benchmark_returns is not None and len(benchmark_returns.dropna()) > 5:
         spy_ann = annualized_return(benchmark_returns.dropna())
 
-    # Diagnostics from ticker-aligned portfolio series (not Core Health points).
-    port_ann = annualized_return(port_rets)
-    vol = annualized_volatility(port_rets)
-    raw_sharpe = sharpe_ratio(port_ann, vol, risk_free_rate)
+    # Diagnostics from ticker-aligned portfolio + policy series (not Core Health points).
+    # Sharpe vs policy must use policy-benchmark Sharpe — never portfolio Sortino.
+    rad = compute_aligned_sharpe_sortino_diagnostics(
+        port_rets, policy_benchmark_returns, risk_free_rate
+    )
+    port_ann = float(rad["annual_return"]) if np.isfinite(rad["annual_return"]) else annualized_return(port_rets)
+    vol = (
+        float(rad["annual_volatility"])
+        if np.isfinite(rad["annual_volatility"])
+        else annualized_volatility(port_rets)
+    )
+    raw_sharpe = float(rad["raw_sharpe"]) if np.isfinite(rad["raw_sharpe"]) else 0.0
     dd = maximum_drawdown(port_rets)
-    port_sortino = sortino_ratio(port_rets, risk_free_rate)
-
-    policy_vol = 0.0
-    policy_sharpe = 0.0
-    if policy_benchmark_returns is not None and n_aligned >= 6:
-        pol = policy_benchmark_returns.copy()
-        if not isinstance(pol.index, pd.DatetimeIndex):
-            pol.index = pd.to_datetime(pol.index)
-        port_tmp = port_rets.copy()
-        if not isinstance(port_tmp.index, pd.DatetimeIndex):
-            port_tmp.index = pd.to_datetime(port_tmp.index)
-        aligned_diag = pd.concat(
-            [port_tmp.rename("port"), pol.rename("policy")], axis=1, join="inner"
-        ).dropna()
-        if len(aligned_diag) >= 6:
-            policy_vol = annualized_volatility(aligned_diag["policy"])
-            policy_sharpe = sharpe_ratio(
-                annualized_return(aligned_diag["policy"]),
-                policy_vol,
-                risk_free_rate,
-            )
+    port_sortino = float(rad["sortino"]) if np.isfinite(rad["sortino"]) else sortino_ratio(port_rets, risk_free_rate)
+    policy_vol = float(rad["policy_volatility"]) if np.isfinite(rad["policy_volatility"]) else 0.0
+    policy_sharpe = float(rad["policy_sharpe"]) if np.isfinite(rad["policy_sharpe"]) else float("nan")
+    policy_sortino = float(rad["policy_sortino"]) if np.isfinite(rad["policy_sortino"]) else float("nan")
 
     # ── Option C Core Health pillars (sum = 100) ──
     ret_gap = port_ann_aligned - policy_ann if n_aligned >= 6 else port_ann - spy_ann
@@ -2681,12 +2800,16 @@ def evaluate_portfolio_health(
         "raw_sharpe": float(raw_sharpe),
         "policy_sharpe": float(policy_sharpe),
         "sortino": float(port_sortino),
+        "policy_sortino": float(policy_sortino),
         "max_drawdown": float(dd),
         "max_pairwise_abs_corr": float(max_corr),
         "macro_check_score": float(s_macro),
         "risk_vol_ratio": float(risk_diag["vol_ratio"])
         if risk_diag.get("ok") and np.isfinite(risk_diag.get("vol_ratio", np.nan))
         else float("nan"),
+        "sharpe_vs_policy_display": format_sharpe_vs_policy_display(
+            {"raw_sharpe": raw_sharpe, "policy_sharpe": policy_sharpe}
+        ),
     }
 
     # ── What's working / not ──
@@ -2718,7 +2841,11 @@ def evaluate_portfolio_health(
             "Multiple economic sleeves (e.g. equity / bonds / REIT) contribute portfolio-level diversification."
         )
     if metrics.beta_spy < 0.85 and float(profile["bonds"] + profile["tbills"]) >= 0.20:
-        whats_working.append("Lower market sensitivity than SPY may be supported by bond/T-bill exposure.")
+        exposure = stabilizer_exposure_phrase(profile)
+        if exposure:
+            whats_working.append(
+                f"Lower market sensitivity than SPY may be supported by {exposure}."
+            )
 
     for _, row in ret_contrib.iterrows():
         if row["Return Contribution"] < -0.001:
@@ -3121,12 +3248,13 @@ def evaluate_portfolio_health(
     )
     weakest_name, weakest_pts = weak_pillars[0]
     weakest_max = HEALTH_CORE_PILLAR_MAX[weakest_name]
-    conc_note = ""
-    if max_w >= 0.30:
-        conc_note = (
-            f" Largest holding {profile['top_ticker']} is {max_w * 100:.0f}% — "
-            "review concentration diagnostics."
-        )
+    conc_note = concentration_status_note(
+        top_ticker=str(profile["top_ticker"]),
+        top_weight=float(max_w),
+        kind=str(conc_diag.get("kind") or "unknown"),
+        concentration_pillar_pts=float(s_conc),
+        conc_engine_pts=float(construction_diag.get("conc_engine_pts") or 0.0),
+    )
     status_message = (
         f"Core Portfolio Health is {health_word} ({score:.0f}/100) based on "
         f"objective fit, construction, risk appropriateness, and policy-relative delivery. "
