@@ -15,7 +15,21 @@ DISCLAIMER = f"Model-based educational guidance. {APP_DISCLAIMER}"
 
 
 def _money(x: float) -> str:
-    return f"${x:,.0f}"
+    return f"${float(x):,.0f}"
+
+
+def _money_signed(x: float) -> str:
+    """Signed currency for dollar changes (e.g. -$850, +$425, $0)."""
+    v = float(x)
+    if abs(v) < 0.5:
+        return "$0"
+    sign = "-" if v < 0 else "+"
+    return f"{sign}${abs(v):,.0f}"
+
+
+def _escape_md_money(text: str) -> str:
+    """Escape `$` so Streamlit markdown does not treat amounts as LaTeX."""
+    return text.replace("$", r"\$")
 
 
 def _macro_timing_note(assumptions: core.ForwardMacroAssumptions | None) -> str | None:
@@ -38,7 +52,17 @@ def _macro_timing_note(assumptions: core.ForwardMacroAssumptions | None) -> str 
 def _build_adjustment_table(
     rebalance_df: pd.DataFrame,
     initial_value: float,
+    *,
+    include_unchanged: bool = True,
+    material_pp: float = 1.0,
 ) -> pd.DataFrame:
+    """
+    Full Guided target table (Step 3 / Step 5).
+
+    By default includes zero-change holdings so Suggested % sums to 100% with
+    orphan sleeves. Preview/Apply still read ``health.rebalance_df`` directly —
+    this table is presentation only.
+    """
     if rebalance_df.empty:
         return pd.DataFrame()
     cols_needed = {"Ticker", "Current (%)", "Objective (%)"}
@@ -49,7 +73,7 @@ def _build_adjustment_table(
         cur = float(r["Current (%)"])
         obj = float(r["Objective (%)"])
         ch = obj - cur
-        if abs(ch) < 1.0:
+        if not include_unchanged and abs(ch) < material_pp:
             continue
         cur_d = cur / 100 * initial_value
         obj_d = obj / 100 * initial_value
@@ -62,9 +86,10 @@ def _build_adjustment_table(
                 "Change %": f"{ch:+.1f}%",
                 "Current $": _money(cur_d),
                 "Suggested $": _money(obj_d),
-                "Dollar Change": _money(ch_d),
+                "Dollar Change": _money_signed(ch_d),
                 "_cur_pct": cur,
                 "_sug_pct": obj,
+                "_chg_pct": ch,
                 "_cur_dol": cur_d,
                 "_sug_dol": obj_d,
                 "_chg_dol": ch_d,
@@ -74,6 +99,18 @@ def _build_adjustment_table(
     return pd.DataFrame(rows)
 
 
+def guided_table_has_material_changes(
+    adj_table: pd.DataFrame,
+    *,
+    material_pp: float = 1.0,
+) -> bool:
+    if adj_table is None or adj_table.empty:
+        return False
+    if "_chg_pct" in adj_table.columns:
+        return bool(adj_table["_chg_pct"].abs().ge(material_pp).any())
+    return True
+
+
 def format_guided_step4_example(
     asset: str,
     cur_pct: float,
@@ -81,13 +118,34 @@ def format_guided_step4_example(
     sug_pct: float,
     sug_dol: float,
     chg_dol: float,
+    *,
+    for_markdown: bool = True,
 ) -> str:
-    """Clean Step 4 prose: percent with dollar amounts in parentheses."""
-    direction = "a change of approximately"
-    return (
-        f"Adjust **{asset}** from {cur_pct:.1f}% ({_money(cur_dol)}) toward "
-        f"{sug_pct:.1f}% ({_money(sug_dol)}), {direction} {_money(abs(chg_dol))}."
+    """
+    Clean Step 4 prose: percent with dollar amounts in parentheses and a signed
+    dollar change. When ``for_markdown`` is True, escape `$` for Streamlit KaTeX.
+    """
+    cur_m = _money(cur_dol)
+    sug_m = _money(sug_dol)
+    chg_m = _money_signed(chg_dol)
+    text = (
+        f"Adjust **{asset}** from {cur_pct:.1f}% ({cur_m}) toward "
+        f"{sug_pct:.1f}% ({sug_m}), a change of approximately {chg_m}."
     )
+    return _escape_md_money(text) if for_markdown else text
+
+
+def parse_suggested_pct_sum(adj_table: pd.DataFrame) -> float:
+    """Sum Suggested % values from the Guided display table."""
+    if adj_table is None or adj_table.empty:
+        return 0.0
+    if "_sug_pct" in adj_table.columns:
+        return float(adj_table["_sug_pct"].sum())
+    total = 0.0
+    for raw in adj_table.get("Suggested %", []):
+        total += float(str(raw).replace("%", "").strip() or 0)
+    return total
+
 
 
 def _primary_issue(health: core.PortfolioHealthResult, beginner: bool) -> tuple[str, str, str]:
@@ -216,10 +274,11 @@ def render_guided_portfolio_adjustment(
         adj_tabs = None
 
     issue, why, triggered_by = _primary_issue(health, beginner)
-    adj_table = _build_adjustment_table(health.rebalance_df, initial_value)
+    adj_table = _build_adjustment_table(health.rebalance_df, initial_value, include_unchanged=True)
+    has_material_changes = guided_table_has_material_changes(adj_table)
     has_changes = not adj_table.empty
 
-    if not has_changes and health.score >= 70:
+    if not has_material_changes and health.score >= 70:
         st.success(
             "The model does not suggest major allocation changes right now. "
             "You may still review recommendations during your next monthly check-in."
@@ -285,9 +344,8 @@ def render_guided_portfolio_adjustment(
                 hide_index=True,
             )
             st.caption(
-                "Based on your objective, the model suggests testing weights closer to the **Suggested %** column. "
-                "Unrepresented sleeves (marked in the full rebalance table) stay explicit and are not "
-                "silently redistributed into other tickers."
+                "Full objective target (including unchanged holdings and any unrepresented sleeve). "
+                "Suggested % sums to 100%. Unrepresented sleeves are not silently redistributed."
             )
         else:
             st.info("No large per-ticker drift detected — review category-level suggestions in Portfolio Health.")

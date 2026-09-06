@@ -173,6 +173,93 @@ class TestAllocationChartPercentOnly(unittest.TestCase):
         self.assertTrue(all("($)" not in c for c in cols))
 
 
+class TestGuidedCompleteTargetTable(unittest.TestCase):
+    def _pilot_rebalance(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "Ticker": "VTI",
+                    "Current (%)": 40.0,
+                    "Objective (%)": 20.0,
+                    "Orphan Sleeve": False,
+                },
+                {
+                    "Ticker": "VXUS",
+                    "Current (%)": 20.0,
+                    "Objective (%)": 20.0,
+                    "Orphan Sleeve": False,
+                },
+                {
+                    "Ticker": "BND",
+                    "Current (%)": 30.0,
+                    "Objective (%)": 30.0,
+                    "Orphan Sleeve": False,
+                },
+                {
+                    "Ticker": "VNQ",
+                    "Current (%)": 10.0,
+                    "Objective (%)": 20.0,
+                    "Orphan Sleeve": False,
+                },
+                {
+                    "Ticker": "Cash / T-Bills (unrepresented)",
+                    "Current (%)": 0.0,
+                    "Objective (%)": 10.0,
+                    "Orphan Sleeve": True,
+                },
+            ]
+        )
+
+    def test_zero_change_holdings_remain_visible(self) -> None:
+        from components.guided_adjustment import (
+            _build_adjustment_table,
+            parse_suggested_pct_sum,
+        )
+
+        table = _build_adjustment_table(self._pilot_rebalance(), 4250.0, include_unchanged=True)
+        assets = [str(a) for a in table["Asset"].tolist()]
+        self.assertEqual(
+            assets,
+            [
+                "VTI",
+                "VXUS",
+                "BND",
+                "VNQ",
+                "Cash / T-Bills (unrepresented)",
+            ],
+        )
+        by_asset = {str(r["Asset"]): float(r["_chg_pct"]) for _, r in table.iterrows()}
+        self.assertAlmostEqual(by_asset["VXUS"], 0.0, places=5)
+        self.assertAlmostEqual(by_asset["BND"], 0.0, places=5)
+        self.assertAlmostEqual(parse_suggested_pct_sum(table), 100.0, places=5)
+
+    def test_preview_apply_keeps_unchanged_holdings(self) -> None:
+        """Apply payload reads full rebalance_df — unchanged tickers are not dropped."""
+        reb = self._pilot_rebalance()
+        tickers = ["VTI", "VXUS", "BND", "VNQ"]
+        current = np.array([0.40, 0.20, 0.30, 0.10])
+        suggested = core.suggested_weights_from_rebalance(
+            reb, tickers, current, target_column="Objective (%)"
+        )
+        self.assertEqual(len(suggested), 4)
+        # Absolute 20/20/30/20 among holdings → renormalized; VXUS and BND stay present.
+        labels = {
+            t: float(w)
+            for t, w in zip(tickers, suggested)
+        }
+        self.assertIn("VXUS", labels)
+        self.assertIn("BND", labels)
+        self.assertGreater(labels["VXUS"], 0.0)
+        self.assertGreater(labels["BND"], 0.0)
+        self.assertAlmostEqual(float(suggested.sum()), 1.0, places=6)
+        records = core.holdings_records_from_weights(
+            tickers, suggested, ["Equity", "Equity", "Bonds", "REIT"]
+        )
+        record_tickers = [r["Ticker"] for r in records]
+        self.assertEqual(record_tickers, tickers)
+        self.assertNotIn("Cash / T-Bills (unrepresented)", record_tickers)
+
+
 class TestOptimizerDustAndGuidedProse(unittest.TestCase):
     def test_threshold_weight_dust(self) -> None:
         w = np.array([1.0 - 1e-12, 1e-12, 0.0])
@@ -183,11 +270,24 @@ class TestOptimizerDustAndGuidedProse(unittest.TestCase):
         self.assertEqual(core.format_weight_pct(0.5), "50.00%")
 
     def test_guided_step4_prose_format(self) -> None:
-        text = format_guided_step4_example("VTI", 40.0, 1700.0, 20.0, 850.0, -850.0)
-        self.assertIn("Adjust **VTI** from 40.0% ($1,700)", text)
-        self.assertIn("toward 20.0% ($850)", text)
-        self.assertIn("a change of approximately $850", text)
-        self.assertNotIn("40.0% (1,700)", text)
+        text = format_guided_step4_example(
+            "VTI", 40.0, 1700.0, 20.0, 850.0, -850.0, for_markdown=False
+        )
+        self.assertEqual(
+            text,
+            "Adjust **VTI** from 40.0% ($1,700) toward 20.0% ($850), "
+            "a change of approximately -$850.",
+        )
+        md = format_guided_step4_example(
+            "VTI", 40.0, 1700.0, 20.0, 850.0, -850.0, for_markdown=True
+        )
+        # Escaped for Streamlit KaTeX so `$1,700` does not collapse in markdown.
+        self.assertIn(r"(\$1,700)", md)
+        self.assertIn(r"toward 20.0% (\$850)", md)
+        self.assertIn(r"approximately -\$850.", md)
+        self.assertIn(" toward ", md)
+        # Unescaped form must not be used for markdown path.
+        self.assertNotIn("($1,700)", md)
 
 
 if __name__ == "__main__":
