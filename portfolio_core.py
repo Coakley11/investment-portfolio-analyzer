@@ -2369,9 +2369,10 @@ def evaluate_portfolio_health(
                 f"{row['Ticker']} experienced a deep drawdown ({row['Max Drawdown'] * 100:.1f}%) — a potential risk contributor."
             )
 
-    if max_w > 0.35:
+    if s_conc <= 4.0:
         whats_not.append(
-            f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% — concentration may be worth reviewing."
+            f"Largest holding ({profile['top_ticker']}) is {max_w * 100:.1f}% "
+            f"({str(conc_diag.get('kind', 'unknown')).replace('_', ' ')}) — concentration may be worth reviewing."
         )
     if max_corr >= 0.80:
         whats_not.append("Some holdings appear highly correlated — diversification benefits may be limited.")
