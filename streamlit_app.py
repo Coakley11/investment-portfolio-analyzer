@@ -89,6 +89,7 @@ health_settings_fingerprint = _macro_engine.health_settings_fingerprint
 macro_assumption_summary = _macro_engine.macro_assumption_summary
 macro_assumptions_from_session = _macro_engine.macro_assumptions_from_session
 ensure_shared_macro_session_defaults = _macro_engine.ensure_shared_macro_session_defaults
+harvest_shared_macro_widgets_to_persist = _macro_engine.harvest_shared_macro_widgets_to_persist
 render_shared_macro_assumption_controls = _macro_engine.render_shared_macro_assumption_controls
 from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
@@ -2038,6 +2039,9 @@ except Exception as _ami_submit_queue_exc:
 if beginner_mode:
     ensure_beginner_macro_defaults()
 ensure_shared_macro_session_defaults()
+# Harvest before tab gates / workflow st.rerun so a post-select navigation run
+# still copies `_w_*` → canonical `health_*` before Streamlit tears widgets down.
+harvest_shared_macro_widgets_to_persist()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 try:

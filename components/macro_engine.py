@@ -69,6 +69,31 @@ def ensure_shared_macro_session_defaults(session_state: Any | None = None) -> No
             ss[key] = default
 
 
+def harvest_shared_macro_widgets_to_persist(session_state: Any | None = None) -> None:
+    """
+    Copy any live macro widget values into canonical persist keys.
+
+    Call at the start of every app run (before tab gates / st.rerun).
+
+    Why: after a selectbox change, Streamlit stores the new value on ``_w_*``
+    immediately, but ``health_*`` persist keys are only updated when Health
+    controls render and commit. If the post-select run skips Health (navigation,
+    early rerun, analytics gate), Streamlit then deletes ``_w_*`` at end-of-run
+    and the user's choice is lost — typically resetting Valuation to Fair Value.
+    """
+    ss = st.session_state if session_state is None else session_state
+    ensure_shared_macro_session_defaults(ss)
+    for persist_key in SHARED_MACRO_PERSIST_KEYS:
+        wkey = macro_widget_key(persist_key)
+        if wkey in ss:
+            ss[persist_key] = ss[wkey]
+
+
+def _on_macro_widget_change(persist_key: str) -> None:
+    """Streamlit on_change: commit widget → persist on the selection event itself."""
+    commit_macro_widget_to_persist(persist_key)
+
+
 def seed_macro_widget_from_persist(persist_key: str, session_state: Any | None = None) -> None:
     """Copy persist → widget key when Streamlit deleted the widget key after navigation."""
     ss = st.session_state if session_state is None else session_state
@@ -106,8 +131,16 @@ def _selectbox_persisted(
         current = SHARED_MACRO_DEFAULTS[persist_key]
         st.session_state[persist_key] = current
         st.session_state[wkey] = current
+    # on_change commits on the selection event — before any later navigation/teardown.
     # Do not pass index= — it fights session_state and re-defaults after navigation.
-    value = st.selectbox(label, list(options), key=wkey, help=help)
+    value = st.selectbox(
+        label,
+        list(options),
+        key=wkey,
+        help=help,
+        on_change=_on_macro_widget_change,
+        args=(persist_key,),
+    )
     commit_macro_widget_to_persist(persist_key)
     return str(value)
 
@@ -123,7 +156,15 @@ def _slider_persisted(
     seed_macro_widget_from_persist(persist_key)
     wkey = macro_widget_key(persist_key)
     # value comes from session_state[wkey] after seed — do not pass a competing default.
-    value = st.slider(label, min_value, max_value, step=step, key=wkey)
+    value = st.slider(
+        label,
+        min_value,
+        max_value,
+        step=step,
+        key=wkey,
+        on_change=_on_macro_widget_change,
+        args=(persist_key,),
+    )
     commit_macro_widget_to_persist(persist_key)
     return int(value)
 

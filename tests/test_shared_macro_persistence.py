@@ -213,6 +213,17 @@ class TestSharedMacroPersistence(unittest.TestCase):
         self.assertEqual(ss["health_valuation"], "Bubble-like")
         self.assertEqual(ss["health_recession"], 90)
 
+    def test_harvest_commits_widget_before_teardown(self) -> None:
+        from components.macro_engine import harvest_shared_macro_widgets_to_persist
+
+        ss = _session(health_valuation="Fair Value")
+        ss[macro_widget_key("health_valuation")] = "Expensive"
+        # Post-select run that never re-renders Health still must harvest.
+        harvest_shared_macro_widgets_to_persist(ss)
+        simulate_macro_widget_teardown(ss)
+        self.assertEqual(ss["health_valuation"], "Expensive")
+        self.assertEqual(macro_assumptions_from_session(ss).valuation, "Expensive")
+
     def test_widget_keys_are_not_canonical_owner(self) -> None:
         for key in SHARED_MACRO_PERSIST_KEYS:
             self.assertFalse(macro_widget_key(key).startswith("health_"))

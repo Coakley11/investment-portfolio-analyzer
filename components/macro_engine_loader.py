@@ -22,6 +22,7 @@ STREAMLIT_APP_MACRO_ENGINE_EXPORTS: tuple[str, ...] = (
     "macro_assumption_summary",
     "macro_assumptions_from_session",
     "ensure_shared_macro_session_defaults",
+    "harvest_shared_macro_widgets_to_persist",
     "render_shared_macro_assumption_controls",
 )
 

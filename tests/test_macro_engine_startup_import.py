@@ -39,6 +39,7 @@ class TestMacroEngineStartupImport(unittest.TestCase):
             f"(found {direct})",
         )
         self.assertIn("load_macro_engine", src)
+        self.assertIn("harvest_shared_macro_widgets_to_persist", src)
         for name in STREAMLIT_APP_MACRO_ENGINE_EXPORTS:
             self.assertIn(name, src)
 
