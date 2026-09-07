@@ -305,7 +305,10 @@ def build_aligned_benchmark_growth(
     return out
 
 
-def benchmark_mini_chart(growth_df: pd.DataFrame, title: str = "Portfolio vs Benchmark") -> go.Figure:
+def benchmark_mini_chart(
+    growth_df: pd.DataFrame,
+    title: str = "Portfolio vs SPY / QQQ (market reference)",
+) -> go.Figure:
     fig = go.Figure()
     for i, col in enumerate(growth_df.columns):
         if col == "Date":

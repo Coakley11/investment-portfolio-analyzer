@@ -1959,7 +1959,18 @@ def render_overview_tab(
                     btab[col] = btab[col].map(_pct)
                 else:
                     btab[col] = btab[col].map(lambda x: f"{x:.2f}")
-            btab["Growth of $100,000"] = btab["Growth of $100,000"].map(_money)
+            growth_col = next(
+                (c for c in btab.columns if str(c).startswith("Growth of $")),
+                None,
+            )
+            if growth_col:
+                btab[growth_col] = btab[growth_col].map(_money)
+            st.caption(
+                "Model comparison: **static current weights** applied over the historical lookback "
+                "(not a transaction ledger). **SPY / QQQ / 60/40 / T-Bills** are market-reference "
+                "alternatives — distinct from the Health **policy benchmark** (objective-weighted "
+                "SPY/AGG/BIL)."
+            )
             st.dataframe(btab, use_container_width=True, hide_index=True)
             gcmp = benchmark_growth.reset_index().rename(columns={"index": "Date"})
             if "Date" not in gcmp.columns:
@@ -3331,7 +3342,17 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                         for col in ("Portfolio", "SPY", "QQQ")
                     )
                     if finite_ok:
-                        st.plotly_chart(charts.benchmark_mini_chart(mini), use_container_width=True)
+                        st.plotly_chart(
+                            charts.benchmark_mini_chart(
+                                mini,
+                                title="Portfolio vs SPY / QQQ (market reference)",
+                            ),
+                            use_container_width=True,
+                        )
+                        st.caption(
+                            "Market-reference chart (SPY/QQQ), date-aligned with the portfolio series. "
+                            "Not the Health policy benchmark (objective-weighted SPY/AGG/BIL)."
+                        )
                     else:
                         mini_port = mini[["Date", "Portfolio"]] if "Portfolio" in mini.columns else None
                         if mini_port is not None and np.isfinite(

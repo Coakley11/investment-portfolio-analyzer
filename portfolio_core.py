@@ -1939,25 +1939,31 @@ def benchmark_comparison(
     if aligned.empty:
         raise ValueError("Benchmark returns are empty.")
 
-    growth = (1 + aligned).cumprod() * initial_value
-    growth.columns = [c.upper() for c in growth.columns]
+    # Keep display labels; do not upper-case independently of the return frame
+    # (that previously KeyError'd on "Current Portfolio" → "CURRENT PORTFOLIO").
+    aligned.columns = [str(c).strip() for c in aligned.columns]
+    growth = (1 + aligned).cumprod() * float(initial_value)
+    ending_label = f"Growth of ${float(initial_value):,.0f}"
     rows: list[dict[str, float | str]] = []
 
-    for name in growth.columns:
+    for name in aligned.columns:
         series = aligned[name]
         ann_ret = annualized_return(series)
         ann_vol = annualized_volatility(series)
         sharpe = sharpe_ratio(ann_ret, ann_vol, risk_free_rate)
-        one_growth = pd.Series([initial_value, *growth[name].values])
+        # Prepend starting capital so CAGR spans full lookback vs first post-return point.
+        one_growth = pd.Series(
+            [float(initial_value), *growth[name].astype(float).tolist()]
+        )
         rows.append(
             {
-                "Portfolio": name,
+                "Series": name,
                 "Annual Return": ann_ret,
                 "Volatility": ann_vol,
                 "Sharpe Ratio": sharpe,
                 "Max Drawdown": maximum_drawdown(series),
                 "CAGR": cagr_from_growth(one_growth),
-                "Growth of $100,000": float(initial_value * (growth[name].iloc[-1] / initial_value)),
+                ending_label: float(growth[name].iloc[-1]),
             }
         )
 
@@ -3023,7 +3029,9 @@ def evaluate_portfolio_health(
     for _, row in ret_contrib.head(3).iterrows():
         if row["Return Contribution"] > 0:
             whats_working.append(
-                f"{row['Ticker']} contributed positively to modeled return ({row['Return Contribution'] * 100:.2f}%)."
+                f"{row['Ticker']} contributed positively to modeled annualized return "
+                f"({row['Return Contribution'] * 100:.2f} percentage points; "
+                f"weight × asset arithmetic ann. return)."
             )
 
     stabilizers = [

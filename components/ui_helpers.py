@@ -43,8 +43,11 @@ HISTORICAL_PERIOD_DATE_INPUT_HELP = HISTORICAL_LOOKBACK_DATE_HELP
 
 HISTORICAL_METRICS_BANNER_BODY = (
     "The return, volatility, Sharpe ratio, drawdown, and correlation metrics below are "
-    "calculated using the selected historical lookback period and current portfolio weights.\n\n"
-    "Macro assumptions do **not** change these historical metrics."
+    "a **model backtest**: current portfolio weights applied to historical market prices "
+    "over the selected lookback (not a transaction-aware account history).\n\n"
+    "Macro assumptions do **not** change these historical metrics. "
+    "**SPY** in beta / comparison charts is a market reference; Health objective delivery "
+    "uses the separate **policy benchmark** (e.g. 60% SPY / 30% AGG / 10% BIL for Balanced Growth)."
 )
 
 MACRO_ASSUMPTIONS_BANNER_AFFECTS = (
