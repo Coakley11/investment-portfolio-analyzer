@@ -1922,62 +1922,19 @@ def render_overview_tab(
         if beginner:
             st.caption("These tools are useful once you're comfortable with the basics.")
 
-        section_header(
-            "Compare to simple alternatives",
-            "See how your mix stacks up against SPY, QQQ, 60/40, and cash-like T-Bills.",
+        from components.benchmark_comparison_panel import render_benchmark_alternative_comparison
+
+        render_benchmark_alternative_comparison(
+            returns=returns,
+            weights=weights,
+            tickers=tickers,
+            settings=settings,
+            load_comparison_prices=load_comparison_prices,
+            compute_daily_returns=compute_daily_returns,
+            key_prefix="overview_benchmark_alt",
+            section_title="Benchmark & Alternative Comparison",
+            as_expander=False,
         )
-        if st.button("Run Benchmark Comparison", key="run_benchmark_btn"):
-            st.session_state.run_benchmark = True
-        show_benchmark = st.session_state.get("run_benchmark", False)
-        if show_benchmark:
-            with st.spinner("Loading benchmark comparison…"):
-                comp_prices = load_comparison_prices(settings["start"], settings["end"])
-                comp_returns_raw = compute_daily_returns(comp_prices)
-                port_rets = core.portfolio_daily_returns(
-                    returns,
-                    weights,
-                    tickers=[str(t).strip().upper() for t in tickers],
-                )
-                synth_6040 = comp_returns_raw["SPY"] * 0.60 + comp_returns_raw["AGG"] * 0.40
-                benchmark_returns = pd.DataFrame(
-                    {
-                        "Current Portfolio": port_rets,
-                        "SPY": comp_returns_raw["SPY"],
-                        "QQQ": comp_returns_raw["QQQ"],
-                        "60/40": synth_6040,
-                        "T-Bills": comp_returns_raw["BIL"],
-                    }
-                ).dropna()
-                benchmark_table, benchmark_growth = core.benchmark_comparison(
-                    benchmark_returns,
-                    settings["initial_value"],
-                    settings["risk_free"],
-                )
-            btab = benchmark_table.copy()
-            for col in ["Annual Return", "Volatility", "Sharpe Ratio", "Max Drawdown", "CAGR"]:
-                if col != "Sharpe Ratio":
-                    btab[col] = btab[col].map(_pct)
-                else:
-                    btab[col] = btab[col].map(lambda x: f"{x:.2f}")
-            growth_col = next(
-                (c for c in btab.columns if str(c).startswith("Growth of $")),
-                None,
-            )
-            if growth_col:
-                btab[growth_col] = btab[growth_col].map(_money)
-            st.caption(
-                "Model comparison: **static current weights** applied over the historical lookback "
-                "(not a transaction ledger). **SPY / QQQ / 60/40 / T-Bills** are market-reference "
-                "alternatives — distinct from the Health **policy benchmark** (objective-weighted "
-                "SPY/AGG/BIL)."
-            )
-            st.dataframe(btab, use_container_width=True, hide_index=True)
-            gcmp = benchmark_growth.reset_index().rename(columns={"index": "Date"})
-            if "Date" not in gcmp.columns:
-                gcmp["Date"] = benchmark_growth.index
-            st.plotly_chart(charts.benchmark_growth_chart(gcmp), use_container_width=True)
-        else:
-            st.caption("Click **Run Benchmark Comparison** to load.")
 
         if not beginner:
             section_header("Rolling Analytics", f"{core.ROLLING_WINDOW}-trading-day window (~3 months).")
@@ -2759,6 +2716,20 @@ if active_main_tab(_active_tab, "analytics", beginner=beginner_mode) and _requir
                 st.dataframe(md, use_container_width=True, hide_index=True)
             else:
                 st.caption("Macro regime analysis runs only when requested.")
+
+        from components.benchmark_comparison_panel import render_benchmark_alternative_comparison
+
+        render_benchmark_alternative_comparison(
+            returns=returns,
+            weights=weights,
+            tickers=tickers,
+            settings=settings,
+            load_comparison_prices=load_comparison_prices,
+            compute_daily_returns=compute_daily_returns,
+            key_prefix="analytics_benchmark_alt",
+            section_title="Benchmark & Alternative Comparison",
+            as_expander=False,
+        )
 
 # ── Portfolio Health ──────────────────────────────────────────────────────────
 
