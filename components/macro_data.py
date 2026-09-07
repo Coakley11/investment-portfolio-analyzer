@@ -479,11 +479,22 @@ def apply_assumptions_to_session(
     """Set Portfolio Health macro session keys (safe in Beginner Mode — no macro widgets)."""
     import streamlit as st
 
-    st.session_state["health_rate_env"] = mapping.rate_environment
-    st.session_state["health_inflation"] = mapping.inflation
-    st.session_state["health_recession"] = int(mapping.recession_probability)
-    st.session_state["health_valuation"] = mapping.valuation
-    st.session_state["health_regime"] = mapping.economic_regime
+    from components.macro_engine import macro_widget_key
+
+    values = {
+        "health_rate_env": mapping.rate_environment,
+        "health_inflation": mapping.inflation,
+        "health_recession": int(mapping.recession_probability),
+        "health_valuation": mapping.valuation,
+        "health_regime": mapping.economic_regime,
+    }
+    for persist_key, value in values.items():
+        st.session_state[persist_key] = value
+        # Keep live Health widgets aligned if still mounted; otherwise next seed
+        # reads persist keys after Streamlit tears down widget keys on navigation.
+        wkey = macro_widget_key(persist_key)
+        if wkey in st.session_state:
+            st.session_state[wkey] = value
     st.session_state["macro_scenario_id"] = scenario_id
     st.session_state["macro_scenario_mode"] = "current" if scenario_id == "current" else "custom"
     st.session_state["macro_auto_initialized"] = True
@@ -525,10 +536,13 @@ def ensure_beginner_macro_defaults() -> MacroSnapshot | None:
 
     if st.session_state.get("macro_auto_initialized"):
         return None
-    has_health = all(
-        k in st.session_state
-        for k in ("health_rate_env", "health_inflation", "health_recession")
-    )
+    has_health = all(k in st.session_state for k in (
+        "health_rate_env",
+        "health_inflation",
+        "health_recession",
+        "health_valuation",
+        "health_regime",
+    ))
     if has_health:
         st.session_state["macro_auto_initialized"] = True
         st.session_state.setdefault("macro_scenario_id", "current")

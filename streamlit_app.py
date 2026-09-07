@@ -86,6 +86,8 @@ from components.macro_engine import (
     health_settings_fingerprint,
     macro_assumption_summary,
     macro_assumptions_from_session,
+    ensure_shared_macro_session_defaults,
+    render_shared_macro_assumption_controls,
 )
 from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
@@ -2030,8 +2032,11 @@ try:
     process_investment_ami_submit_queue(st)
 except Exception as _ami_submit_queue_exc:
     st.session_state["_ami_submit_queue_error"] = repr(_ami_submit_queue_exc)
+# Beginner live/cache seed must run before shared defaults fill empty keys,
+# otherwise ensure_shared would mark all health_* present and skip live init.
 if beginner_mode:
     ensure_beginner_macro_defaults()
+ensure_shared_macro_session_defaults()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 try:
@@ -2807,48 +2812,20 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
     render_macro_assumptions_banner()
     macro_expander = st.expander("Macro & objective settings", expanded=not beginner_mode)
     with macro_expander:
-        h1, h2, h3 = st.columns(3)
-        with h1:
-            health_rate = st.selectbox(
-                "Interest Rate Environment",
-                ["Falling Rates", "Stable Rates", "Rising Rates", "High Rate Environment"],
-                index=1,
-                key="health_rate_env",
-            )
-            health_recession = st.slider("Recession Probability (%)", 0, 100, 25, 5, key="health_recession")
-        with h2:
-            health_inflation = st.selectbox(
-                "Inflation Assumption",
-                ["Low Inflation", "Moderate Inflation", "High Inflation", "Deflation"],
-                index=1,
-                key="health_inflation",
-            )
-            health_valuation = st.selectbox(
-                "Valuation Environment",
-                ["Cheap", "Fair Value", "Expensive", "Bubble-like"],
-                index=1,
-                key="health_valuation",
-            )
-        with h3:
-            health_regime = st.selectbox(
-                "Economic Regime",
-                ["Expansion", "Slow Growth", "Recession", "Recovery", "Stagflation", "AI / Tech Boom", "Credit Crisis"],
-                index=0,
-                key="health_regime",
-            )
-            health_objective = st.selectbox(
-                "Portfolio Objective (alignment check)",
-                [
-                    "balanced growth",
-                    "capital preservation",
-                    "aggressive growth",
-                    "income",
-                    "retirement",
-                    "short-term cash management",
-                ],
-                index=0,
-                key="health_objective",
-            )
+        render_shared_macro_assumption_controls()
+        health_objective = st.selectbox(
+            "Portfolio Objective (alignment check)",
+            [
+                "balanced growth",
+                "capital preservation",
+                "aggressive growth",
+                "income",
+                "retirement",
+                "short-term cash management",
+            ],
+            index=0,
+            key="health_objective",
+        )
         hc1, hc2 = st.columns(2)
         with hc1:
             health_bond_min = st.slider("Minimum bond/cash constraint (%)", 0, 80, 0, 5, key="health_bond_min")
