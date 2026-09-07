@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -69,12 +67,11 @@ class TestSharedMacroPersistence(unittest.TestCase):
     def test_C_forward_macro_sees_changed_valuation(self) -> None:
         ss = _session()
         _user_sets_all_macros(ss)
-        with patch("components.macro_engine.st", SimpleNamespace(session_state=ss)):
-            a = macro_assumptions_from_session()
-            text = (
-                f"{a.inflation} · {a.rate_environment} · "
-                f"Recession {a.recession_probability * 100:.0f}% · {a.valuation} · {a.economic_regime}"
-            )
+        a = macro_assumptions_from_session(ss)
+        text = (
+            f"{a.inflation} · {a.rate_environment} · "
+            f"Recession {a.recession_probability * 100:.0f}% · {a.valuation} · {a.economic_regime}"
+        )
         self.assertEqual(a.valuation, "Expensive")
         self.assertIn("Expensive", text)
         self.assertNotIn("Fair Value", text)

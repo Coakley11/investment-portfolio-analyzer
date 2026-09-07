@@ -81,14 +81,15 @@ from components.investment_planning import render_how_much_to_invest
 from components.beginner_macro import render_beginner_macro_panel
 from components.macro_assumptions_guide import render_macro_assumptions_guide
 from components.macro_data import ensure_beginner_macro_defaults
-from components.macro_engine import (
-    get_forward_projection,
-    health_settings_fingerprint,
-    macro_assumption_summary,
-    macro_assumptions_from_session,
-    ensure_shared_macro_session_defaults,
-    render_shared_macro_assumption_controls,
-)
+from components.macro_engine_loader import load_macro_engine
+
+_macro_engine = load_macro_engine()
+get_forward_projection = _macro_engine.get_forward_projection
+health_settings_fingerprint = _macro_engine.health_settings_fingerprint
+macro_assumption_summary = _macro_engine.macro_assumption_summary
+macro_assumptions_from_session = _macro_engine.macro_assumptions_from_session
+ensure_shared_macro_session_defaults = _macro_engine.ensure_shared_macro_session_defaults
+render_shared_macro_assumption_controls = _macro_engine.render_shared_macro_assumption_controls
 from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
