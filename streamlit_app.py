@@ -2537,7 +2537,10 @@ if active_main_tab(_active_tab, "explain", beginner=beginner_mode) and _require_
     section_header(
         "Explain This Portfolio",
         "A plain-English summary of your portfolio — strengths, weaknesses, and ideas." if beginner_mode
-        else f"AI-style memo synthesized from allocation, risk metrics, and macro sensitivity. {APP_DISCLAIMER}",
+        else (
+            "Rule-based investment memo from allocation, historical risk metrics, and macro sensitivity "
+            f"— not an LLM and not a forecast. {APP_DISCLAIMER}"
+        ),
     )
     st.markdown("##### Portfolio Overview")
     for item in explanation.portfolio_overview:

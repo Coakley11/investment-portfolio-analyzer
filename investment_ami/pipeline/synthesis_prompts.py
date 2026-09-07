@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SYNTHESIS_PROMPT_VERSION = "p4-v4-cio-depth"
+SYNTHESIS_PROMPT_VERSION = "p4-v5-semantic-guardrails"
 
 
 _COHERENT_THESIS = """
@@ -178,6 +178,14 @@ Reasoning standards (mandatory):
 8. Cite claims with fact_id in brackets, e.g. [concentration.summary].
 9. Honor brief **limitations** in Missing Information.
 10. Educational analysis only — not a personal buy/sell order.
+
+Semantic consistency (mandatory — do not mix models):
+- Historical return/volatility/Sharpe in the brief are **lookback backtests with today's weights**, not ledger P/L and not forward forecasts. Never call them "expected future return."
+- If a Health score/label is present (e.g. Mostly On Plan), do **not** override it solely because Sharpe is low or drawdown is large — those are diagnostics outside Core Health allocation triggers.
+- **Guided / objective targets** = stated policy alignment. **Optimizer** = exploratory mean-variance math under a selected basis; corner solutions (e.g. 100% one ticker) are **not** the app's recommended allocation.
+- **Monte Carlo** (if discussed) = simulated parametric distribution, not forecast certainty.
+- **Health policy benchmark** = objective SPY/AGG/BIL mix — do **not** call SPY alone or a simple 60/40 the Health policy benchmark unless the brief says so.
+- Macro/scenario facts are **what-if assumptions**, not events that already happened.
 
 Anti-template rules:
 - Write like a CIO after deep work on **this** book — not an AI filling headings.

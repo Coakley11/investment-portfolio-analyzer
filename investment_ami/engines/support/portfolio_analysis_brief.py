@@ -172,7 +172,8 @@ def _measurement_block(ctx: dict[str, Any], generated_at: str) -> dict[str, Any]
         "as_of_utc": generated_at,
         "historical_metrics_window": {"start": start or None, "end": end or None},
         "risk_free_rate_pct": rf_text or None,
-        "historical_metrics_label": hist_note or "Historical return/volatility/Sharpe when present.",
+        "historical_metrics_label": hist_note
+        or "Historical modeled return/volatility/Sharpe (static current weights over lookback) when present.",
         "forward_macro_label": fwd_note or "Macro and Health assumptions affect forward-style reasoning only.",
     }
 
@@ -542,13 +543,15 @@ def build_portfolio_analysis_brief(
             inference_class="measured",
         )
     for ctx_key, fact_id, label in (
-        ("expected_return", "performance.expected_return_historical", "Historical expected return"),
-        ("sharpe_ratio", "performance.sharpe_historical", "Historical Sharpe ratio"),
+        ("expected_return", "performance.expected_return_historical", "Historical modeled annual return"),
+        ("sharpe_ratio", "performance.sharpe_historical", "Historical Sharpe ratio (diagnostic)"),
+        ("health_score_label", "health.score_label", "Core Health label"),
     ):
         val = ctx.get(ctx_key)
         if val not in (None, ""):
-            has_performance = True
             health_section[ctx_key] = val
+            if ctx_key in ("expected_return", "sharpe_ratio"):
+                has_performance = True
             _register_fact(
                 brief,
                 fact_id,

@@ -2550,6 +2550,18 @@ def render_applied_math_insight_panel(
             st.markdown(f"**Question:** *{q}*")
         if str(source_app or data.get("source_app") or "").strip().lower() == "investment":
             try:
+                from applied_math_context import investment_ami_insight_staleness_reasons
+
+                stale_reasons = investment_ami_insight_staleness_reasons(st.session_state, data)
+                if stale_reasons:
+                    st.warning(
+                        "This insight may be **stale** relative to your current session ("
+                        + "; ".join(stale_reasons)
+                        + "). Re-submit the question to refresh."
+                    )
+            except Exception:
+                pass
+            try:
                 from investment_ami_sliders import render_ami_assumption_controls
 
                 if render_ami_assumption_controls(st, data):

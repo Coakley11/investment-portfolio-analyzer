@@ -6,6 +6,73 @@ import copy
 from typing import Any
 
 
+def investment_ami_insight_staleness_reasons(
+    session_state: dict[str, Any],
+    insight: dict[str, Any] | None,
+) -> list[str]:
+    """Detect when a displayed AMI insight no longer matches live session inputs.
+
+    Insights are snapshots; they are not auto-recomputed when objective, holdings,
+    or optimizer/MC basis change. Returns short reason strings for a UI caption.
+    """
+    if not isinstance(insight, dict):
+        return []
+    reasons: list[str] = []
+    ss = insight.get("source_state") if isinstance(insight.get("source_state"), dict) else {}
+    ent = ss.get("entity_params") if isinstance(ss.get("entity_params"), dict) else {}
+    filt = ss.get("filter_params") if isinstance(ss.get("filter_params"), dict) else {}
+    ctx = insight.get("context") if isinstance(insight.get("context"), dict) else {}
+
+    # Holdings identity
+    insight_fp = str(
+        ent.get("holdings_fingerprint")
+        or ctx.get("holdings_fingerprint")
+        or ""
+    ).strip()
+    live_fp = ""
+    try:
+        import pandas as pd
+        from components.beginner_navigation import _holdings_fingerprint
+
+        df = session_state.get("holdings_df")
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            live_fp = str(_holdings_fingerprint(df)).strip()
+    except Exception:
+        live_fp = ""
+    if insight_fp and live_fp and insight_fp != live_fp:
+        reasons.append("holdings/weights changed")
+
+    def _norm_obj(v: Any) -> str:
+        return str(v or "").strip().lower()
+
+    widget = ss.get("widget_params") if isinstance(ss.get("widget_params"), dict) else {}
+    insight_obj = _norm_obj(
+        ent.get("objective")
+        or ent.get("health_objective")
+        or ctx.get("objective")
+        or widget.get("health_objective")
+    )
+    live_obj = _norm_obj(
+        session_state.get("health_objective")
+        or session_state.get("portfolio_objective")
+        or session_state.get("investment_objective")
+    )
+    if insight_obj and live_obj and insight_obj != live_obj:
+        reasons.append("portfolio objective changed")
+
+    for key, label in (
+        ("mc_assumption_mode", "Monte Carlo basis"),
+        ("opt_assumption_mode", "optimizer basis"),
+        ("frontier_assumption_mode", "frontier basis"),
+    ):
+        insight_val = str(filt.get(key) or ctx.get(key) or "").strip()
+        live_val = str(session_state.get(key) or "").strip()
+        if insight_val and live_val and insight_val != live_val:
+            reasons.append(f"{label} changed")
+
+    return reasons
+
+
 def cache_investment_context(session_state: dict[str, Any], ctx: dict[str, Any]) -> None:
     if ctx:
         session_state["_ami_investment_context"] = dict(ctx)
@@ -295,6 +362,12 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
         score = getattr(hr, "score", None) if not isinstance(hr, dict) else hr.get("score")
         if score is not None:
             ctx["health_score"] = round(float(score), 1) if isinstance(score, (int, float)) else score
+        label = getattr(hr, "score_label", None) if not isinstance(hr, dict) else hr.get("score_label")
+        if label:
+            ctx["health_score_label"] = str(label)
+        status = getattr(hr, "status_message", None) if not isinstance(hr, dict) else hr.get("status_message")
+        if status:
+            ctx["health_status_message"] = str(status)[:400]
         diag = {}
         if isinstance(hr, dict):
             diag = hr.get("health_diagnostics") or {}
@@ -346,7 +419,15 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
                 ctx[key] = str(val)
         ctx.setdefault(
             "context_note_historical",
-            "expected_return/volatility/sharpe/max_drawdown are historical unless labeled forward",
+            "expected_return/volatility/sharpe/max_drawdown are historical modeled metrics "
+            "(static current weights over the lookback) unless labeled forward; "
+            "not ledger P/L and not forward forecasts",
+        )
+        ctx.setdefault(
+            "context_note_models",
+            "Guided = objective/category targets; Optimizer = mean-variance experiment under selected basis; "
+            "Monte Carlo = parametric simulated paths; Health policy benchmark = objective SPY/AGG/BIL mix "
+            "(not SPY alone); Core Health ignores absolute Sharpe as an allocation trigger",
         )
 
     df = session_state.get("holdings_df")
@@ -577,6 +658,8 @@ def _enrich_investment_ami_analytics(
 _INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (
     "overview_subtab",
     "mc_assumption_mode",
+    "opt_assumption_mode",
+    "frontier_assumption_mode",
     "health_run_optimizer",
     "health_bond_min",
     "frontier_points",

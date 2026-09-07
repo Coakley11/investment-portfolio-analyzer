@@ -1855,7 +1855,8 @@ def generate_portfolio_insights(
         )
     elif metrics.sharpe_ratio < 0.5:
         insights.append(
-            f"A low Sharpe ratio (**{metrics.sharpe_ratio:.2f}**) means the portfolio may not be earning enough return for the risk taken."
+            f"Historical Sharpe (**{metrics.sharpe_ratio:.2f}**) is a risk-adjusted **diagnostic** "
+            "for the selected lookback — not a Core Health allocation trigger and not a forecast."
         )
 
     if len(corr) >= 2:
@@ -2276,7 +2277,8 @@ def generate_portfolio_explanation(
         risk.append(f"Sharpe ratio ({metrics.sharpe_ratio:.2f}) indicates strong risk-adjusted returns versus the risk-free rate.")
     elif metrics.sharpe_ratio < 0.5:
         risk.append(
-            "A low Sharpe ratio means the portfolio may not be earning enough return for the risk taken."
+            f"Historical Sharpe ({metrics.sharpe_ratio:.2f}) is a risk-adjusted diagnostic for the "
+            "selected lookback — supporting context only, not a Core Health allocation trigger."
         )
     else:
         risk.append(f"Sharpe ratio ({metrics.sharpe_ratio:.2f}) is moderate on a historical basis.")
@@ -2368,7 +2370,10 @@ def generate_portfolio_explanation(
     if profile["bond_cash"] < 0.10 and metrics.volatility > 0.18:
         weaknesses.append("Insufficient fixed-income exposure for investors seeking drawdown protection.")
     if metrics.annual_return < 0.05 and metrics.volatility > 0.12:
-        weaknesses.append("Low expected return relative to volatility may limit long-term wealth accumulation.")
+        weaknesses.append(
+            "Low historical modeled annualized return relative to volatility may limit long-term wealth accumulation "
+            "(lookback backtest with today's weights — not a forward expected return)."
+        )
     if metrics.volatility > 0.22:
         weaknesses.append("Excessive volatility may challenge investors with low risk tolerance.")
     if profile["reit"] + profile["real_assets"] < 0.05 and profile["bonds"] > 0.30:
@@ -2385,7 +2390,10 @@ def generate_portfolio_explanation(
     if profile["concentration"] >= 0.35:
         improvements.append(f"Consider trimming {profile['top_ticker']} to reduce concentration risk.")
     if metrics.sharpe_ratio < 0.6:
-        improvements.append("Rebalancing toward higher Sharpe sleeves (bonds, diversifiers) may improve efficiency.")
+        improvements.append(
+            "Historical Sharpe is modest — treat as diagnostic context; prefer Guided objective alignment "
+            "over chasing higher-Sharpe sleeves or optimizer corner solutions."
+        )
     if profile["tbills"] < 0.05 and metrics.beta_spy > 1.1:
         improvements.append("A modest T-bill sleeve could reduce beta and provide liquidity in stress scenarios.")
     if not improvements:

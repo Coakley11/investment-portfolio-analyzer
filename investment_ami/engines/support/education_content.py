@@ -28,6 +28,7 @@ def format_advanced_coach_snapshot(objective_label: str) -> str:
     """Portfolio coaching snapshot — advanced experience mode."""
     obj = str(objective_label or "").strip() or "your goal"
     return (
-        f"Objective **{obj}** — framework: expected return vs volatility vs concentration vs correlation. "
+        f"Objective **{obj}** — framework: historical modeled return vs volatility vs concentration vs correlation "
+        "(separate from Guided targets, optimizer experiments, and Monte Carlo simulations). "
         f"{ADVANCED_COACH_FRAMEWORK_SUFFIX}"
     )
