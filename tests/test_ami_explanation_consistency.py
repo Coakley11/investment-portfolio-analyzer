@@ -24,6 +24,14 @@ _PILOT = ["VTI", "VXUS", "BND", "VNQ"]
 _PILOT_T = ["Equity", "Equity", "Bonds", "REIT"]
 _PILOT_W = np.array([0.40, 0.20, 0.30, 0.10], dtype=float)
 
+# Exact live strings reported as FAILING on Explain This Portfolio (must never reappear).
+_FORBIDDEN_EXPLAIN_STRINGS = (
+    "A low Sharpe ratio means the portfolio may not be earning enough return for the risk taken.",
+    "Concentration in VTI increases idiosyncratic risk.",
+    "Consider trimming VTI to reduce concentration risk.",
+    "Rebalancing toward higher Sharpe sleeves (bonds, diversifiers) may improve efficiency.",
+)
+
 
 def _synthetic_returns(periods: int = 260, seed: int = 7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
@@ -35,6 +43,59 @@ def _synthetic_returns(periods: int = 260, seed: int = 7) -> pd.DataFrame:
         "VNQ": rng.normal(0.00012, 0.014, size=periods),
     }
     return pd.DataFrame(data, index=idx)
+
+
+class TestExplainThisPortfolioLiveForbiddenStrings(unittest.TestCase):
+    """Regression: exact live FAIL strings cannot appear for Shadow #1."""
+
+    def test_source_bans_legacy_phrases(self) -> None:
+        import inspect
+
+        src = inspect.getsource(core.generate_portfolio_explanation)
+        for phrase in _FORBIDDEN_EXPLAIN_STRINGS:
+            self.assertNotIn(phrase, src, msg=f"legacy phrase still in source: {phrase!r}")
+        self.assertNotIn("increases idiosyncratic risk.", src)
+        self.assertNotIn("Consider trimming {profile['top_ticker']}", src)
+        self.assertNotIn("higher Sharpe sleeves", src)
+        self.assertNotIn("may not be earning enough return for the risk taken", src)
+
+    def test_shadow1_memo_runtime_bans(self) -> None:
+        rets = _synthetic_returns()
+        metrics = replace(
+            core.compute_extended_metrics(rets, _PILOT_W, 0.04, 4250.0, tickers=_PILOT),
+            sharpe_ratio=0.28,
+            sortino_ratio=0.25,
+            annual_return=0.0737,
+            volatility=0.14,
+            max_drawdown=-0.23,
+        )
+        expl = core.generate_portfolio_explanation(
+            _PILOT,
+            _PILOT_W,
+            _PILOT_T,
+            metrics,
+            rets.corr(),
+            core.risk_contribution(rets, _PILOT_W, tickers=_PILOT),
+        )
+        memo = expl.full_memo
+        for phrase in _FORBIDDEN_EXPLAIN_STRINGS:
+            self.assertNotIn(phrase, memo)
+        # Positive Option C alignment for 40% VTI broad-market sleeve.
+        joined_risk = " ".join(expl.risk_analysis).lower()
+        self.assertIn("vti", joined_risk)
+        self.assertIn("40", joined_risk)
+        self.assertIn("broad-market", joined_risk)
+        self.assertNotIn("increases idiosyncratic risk", joined_risk)
+        self.assertIn("not single-name idiosyncratic", joined_risk)
+        improv = " ".join(expl.suggested_improvements).lower()
+        self.assertIn("guided", improv)
+        self.assertNotIn("consider trimming vti", improv)
+        sharpe_bits = " ".join(
+            x for x in (expl.risk_analysis + expl.suggested_improvements) if "sharpe" in x.lower()
+        ).lower()
+        self.assertIn("diagnostic", sharpe_bits)
+        self.assertIn("not a core health allocation trigger", sharpe_bits)
+        self.assertNotIn("earning enough", sharpe_bits)
 
 
 class TestExplanationDoesNotOverrideMostlyOnPlan(unittest.TestCase):

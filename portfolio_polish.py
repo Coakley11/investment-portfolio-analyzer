@@ -66,7 +66,11 @@ def skip_background_persistence(st) -> bool:
 
 def capture_analytics_fingerprint(tickers, weights, start: str, end, tab: str) -> tuple:
     w = tuple(round(float(x), 6) for x in weights)
-    return (tuple(tickers), w, start, end, tab)
+    try:
+        from portfolio_core import EXPLANATION_MEMO_SCHEMA_VERSION as _memo_ver
+    except Exception:
+        _memo_ver = "unknown"
+    return (tuple(tickers), w, start, end, tab, str(_memo_ver))
 
 
 def restore_capture_analytics(st, fp: tuple) -> dict | None:

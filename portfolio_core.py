@@ -14,6 +14,10 @@ from scipy.optimize import minimize
 
 TRADING_DAYS = 252
 
+# Bump when Explain This Portfolio memo wording/schema changes so capture-mode
+# analytics caches cannot serve pre-Option-C explanation text.
+EXPLANATION_MEMO_SCHEMA_VERSION = "option-c-explain-v2"
+
 # Curated presets for bonds, cash, REITs, and dividend ETFs
 ASSET_PRESETS: dict[str, dict[str, str]] = {
     "Total US Stock": {"ticker": "VTI", "category": "Equity"},
@@ -2237,6 +2241,18 @@ def generate_portfolio_explanation(
     weaknesses: list[str] = []
     improvements: list[str] = []
 
+    top_t = str(profile["top_ticker"])
+    top_w = float(profile["concentration"])
+    try:
+        _top_i = [str(t).strip().upper() for t in tickers].index(top_t.strip().upper())
+        _top_at = asset_types[_top_i] if _top_i < len(asset_types) else ""
+    except ValueError:
+        _top_at = ""
+    top_kind = _classify_health_holding(top_t, _top_at)
+    broad_market_top = top_kind == "broad_market_etf"
+    # Kind-aware soft band matches Health concentration engine (broad ETF ≤45% full pts).
+    broad_within_soft_band = broad_market_top and top_w < 0.45
+
     eq, bc = profile["equity"], profile["bond_cash"]
     if eq < 0.50 and bc >= 0.40:
         overview.append(
@@ -2302,10 +2318,17 @@ def generate_portfolio_explanation(
     if profile["tbills"] >= 0.20:
         risk.append("A large T-bill allocation reduces market sensitivity and can cushion equity drawdowns.")
 
-    if profile["concentration"] >= 0.35:
-        risk.append(
-            f"Concentration risk: {profile['top_ticker']} represents {profile['concentration']*100:.1f}% of the portfolio."
-        )
+    if top_w >= 0.35:
+        if broad_market_top:
+            risk.append(
+                f"Largest holding {top_t} is {top_w * 100:.0f}% — a broad-market ETF sleeve "
+                f"(systematic market exposure; not single-name idiosyncratic risk)."
+            )
+        else:
+            risk.append(
+                f"Largest holding {top_t} is {top_w * 100:.1f}% "
+                f"({top_kind.replace('_', ' ')}) — review whether that weight fits your objective."
+            )
     top_risk = risk_contrib.iloc[0]
     risk.append(
         f"{top_risk['Ticker']} contributes {top_risk['Risk Contribution (%)']:.1f}% of total portfolio risk."
@@ -2365,8 +2388,17 @@ def generate_portfolio_explanation(
     if profile["intl"] >= 0.10:
         strengths.append("International diversification may improve risk-adjusted return over time.")
 
-    if profile["concentration"] >= 0.40:
-        weaknesses.append(f"Concentration in {profile['top_ticker']} increases idiosyncratic risk.")
+    if top_w >= 0.40 and not broad_within_soft_band:
+        if broad_market_top:
+            weaknesses.append(
+                f"{top_t} at {top_w * 100:.0f}% is a large broad-market sleeve — monitor equity-market sensitivity, "
+                f"not single-stock idiosyncratic risk."
+            )
+        else:
+            weaknesses.append(
+                f"Largest holding {top_t} at {top_w * 100:.0f}% "
+                f"({top_kind.replace('_', ' ')}) may elevate security-specific concentration risk."
+            )
     if profile["bond_cash"] < 0.10 and metrics.volatility > 0.18:
         weaknesses.append("Insufficient fixed-income exposure for investors seeking drawdown protection.")
     if metrics.annual_return < 0.05 and metrics.volatility > 0.12:
@@ -2387,8 +2419,18 @@ def generate_portfolio_explanation(
         improvements.append("Reducing concentration in QQQ/SPY may lower drawdown risk during growth selloffs.")
     if profile["intl"] < 0.08 and eq > 0.50:
         improvements.append("Adding international diversification may improve risk-adjusted return.")
-    if profile["concentration"] >= 0.35:
-        improvements.append(f"Consider trimming {profile['top_ticker']} to reduce concentration risk.")
+    # Prefer Guided/objective alignment over legacy "trim largest holding" / Sharpe-chasing.
+    if profile["tbills"] < 0.05:
+        improvements.append(
+            "Primary action: use Guided Portfolio Adjustment toward your stated objective "
+            "(including any unrepresented Cash/T-Bill sleeve) — not optimizer corner solutions "
+            "and not trimming a broad-market ETF solely because it is the largest holding."
+        )
+    elif top_w >= 0.35 and not broad_within_soft_band:
+        improvements.append(
+            f"Review whether {top_t} ({top_kind.replace('_', ' ')}) at {top_w * 100:.0f}% still matches "
+            f"your Guided/objective targets — prefer objective alignment over ad-hoc trims."
+        )
     if metrics.sharpe_ratio < 0.6:
         improvements.append(
             "Historical Sharpe is modest — treat as diagnostic context; prefer Guided objective alignment "
