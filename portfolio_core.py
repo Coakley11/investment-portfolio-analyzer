@@ -963,6 +963,42 @@ def format_weight_pct(weight: float, *, decimals: int = 2, eps: float = _WEIGHT_
     return f"{w * 100:.{decimals}f}%"
 
 
+def normalize_objective_category_weights(
+    mix: dict[str, Any] | None,
+) -> dict[str, float]:
+    """
+    Normalize category targets to lowercase keys: equity / bonds / tbills.
+
+    Accepts OBJECTIVE_ALLOCATIONS-style keys or title-case
+    ``Equity`` / ``Bonds`` / ``T-Bills`` from ``recommend_portfolio``.
+    """
+    out = {"equity": 0.0, "bonds": 0.0, "tbills": 0.0}
+    if not mix:
+        return out
+    aliases = {
+        "equity": "equity",
+        "equities": "equity",
+        "bonds": "bonds",
+        "bond": "bonds",
+        "tbills": "tbills",
+        "tbill": "tbills",
+        "t-bills": "tbills",
+        "t_bills": "tbills",
+        "cash": "tbills",
+    }
+    for raw_key, raw_val in mix.items():
+        key = str(raw_key).strip().lower().replace(" ", "_")
+        canon = aliases.get(key) or aliases.get(key.replace("_", "-"))
+        if canon is None and key in out:
+            canon = key
+        if canon is not None:
+            try:
+                out[canon] = float(raw_val or 0.0)
+            except (TypeError, ValueError):
+                out[canon] = 0.0
+    return out
+
+
 def build_category_preserving_ticker_targets(
     tickers: Sequence[str],
     asset_types: Sequence[str],
@@ -985,14 +1021,15 @@ def build_category_preserving_ticker_targets(
         raise ValueError("tickers and asset_types must have the same length.")
     w = np.zeros(n, dtype=float)
     orphans: list[dict[str, Any]] = []
+    targets = normalize_objective_category_weights(category_targets)
 
     eq_idx = [i for i, at in enumerate(asset_types) if at in _EQUITY_BUCKET_TYPES]
     bond_idx = [i for i, at in enumerate(asset_types) if at == "Bonds"]
     tb_idx = [i for i, at in enumerate(asset_types) if at == "T-Bills"]
 
-    eq_t = float(category_targets.get("equity", 0.0) or 0.0)
-    bond_t = float(category_targets.get("bonds", 0.0) or 0.0)
-    tb_t = float(category_targets.get("tbills", 0.0) or 0.0)
+    eq_t = float(targets.get("equity", 0.0) or 0.0)
+    bond_t = float(targets.get("bonds", 0.0) or 0.0)
+    tb_t = float(targets.get("tbills", 0.0) or 0.0)
 
     def _assign(indices: list[int], target: float, category: str, asset_type: str) -> None:
         if target <= 0:
@@ -1056,6 +1093,29 @@ def aggregate_guided_category_exposure(
         elif cat == "tbills" or at == "T-Bills":
             tbills += wt
     return {"equity": equity, "bonds": bonds, "tbills": tbills}
+
+
+def annualized_mean_and_cov(
+    asset_returns: pd.DataFrame,
+    tickers: Sequence[str],
+    weights: Iterable[float] | None = None,
+) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
+    """Build annualized μ and Σ in holdings ticker order.
+
+    Market-data frames are often column-sorted alphabetically. Optimizer,
+    frontier, and forward projection index μ/Σ positionally against
+    ``tickers`` / ``asset_types``, so callers must use this (or
+    ``align_returns_and_weights``) rather than ``returns.mean().values``.
+    """
+    labels = [str(t).strip().upper() for t in tickers]
+    if weights is None:
+        w = np.ones(len(labels), dtype=float) / max(len(labels), 1)
+    else:
+        w = normalize_weights(weights)
+    aligned, _, labels = align_returns_and_weights(asset_returns, w, tickers=labels)
+    mean_rets = aligned.mean().to_numpy(dtype=float) * float(TRADING_DAYS)
+    cov = aligned.cov() * float(TRADING_DAYS)
+    return mean_rets, cov, aligned
 
 
 def align_returns_and_weights(
@@ -1552,14 +1612,19 @@ def optimize_max_sharpe(
     bounds = tuple((0.0, 1.0) for _ in range(n_assets))
     x0 = np.ones(n_assets) / n_assets
     result = minimize(neg_sharpe, x0, method="SLSQP", bounds=bounds, constraints=constraints)
-    w = threshold_weight_dust(normalize_weights(result.x))
+    if not bool(getattr(result, "success", False)):
+        w = normalize_weights(x0)
+        label = "Maximum Sharpe (equal-weight fallback — solver did not converge)"
+    else:
+        w = threshold_weight_dust(normalize_weights(result.x))
+        label = "Maximum Sharpe"
     r, v = _portfolio_stats(w, mean_returns, cov)
     return OptimizerResult(
         weights=w,
         annual_return=r,
         volatility=v,
         sharpe_ratio=sharpe_ratio(r, v, risk_free_rate),
-        label="Maximum Sharpe",
+        label=label,
     )
 
 
@@ -1577,14 +1642,19 @@ def optimize_min_volatility(
     bounds = tuple((0.0, 1.0) for _ in range(n_assets))
     x0 = np.ones(n_assets) / n_assets
     result = minimize(vol, x0, method="SLSQP", bounds=bounds, constraints=constraints)
-    w = threshold_weight_dust(normalize_weights(result.x))
+    if not bool(getattr(result, "success", False)):
+        w = normalize_weights(x0)
+        label = "Minimum Volatility (equal-weight fallback — solver did not converge)"
+    else:
+        w = threshold_weight_dust(normalize_weights(result.x))
+        label = "Minimum Volatility"
     r, v = _portfolio_stats(w, mean_returns, cov)
     return OptimizerResult(
         weights=w,
         annual_return=r,
         volatility=v,
         sharpe_ratio=sharpe_ratio(r, v, risk_free_rate),
-        label="Minimum Volatility",
+        label=label,
     )
 
 
@@ -2089,9 +2159,9 @@ def recommend_portfolio(
     df["Weight (%)"] = (df["Weight (%)"] / df["Weight (%)"].sum() * 100).round(1)
 
     alloc = {
-        "Equity": float(df[df["Asset Type"] == "Equity"]["Weight (%)"].sum() / 100),
-        "Bonds": float(df[df["Asset Type"] == "Bonds"]["Weight (%)"].sum() / 100),
-        "T-Bills": float(df[df["Asset Type"] == "T-Bills"]["Weight (%)"].sum() / 100),
+        "equity": float(df[df["Asset Type"] == "Equity"]["Weight (%)"].sum() / 100),
+        "bonds": float(df[df["Asset Type"] == "Bonds"]["Weight (%)"].sum() / 100),
+        "tbills": float(df[df["Asset Type"] == "T-Bills"]["Weight (%)"].sum() / 100),
     }
     return RecommendationResult(
         allocation=alloc,
@@ -3347,7 +3417,9 @@ def evaluate_portfolio_health(
     opt_w = optimizer_weights if optimizer_weights is not None else w.copy()
     if optimizer_weights is not None:
         opt_w = threshold_weight_dust(opt_w)
-    rec_mix = recommended_type_mix or obj_targets
+    rec_mix = normalize_objective_category_weights(
+        recommended_type_mix or obj_targets
+    )
     rec_w, rec_orphans = build_category_preserving_ticker_targets(tickers, asset_types, rec_mix)
 
     rebalance_rows = []

@@ -2298,8 +2298,6 @@ if pp.skip_heavy_work(st) and _load_analytics and _capture_fp is not None:
     if _cached_bundle:
         prices = _cached_bundle["prices"]
         returns = _cached_bundle["returns"]
-        mean_rets = _cached_bundle["mean_rets"]
-        cov = _cached_bundle["cov"]
         metrics = _cached_bundle["metrics"]
         growth = _cached_bundle["growth"]
         bench_rets = _cached_bundle.get("bench_rets")
@@ -2308,6 +2306,11 @@ if pp.skip_heavy_work(st) and _load_analytics and _capture_fp is not None:
         insights = _cached_bundle.get("insights") or []
         explanation = _cached_bundle.get("explanation")
         report_text = _cached_bundle.get("report_text") or ""
+        # Re-align μ/Σ to holdings order (cached bundles may predate this fix).
+        _ticker_labels = [str(t).strip().upper() for t in tickers]
+        mean_rets, cov, returns = core.annualized_mean_and_cov(
+            returns, _ticker_labels, weights
+        )
         st.session_state.plan_compare_return = metrics.annual_return
         export_buttons(
             holdings_df,
@@ -2333,9 +2336,11 @@ if _load_analytics:
             prices = load_market_data(tuple(tickers), settings["start"], settings["end"])
             bench_rets = load_benchmark_returns(settings["start"], settings["end"])
             returns = compute_daily_returns(prices)
-            mean_rets = returns.mean().values * core.TRADING_DAYS
-            cov = returns.cov() * core.TRADING_DAYS
             ticker_labels = [str(t).strip().upper() for t in tickers]
+            # μ/Σ must match holdings ticker order (Yahoo columns are often A–Z).
+            mean_rets, cov, returns = core.annualized_mean_and_cov(
+                returns, ticker_labels, weights
+            )
             metrics = core.compute_extended_metrics(
                 returns,
                 weights,
@@ -3292,6 +3297,12 @@ if active_main_tab(_active_tab, "health", beginner=beginner_mode) and _require_a
                     charts.allocation_comparison_chart(health.allocation_compare_df),
                     use_container_width=True,
                 )
+                st.caption(
+                    "**Current** = holdings · **Objective** = Guided category policy · "
+                    "**Recommended** = planning-style category mix (not optimizer) · "
+                    "**Optimizer** = Max-Sharpe experiment when enabled (else mirrors Current). "
+                    "Guided Suggested % follows Objective, not Optimizer."
+                )
                 if "Optimizer (%)" in health.allocation_compare_df.columns:
                     st.caption(
                         "**Optimizer** (when shown) is a historical long-only mean-variance experiment — "
@@ -3604,30 +3615,41 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
             with h2:
                 section_header("Outcome Statistics")
                 s = mc.summary
+                # Short st.metric labels avoid truncation on laptop widths; full meaning below.
                 m1, m2, m3 = st.columns(3)
                 m1.metric(
-                    "P(ending < start)",
+                    "P(< start)",
                     _pct(s["prob_loss"]),
                     help="Share of simulations with ending value below starting capital.",
                 )
                 m2.metric(
-                    "P(reach target)",
+                    "P(target)",
                     _pct(s["prob_reach_target"]),
                     help=f"Share of simulations with ending value ≥ {_money(s['target_value'])}.",
                 )
                 m3.metric(
-                    "P(≥ 2× start)",
+                    "P(2×)",
                     _pct(s["prob_double"]),
                     help="Share of simulations with ending value at least 2× starting capital.",
                 )
+                st.caption(
+                    "**P(< start)** = ending below start · "
+                    f"**P(target)** = ending ≥ {_money(s['target_value'])} · "
+                    "**P(2×)** = ending ≥ 2× start."
+                )
                 m4, m5, m6 = st.columns(3)
-                m4.metric("Mean ending value", _money(s["mean"]))
+                m4.metric("Mean", _money(s["mean"]), help="Average simulated ending value.")
                 m5.metric(
-                    "Expected shortfall (≤5th)",
+                    "ES ≤5th",
                     _money(s["expected_shortfall"]),
                     help="Mean ending value among simulations at or below the 5th percentile.",
                 )
                 m6.metric("Target", _money(s["target_value"]))
+                st.caption(
+                    "**Mean** = average ending value · "
+                    "**ES ≤5th** = expected shortfall (mean of endings at/below 5th percentile) · "
+                    "**Target** = goal used for P(target)."
+                )
                 st.caption(
                     f"**5th–95th percentile ending values:** {_money(s['ci_low'])} – {_money(s['ci_high'])} "
                     "(empirical band across simulations — not a classical confidence interval)."
@@ -3638,9 +3660,13 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
                 pcols = st.columns(5)
                 for col, (lbl, key) in zip(
                     pcols,
-                    [("5th", "p5"), ("25th", "p25"), ("Median", "p50"), ("75th", "p75"), ("95th", "p95")],
+                    [("P5", "p5"), ("P25", "p25"), ("P50", "p50"), ("P75", "p75"), ("P95", "p95")],
                 ):
                     col.metric(lbl, _money(s[key]))
+                st.caption(
+                    "Ending-value percentiles across simulations: "
+                    "**P5 / P25 / P50 (median) / P75 / P95**."
+                )
         else:
             st.caption("Monte Carlo runs on demand to keep first load fast.")
 
@@ -3680,6 +3706,14 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
             "for the inputs, not an instruction to put the entire portfolio into that asset. "
             "Guided Portfolio Adjustment uses your stated category objective, not these weights."
             + (" Uses macro-adjusted expected returns and covariance." if opt_assumption_mode.startswith("Forward") else " Uses historical data."),
+        )
+        try:
+            render_optimizer_confidence()
+        except Exception:
+            pass
+        st.caption(
+            f"Dollar weights below use the sidebar analytical portfolio value "
+            f"({_money(settings['initial_value'])}) — not ledger deposits as investment return."
         )
         opt_mean = mean_rets
         opt_cov = cov

@@ -295,19 +295,55 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
         score = getattr(hr, "score", None) if not isinstance(hr, dict) else hr.get("score")
         if score is not None:
             ctx["health_score"] = round(float(score), 1) if isinstance(score, (int, float)) else score
-        for attr, key, fmt in (
-            ("expected_return", "expected_return", "{:.1f}%"),
-            ("volatility", "volatility", "{:.1f}%"),
-            ("sharpe", "sharpe_ratio", "{:.2f}"),
-            ("max_drawdown", "max_drawdown", "{:.1f}%"),
-            ("risk_level", "risk_level", "{}"),
-        ):
-            val = getattr(hr, attr, None) if not isinstance(hr, dict) else hr.get(attr)
-            if val is not None and val != "":
+        diag = {}
+        if isinstance(hr, dict):
+            diag = hr.get("health_diagnostics") or {}
+        else:
+            diag = getattr(hr, "health_diagnostics", None) or {}
+
+        def _fmt_pct_like(val: Any) -> str:
+            f = float(val)
+            # Diagnostics store decimals (0.07); legacy fakes often store percent points (7.0).
+            if abs(f) <= 1.0:
+                return f"{f * 100:.1f}%"
+            return f"{f:.1f}%"
+
+        # Prefer Option C health_diagnostics on PortfolioHealthResult.
+        if isinstance(diag, dict) and diag:
+            if diag.get("annual_return") is not None:
+                ctx["expected_return"] = _fmt_pct_like(diag["annual_return"])
+            if diag.get("annual_volatility") is not None:
+                ctx["volatility"] = _fmt_pct_like(diag["annual_volatility"])
+            sh = diag.get("portfolio_sharpe", diag.get("raw_sharpe"))
+            if sh is not None:
                 try:
-                    ctx[key] = fmt.format(float(val)) if fmt != "{}" else str(val)
+                    ctx["sharpe_ratio"] = f"{float(sh):.2f}"
                 except (TypeError, ValueError):
+                    ctx["sharpe_ratio"] = str(sh)
+            if diag.get("max_drawdown") is not None:
+                ctx["max_drawdown"] = _fmt_pct_like(diag["max_drawdown"])
+
+        for attr, key, kind in (
+            ("expected_return", "expected_return", "pct"),
+            ("volatility", "volatility", "pct"),
+            ("sharpe", "sharpe_ratio", "sharpe"),
+            ("max_drawdown", "max_drawdown", "pct"),
+            ("risk_level", "risk_level", "raw"),
+        ):
+            if key in ctx and ctx[key] not in (None, ""):
+                continue
+            val = getattr(hr, attr, None) if not isinstance(hr, dict) else hr.get(attr)
+            if val is None or val == "":
+                continue
+            try:
+                if kind == "pct":
+                    ctx[key] = _fmt_pct_like(val)
+                elif kind == "sharpe":
+                    ctx[key] = f"{float(val):.2f}"
+                else:
                     ctx[key] = str(val)
+            except (TypeError, ValueError):
+                ctx[key] = str(val)
         ctx.setdefault(
             "context_note_historical",
             "expected_return/volatility/sharpe/max_drawdown are historical unless labeled forward",

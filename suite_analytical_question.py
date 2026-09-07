@@ -1340,14 +1340,52 @@ def build_context_from_session(
                     ctx[k] = v
         hr_obj = session_state.get("health_result")
         if hr_obj is not None:
-            for attr, key in (
-                ("sharpe", "sharpe_ratio"),
+            diag = {}
+            if isinstance(hr_obj, dict):
+                diag = hr_obj.get("health_diagnostics") or {}
+            else:
+                diag = getattr(hr_obj, "health_diagnostics", None) or {}
+            for src_key, key in (
+                ("portfolio_sharpe", "sharpe_ratio"),
+                ("raw_sharpe", "sharpe_ratio"),
+                ("annual_return", "expected_return"),
+                ("annual_volatility", "volatility"),
                 ("max_drawdown", "max_drawdown"),
-                ("risk_level", "risk_level"),
             ):
-                val = getattr(hr_obj, attr, None) if not isinstance(hr_obj, dict) else hr_obj.get(attr)
-                if val is not None and val != "":
-                    ctx[key] = val
+                if key in ctx and ctx[key] not in (None, ""):
+                    continue
+                val = diag.get(src_key) if isinstance(diag, dict) else None
+                if val is None:
+                    val = (
+                        getattr(hr_obj, src_key, None)
+                        if not isinstance(hr_obj, dict)
+                        else hr_obj.get(src_key)
+                    )
+                if val is None and src_key == "portfolio_sharpe":
+                    val = (
+                        getattr(hr_obj, "sharpe", None)
+                        if not isinstance(hr_obj, dict)
+                        else hr_obj.get("sharpe")
+                    )
+                if val is None or val == "":
+                    continue
+                try:
+                    f = float(val)
+                    if key == "sharpe_ratio":
+                        ctx[key] = f"{f:.2f}"
+                    elif abs(f) <= 1.0:
+                        ctx[key] = f"{f * 100:.1f}%"
+                    else:
+                        ctx[key] = f"{f:.1f}%"
+                except (TypeError, ValueError):
+                    ctx[key] = str(val)
+            risk_level = (
+                getattr(hr_obj, "risk_level", None)
+                if not isinstance(hr_obj, dict)
+                else hr_obj.get("risk_level")
+            )
+            if risk_level is not None and risk_level != "":
+                ctx["risk_level"] = risk_level
     elif app == "music":
         try:
             from music_coach_context import (
