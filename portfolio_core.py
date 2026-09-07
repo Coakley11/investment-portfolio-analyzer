@@ -1642,11 +1642,19 @@ def monte_carlo_simulation(
     tickers: Sequence[str] | None = None,
 ) -> MonteCarloResult:
     """
-    Geometric Brownian motion on portfolio returns.
+    Parametric portfolio Monte Carlo (aggregate path, not multi-asset correlated).
 
-    If `returns` (or `asset_returns`) and `weights` are provided, historical
-    daily returns estimate mu/sigma unless overridden by annual_return/volatility.
-    Otherwise supply annual_return and annual_volatility directly.
+    Method (educational model):
+    - Estimate annual μ/σ from ticker-aligned portfolio daily returns (or overrides).
+    - Convert to a daily simple-return mean via ``(1+μ_ann)^(1/252)-1`` and
+      daily vol via ``σ_ann / sqrt(252)``.
+    - Draw i.i.d. Normal(μ_d, σ_d) simple returns and compound:
+      ``V_t = V_{t-1} * (1 + ε_t)`` with ``V_0 = starting capital``.
+    - No contributions, withdrawals, inflation drag, or deposits on the path.
+    - Default ``seed=42`` for reproducibility (not a live market forecast).
+
+    Chart bands are **pointwise** percentile envelopes across simulations at each
+    day — not a single realized path at that percentile.
     """
     if returns is not None:
         asset_returns = returns
@@ -1913,7 +1921,7 @@ def scenario_analysis(
             "Mild Downturn (-10%)": -0.10,
             "Bear Market (-20%)": -0.20,
             "Strong Rally (+15%)": 0.15,
-            "Stagflation (-5% / high vol)": -0.05,
+            "Stagflation-like (-5% return)": -0.05,
         }
 
     rows = []

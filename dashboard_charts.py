@@ -130,7 +130,21 @@ def monte_carlo_paths(chart_df: pd.DataFrame, title: str) -> go.Figure:
             )
         )
     fig.update_layout(**base_layout(title=title, height=400))
-    return apply_axes(fig, "Portfolio Value ($)", "Trading Days")
+    fig = apply_axes(fig, "Portfolio Value ($)", "Trading Days")
+    fig.update_layout(
+        annotations=[
+            dict(
+                text="Pointwise percentile envelopes across simulations (not one path)",
+                xref="paper",
+                yref="paper",
+                x=0,
+                y=1.08,
+                showarrow=False,
+                font=dict(size=11, color="#94a3b8"),
+            )
+        ]
+    )
+    return fig
 
 
 def monte_carlo_histogram(ending_values, initial_value: float) -> go.Figure:

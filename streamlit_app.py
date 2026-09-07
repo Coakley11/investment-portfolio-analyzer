@@ -639,7 +639,10 @@ HELP_ADVANCED = {
     "sortino": "Like Sharpe, but penalizes only downside volatility.",
     "volatility": "Annualized standard deviation of daily returns.",
     "correlation": "How assets move together (-1 to +1). Lower can mean better diversification.",
-    "monte_carlo": "Random future paths from historical return/vol — a range of outcomes, not a forecast.",
+    "monte_carlo": (
+        "Parametric simulation of portfolio paths from return/vol assumptions "
+        "(historical or macro-adjusted) — a modeled range, not a forecast."
+    ),
     "efficient_frontier": "Optimal risk/return combinations from mean-variance optimization.",
     "drawdown": "Largest peak-to-trough decline over the analysis period.",
     "beta": "Sensitivity vs SPY: 1.0 moves with the market; >1 is more aggressive.",
@@ -812,6 +815,7 @@ def compute_monte_carlo(
         expected_annual_return=expected_annual_return,
         expected_annual_volatility=expected_annual_volatility,
         tickers=tickers,
+        seed=42,
     )
 
 
@@ -2682,6 +2686,11 @@ if active_main_tab(_active_tab, "analytics", beginner=beginner_mode) and _requir
             st.dataframe(rc.drop(columns=["Risk Contribution"]), use_container_width=True, hide_index=True)
 
             section_header("Scenario Analysis", "Hypothetical 1-year outcomes under return shocks.")
+            st.caption(
+                "One-period what-if shocks on the **current static-weight portfolio** "
+                "(not Guided targets, not multi-year Monte Carlo). "
+                "Stagflation-like is a −5% return assumption only — not a separate vol shock."
+            )
             sd = base_risk_pack["scenarios"].copy()
             sd["Assumed 1Y Return"] = sd["Assumed 1Y Return"].map(_pct)
             sd["Projected Value"] = sd["Projected Value"].map(_money)
@@ -3570,9 +3579,19 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
                 )
             st.session_state.mc_cached_summary = mc.summary
             mode_label = "Forward macro-adjusted" if mc_fwd_ret is not None else "Historical"
+            st.caption(
+                f"Starting capital: **{_money(settings['initial_value'])}** · "
+                f"{mc_sims:,} modeled paths · {mc_years} year(s) · "
+                f"{mode_label} μ/σ · fixed seed for reproducibility. "
+                "Aggregate portfolio simulation (not multi-asset correlated shocks). "
+                "No contributions, withdrawals, or deposits on the path. "
+                "Chart bands are **pointwise percentile envelopes**, not one simulated path. "
+                f"{APP_DISCLAIMER}"
+            )
             st.plotly_chart(
                 charts.monte_carlo_paths(
-                    mc.chart_df, f"{mode_label} · {mc_sims:,} simulations · {mc_years}Y"
+                    mc.chart_df,
+                    f"Modeled distribution · {mode_label} · {mc_sims:,} sims · {mc_years}Y",
                 ),
                 use_container_width=True,
             )
@@ -3586,15 +3605,36 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
                 section_header("Outcome Statistics")
                 s = mc.summary
                 m1, m2, m3 = st.columns(3)
-                m1.metric("P(Loss)", _pct(s["prob_loss"]), help="Ending below starting value")
-                m2.metric("P(Below Start)", _pct(s["prob_below_start"]))
-                m3.metric("P(Reach Target)", _pct(s["prob_reach_target"]))
+                m1.metric(
+                    "P(ending < start)",
+                    _pct(s["prob_loss"]),
+                    help="Share of simulations with ending value below starting capital.",
+                )
+                m2.metric(
+                    "P(reach target)",
+                    _pct(s["prob_reach_target"]),
+                    help=f"Share of simulations with ending value ≥ {_money(s['target_value'])}.",
+                )
+                m3.metric(
+                    "P(≥ 2× start)",
+                    _pct(s["prob_double"]),
+                    help="Share of simulations with ending value at least 2× starting capital.",
+                )
                 m4, m5, m6 = st.columns(3)
-                m4.metric("P(2× Money)", _pct(s["prob_double"]))
-                m5.metric("Mean Outcome", _money(s["mean"]))
-                m6.metric("Expected Shortfall", _money(s["expected_shortfall"]))
-                st.caption(f"**90% confidence interval:** {_money(s['ci_low'])} – {_money(s['ci_high'])}")
-                st.caption(f"Target value: {_money(s['target_value'])} · Downside risk estimate: {_pct(s['downside_std'])}")
+                m4.metric("Mean ending value", _money(s["mean"]))
+                m5.metric(
+                    "Expected shortfall (≤5th)",
+                    _money(s["expected_shortfall"]),
+                    help="Mean ending value among simulations at or below the 5th percentile.",
+                )
+                m6.metric("Target", _money(s["target_value"]))
+                st.caption(
+                    f"**5th–95th percentile ending values:** {_money(s['ci_low'])} – {_money(s['ci_high'])} "
+                    "(empirical band across simulations — not a classical confidence interval)."
+                )
+                st.caption(
+                    f"Downside dispersion of relative endings: {_pct(s['downside_std'])}."
+                )
                 pcols = st.columns(5)
                 for col, (lbl, key) in zip(
                     pcols,
