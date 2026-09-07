@@ -16,6 +16,7 @@ from investment_ami.engines.education import get_education_engine
 from investment_ami.engines.behavioral_finance import get_behavioral_finance_engine
 from investment_ami.engines.scenario_stress import get_scenario_stress_engine
 from investment_ami.engines.valuation import get_valuation_engine
+from investment_ami.engines.portfolio_health import get_portfolio_health_engine
 from investment_ami.engines.allocation_advisor import get_allocation_advisor_engine
 from investment_ami.engines.cash_reserve_advisor import get_cash_reserve_advisor_engine
 from investment_ami.engines.real_portfolio_advisor import get_real_portfolio_advisor_engine
@@ -39,6 +40,7 @@ INSTANT_ENGINE_REGISTRY: dict[str, Any] = {
     "asset_allocation": _allocation_engine,
     "etf_overlap": _etf_overlap_engine,
     "valuation": _valuation_engine,
+    "portfolio_health": get_portfolio_health_engine(),
     "scenario_stress": _scenario_stress_engine,
     "education": _education_engine,
     "investment_coach": _education_engine,

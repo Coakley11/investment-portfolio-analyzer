@@ -42,6 +42,20 @@ _INTENT_SPECS: dict[str, dict[str, object]] = {
         "optional": frozenset({"health_score", "volatility", "sharpe_ratio"}),
         "follow_up": ("risk_reduction", "scenario_stress"),
     },
+    "portfolio_health": {
+        "title": "Portfolio Health interpretation",
+        "category": AmiCategory.PORTFOLIO_ANALYSIS,
+        "description": "Interpret Core Health score/label, principal issues, and diagnostic Sharpe under Option C.",
+        "engines": ("portfolio_health",),
+        "output_type": "diagnostic",
+        "profile": "portfolio_only",
+        "legacy": "phase2",
+        "required": frozenset(),
+        "optional": frozenset(
+            {"health_score", "health_score_label", "sharpe_ratio", "objective", "current_weights"}
+        ),
+        "follow_up": ("allocation_recommendation", "portfolio_risk"),
+    },
     "sector_exposure": {
         "title": "Sector / tech exposure",
         "category": AmiCategory.STOCK_ANALYSIS,

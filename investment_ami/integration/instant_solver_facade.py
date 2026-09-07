@@ -30,7 +30,12 @@ def solve_instant_insight(
     else:
         from investment_ami_instant_solver import _solve_instant_investment_insight_core
 
-        pair = _solve_instant_investment_insight_core(question, context)
+        # Honor mode-router intent — do not re-detect (prevented Sharpe→valuation divergence).
+        pair = _solve_instant_investment_insight_core(
+            question,
+            context,
+            intent_override=str(routed.intent_id or "").strip() or None,
+        )
         if pair is None:
             return None
         route, result = pair

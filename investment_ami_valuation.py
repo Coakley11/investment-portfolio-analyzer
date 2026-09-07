@@ -193,6 +193,26 @@ def resolve_valuation_target(question: str, ctx: dict[str, Any]) -> str | None:
     mentioned = tickers_mentioned_in_question(question)
     if mentioned:
         return mentioned[0]
+    # Holdings fallback only when the user clearly asked a valuation question.
+    # Prevents Health/Sharpe misfires from silently answering "largest equity = VTI".
+    q = str(question or "").strip().lower()
+    valuation_cue = any(
+        p in q
+        for p in (
+            "expensive",
+            "overvalued",
+            "undervalued",
+            "cheap",
+            "fairly valued",
+            "fair value",
+            "too rich",
+            "implied growth",
+            "price to earnings",
+            "valuation",
+        )
+    ) or bool(re.search(r"\bp\s*/\s*e\b", q)) or bool(re.search(r"\bpe\s+ratio\b", q))
+    if not valuation_cue:
+        return None
     weights = ctx.get("current_weights") or {}
     if isinstance(weights, dict):
         equity_rows: list[tuple[str, float]] = []

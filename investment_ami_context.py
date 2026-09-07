@@ -65,6 +65,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "portfolio_concentration",
         "rebalance_allocation",
         "portfolio_risk",
+        "portfolio_health",
         "sector_exposure",
         "risk_reduction",
         "investment_coach",
@@ -211,8 +212,6 @@ _VALUATION_PHRASES = (
     "cheap",
     "fairly valued",
     "fair value",
-    "p/e",
-    "pe ratio",
     "price to earnings",
     " valuation",
     "implied growth",
@@ -221,6 +220,45 @@ _VALUATION_PHRASES = (
     "assumptions matter",
     "what assumptions",
     "too rich",
+)
+
+# PE / P/E must use word boundaries — bare "pe ratio" false-matches inside "sharpe ratio".
+_VALUATION_PE_PATTERNS = (
+    re.compile(r"\bp\s*/\s*e\b", re.I),
+    re.compile(r"\bpe\s+ratio\b", re.I),
+    re.compile(r"\bprice[\s-]*to[\s-]*earnings\b", re.I),
+)
+
+_PORTFOLIO_HEALTH_PHRASES = (
+    "how healthy",
+    "how healthy is",
+    "portfolio health",
+    "health of my portfolio",
+    "healthy is my",
+    "is my portfolio healthy",
+    "am i on plan",
+    "mostly on plan",
+    "off plan",
+    "main issue",
+    "biggest issue",
+    "principal issue",
+    "primary issue",
+    "main problem",
+    "what's wrong with my portfolio",
+    "whats wrong with my portfolio",
+    "should i change anything",
+    "do i need to change",
+    "change anything because",
+    "because my sharpe",
+    "because sharpe",
+    "is that a problem",
+    "is sharpe a problem",
+    "is my low sharpe",
+    "sharpe ratio is only",
+    "sharpe is only",
+    "low sharpe",
+    "sharpe is low",
+    "core health",
 )
 
 _SCENARIO_PHRASES = (
@@ -321,6 +359,41 @@ def is_beginner_experience(ctx: dict[str, Any]) -> bool:
     return "beginner" in exp
 
 
+def _matches_valuation_intent(q: str) -> bool:
+    """True for explicit valuation asks — never via Sharpe→'pe ratio' substring."""
+    if any(p in q for p in _VALUATION_PHRASES):
+        return True
+    return any(pat.search(q) for pat in _VALUATION_PE_PATTERNS)
+
+
+def is_portfolio_health_question(question: str) -> bool:
+    """Health / Option C interpretation / Sharpe-as-diagnostic framing (not pure metric lookup)."""
+    q = _normalize_question(question)
+    if not q:
+        return False
+    if any(p in q for p in _PORTFOLIO_HEALTH_PHRASES):
+        return True
+    # Multi-intent: healthy/issue + action, or Sharpe embedded in diagnosis.
+    if "sharpe" in q and any(
+        p in q
+        for p in (
+            "healthy",
+            "health",
+            "issue",
+            "problem",
+            "change",
+            "should i",
+            "do i need",
+            "on plan",
+            "diagnostic",
+        )
+    ):
+        return True
+    if "healthy" in q and "portfolio" in q:
+        return True
+    return False
+
+
 def detect_investment_send_intent(question: str, source_page: str = "") -> str:
     q = _normalize_question(question)
     if not q:
@@ -334,8 +407,28 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         "both" in q and any(t in q for t in ("voo", "qqq", "vti", "spy", "ivv"))
     ):
         return "etf_overlap"
-    if any(p in q for p in _VALUATION_PHRASES) and not any(p in q for p in _SCENARIO_PHRASES):
+    # Explicit valuation before Health — "Is VTI expensive?" must stay valuation.
+    if _matches_valuation_intent(q) and not any(p in q for p in _SCENARIO_PHRASES):
+        # Exception: Health framing + Sharpe must not be stolen by PE false-positives
+        # (already fixed) or incidental "valuation" words. True expensive/P/E asks win.
+        if is_portfolio_health_question(q) and not any(
+            p in q
+            for p in (
+                "expensive",
+                "overvalued",
+                "undervalued",
+                "cheap",
+                "fairly valued",
+                "fair value",
+                "too rich",
+                "implied growth",
+                "price to earnings",
+            )
+        ) and not any(pat.search(q) for pat in _VALUATION_PE_PATTERNS):
+            return "portfolio_health"
         return "valuation"
+    if is_portfolio_health_question(q):
+        return "portfolio_health"
     if _is_macro_rates_question(q):
         return "macro_rates"
     if _is_inflation_question(q):

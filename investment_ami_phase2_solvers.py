@@ -88,6 +88,10 @@ def solve_phase2_or_structured(
         from investment_ami.pipeline.instant import run_instant_engine
 
         result = run_instant_engine("portfolio_risk", ctx, beginner=beginner, question=question)
+    elif intent == "portfolio_health":
+        from investment_ami.pipeline.instant import run_instant_engine
+
+        result = run_instant_engine("portfolio_health", ctx, beginner=beginner, question=question)
     elif intent == "etf_overlap":
         from investment_ami.pipeline.instant import run_instant_engine
 

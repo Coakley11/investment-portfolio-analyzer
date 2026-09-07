@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 ResponseMode = Literal["deterministic", "analytical_synthesis"]
 
-MODE_ROUTER_VERSION = "p5-intent-v1"
+MODE_ROUTER_VERSION = "p5-intent-v2-health"
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,15 @@ def _match_deterministic_objective(q: str) -> tuple[str, str] | None:
     """
     Objective portfolio metric questions — always deterministic even when phrasing is open-ended.
     Returns (intent_id, rule_id).
+
+    Skips when the question is Health/Option C diagnosis (Sharpe embedded in “is that a problem?”).
     """
+    try:
+        from investment_ami_context import is_portfolio_health_question
+    except ImportError:
+        is_portfolio_health_question = lambda _q: False  # noqa: E731
+    if is_portfolio_health_question(q):
+        return None
     rules: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "sector_exposure",
@@ -214,6 +222,7 @@ def _match_deterministic_objective(q: str) -> tuple[str, str] | None:
                 "what is my volatility",
                 "sharpe ratio",
                 "max drawdown",
+                "what is my sharpe",
             ),
         ),
     )
@@ -499,6 +508,27 @@ def route_investment_response_mode(
             question_tag="",
             deterministic_intent=ds_intent,
             legacy_intent_hint=legacy,
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+            intent_classification=intent_dict,
+        )
+
+    # Core Health / Option C interpretation beats metric-only short-circuits (Sharpe→risk).
+    try:
+        from investment_ami_context import is_portfolio_health_question
+    except ImportError:
+        is_portfolio_health_question = lambda _q: False  # noqa: E731
+    if legacy == "portfolio_health" or is_portfolio_health_question(q):
+        matched.append("deterministic:portfolio_health")
+        reasons.append(
+            "Portfolio Health / Option C interpretation (status, principal issue, Sharpe diagnostic) "
+            "→ deterministic `portfolio_health`."
+        )
+        return ModeRoutingDecision(
+            response_mode="deterministic",
+            question_tag="improvement" if any(w in q for w in ("change", "should", "issue")) else "open_ended",
+            deterministic_intent="portfolio_health",
+            legacy_intent_hint=legacy or "portfolio_health",
             matched_rules=tuple(matched),
             reasons=tuple(reasons),
             intent_classification=intent_dict,

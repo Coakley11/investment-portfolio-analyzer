@@ -354,6 +354,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
         "portfolio_concentration": ("portfolio_concentration", "Investment concentration analyst"),
         "rebalance_allocation": ("rebalance_allocation", "Investment allocation analyst"),
         "portfolio_risk": ("portfolio_risk", "Investment risk analyst"),
+        "portfolio_health": ("portfolio_health", "Portfolio Health interpreter"),
         "sector_exposure": ("sector_exposure", "Investment sector exposure analyst"),
         "risk_reduction": ("risk_reduction", "Investment risk coach"),
         "investment_coach": ("investment_coach", "Investment coach"),
@@ -380,6 +381,7 @@ def _route_for_intent(intent: str) -> InvestmentSolverRoute:
 def _solve_instant_investment_insight_core(
     question: str,
     context: dict[str, Any] | None,
+    intent_override: str | None = None,
 ) -> tuple[InvestmentSolverRoute, InvestmentSolverResult] | None:
     q = str(question or "").strip()
     if not q:
@@ -391,7 +393,7 @@ def _solve_instant_investment_insight_core(
         return None
 
     page = str(ctx.get("page") or ctx.get("source_page") or "").strip()
-    intent = detect_investment_send_intent(q, page)
+    intent = str(intent_override or "").strip() or detect_investment_send_intent(q, page)
     if not intent_supported(intent):
         return None
 
@@ -399,6 +401,7 @@ def _solve_instant_investment_insight_core(
     phase2_intents = {
         "portfolio_concentration",
         "portfolio_risk",
+        "portfolio_health",
         "etf_overlap",
         "diversification",
         "scenario_stress",
@@ -432,6 +435,8 @@ def _solve_instant_investment_insight_core(
         result = _risk_reduction_answer(ctx, beginner=beginner, question=q)
     elif intent == "investment_coach":
         result = _coach_answer(ctx, beginner=beginner, question=q)
+    else:
+        return None
 
     route = _route_for_intent(intent)
     result.problem_type = route.problem_type
