@@ -53,6 +53,17 @@ render_objective_alignment_summary = getattr(
 render_optimizer_confidence = getattr(
     _calc_transparency, "render_optimizer_confidence", lambda: None
 )
+try:
+    from components.calculation_transparency import (
+        is_forward_optimizer_basis,
+        optimizer_results_methodology_lead,
+    )
+except ImportError:  # pragma: no cover — Cloud partial-reload fallback
+    def is_forward_optimizer_basis(basis: str) -> bool:
+        return str(basis or "").strip().lower().startswith("forward")
+
+    def optimizer_results_methodology_lead(basis: str) -> str:
+        return _calc_transparency.optimizer_results_methodology_lead(basis)
 _beginner_coach = importlib.import_module("components.beginner_coach")
 render_goal_cards = _beginner_coach.render_goal_cards
 render_beginner_goal_tab = _beginner_coach.render_beginner_goal_tab
@@ -3699,13 +3710,10 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
             horizontal=True,
             key="opt_assumption_mode",
         )
+        use_forward_opt = is_forward_optimizer_basis(opt_assumption_mode)
         section_header(
             "Optimizer Results",
-            "Historical long-only mean-variance experiment (SLSQP). "
-            "May produce corner solutions such as 100% in one bond ETF — that is a mathematical optimum "
-            "for the inputs, not an instruction to put the entire portfolio into that asset. "
-            "Guided Portfolio Adjustment uses your stated category objective, not these weights."
-            + (" Uses macro-adjusted expected returns and covariance." if opt_assumption_mode.startswith("Forward") else " Uses historical data."),
+            optimizer_results_methodology_lead(opt_assumption_mode),
         )
         try:
             render_optimizer_confidence()
@@ -3717,7 +3725,8 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
         )
         opt_mean = mean_rets
         opt_cov = cov
-        if opt_assumption_mode.startswith("Forward"):
+        forward_opt = None
+        if use_forward_opt:
             forward_opt = get_forward_projection(
                 start=settings["start"],
                 end=settings["end"],
@@ -3745,14 +3754,32 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
         with o2:
             st.markdown("**Minimum Volatility**")
             st.dataframe(opt_table(min_vol), use_container_width=True, hide_index=True)
+        # Compare row uses the same μ/Σ basis as the optimizer run.
+        if use_forward_opt and forward_opt is not None:
+            your_ret = float(forward_opt.adjusted_return)
+            your_vol = float(forward_opt.adjusted_volatility)
+            your_sharpe = float(forward_opt.adjusted_sharpe)
+            your_label = "Your allocation (forward)"
+            basis_note = "Return / Volatility / Sharpe below are forward (macro-adjusted)."
+        else:
+            your_ret = float(metrics.annual_return)
+            your_vol = float(metrics.volatility)
+            your_sharpe = float(metrics.sharpe_ratio)
+            your_label = "Your allocation (historical)"
+            basis_note = "Return / Volatility / Sharpe below are historical (selected date range)."
         compare = pd.DataFrame(
             {
-                "Portfolio": ["Your allocation", max_sharpe.label, min_vol.label],
-                "Return": [_pct(metrics.annual_return), _pct(max_sharpe.annual_return), _pct(min_vol.annual_return)],
-                "Volatility": [_pct(metrics.volatility), _pct(max_sharpe.volatility), _pct(min_vol.volatility)],
-                "Sharpe": [f"{metrics.sharpe_ratio:.2f}", f"{max_sharpe.sharpe_ratio:.2f}", f"{min_vol.sharpe_ratio:.2f}"],
+                "Portfolio": [your_label, max_sharpe.label, min_vol.label],
+                "Return": [_pct(your_ret), _pct(max_sharpe.annual_return), _pct(min_vol.annual_return)],
+                "Volatility": [_pct(your_vol), _pct(max_sharpe.volatility), _pct(min_vol.volatility)],
+                "Sharpe": [
+                    f"{your_sharpe:.2f}",
+                    f"{max_sharpe.sharpe_ratio:.2f}",
+                    f"{min_vol.sharpe_ratio:.2f}",
+                ],
             }
         )
+        st.caption(basis_note)
         st.dataframe(compare, use_container_width=True, hide_index=True)
     elif not beginner_mode:
         st.caption("Optimizer runs on demand.")

@@ -282,6 +282,36 @@ def render_macro_why_it_matters() -> None:
         )
 
 
+def is_forward_optimizer_basis(basis_mode: str) -> bool:
+    """True when Optimization basis radio is the forward-looking option."""
+    return str(basis_mode or "").strip().lower().startswith("forward")
+
+
+def optimizer_results_methodology_lead(basis_mode: str) -> str:
+    """Intro copy for Optimizer Results — must match the selected optimization basis.
+
+    Historical and Forward-looking share SLSQP / long-only mechanics; only the
+    μ/Σ input source changes. The lead must not say "Historical" when Forward
+    is selected (and vice versa).
+    """
+    if is_forward_optimizer_basis(basis_mode):
+        basis_clause = (
+            "Forward-looking (macro-adjusted) long-only mean-variance experiment (SLSQP). "
+            "Uses macro-adjusted expected returns and covariance."
+        )
+    else:
+        basis_clause = (
+            "Historical long-only mean-variance experiment (SLSQP). "
+            "Uses historical expected returns and covariance from the selected date range."
+        )
+    return (
+        f"{basis_clause} "
+        "May produce corner solutions such as 100% in one bond ETF — that is a mathematical optimum "
+        "for the inputs, not an instruction to put the entire portfolio into that asset. "
+        "Guided Portfolio Adjustment uses your stated category objective, not these weights."
+    )
+
+
 def render_optimizer_confidence() -> None:
     """Advanced Mode — optimizer sensitivity disclaimer."""
     if not _is_advanced_mode():
@@ -318,7 +348,9 @@ def render_objective_alignment_summary(
 
 
 __all__ = [
+    "is_forward_optimizer_basis",
     "objective_alignment_plain_english",
+    "optimizer_results_methodology_lead",
     "render_future_model_improvements",
     "render_how_calculated_section",
     "render_macro_why_it_matters",
