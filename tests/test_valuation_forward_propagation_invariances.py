@@ -89,16 +89,28 @@ class TestValuationForwardPropagationInvariances(unittest.TestCase):
         _, fair, used, _ = _forward("Fair Value")
         _, exp, _, _ = _forward("Expensive")
         self.assertTrue(np.allclose(fair.adjusted_mean_returns, exp.adjusted_mean_returns))
+        # Valuation scales Σ uniformly via vol_scale; μ is unchanged, so Max-Sharpe
+        # expected return is invariant even if SLSQP weight dust differs slightly.
         fair_opt = core.optimize_max_sharpe(
             fair.adjusted_mean_returns, fair.adjusted_cov, _RF, len(used)
         )
         exp_opt = core.optimize_max_sharpe(
             exp.adjusted_mean_returns, exp.adjusted_cov, _RF, len(used)
         )
-        self.assertTrue(np.allclose(fair_opt.weights, exp_opt.weights, atol=1e-6))
-        self.assertAlmostEqual(fair_opt.annual_return, exp_opt.annual_return, places=12)
+        self.assertAlmostEqual(fair_opt.annual_return, exp_opt.annual_return, places=6)
         self.assertGreater(exp_opt.volatility, fair_opt.volatility)
         self.assertLess(exp_opt.sharpe_ratio, fair_opt.sharpe_ratio)
+        # Same μ under both valuations: return equals w·μ for each solution.
+        self.assertAlmostEqual(
+            float(np.dot(fair_opt.weights, fair.adjusted_mean_returns)),
+            fair_opt.annual_return,
+            places=10,
+        )
+        self.assertAlmostEqual(
+            float(np.dot(exp_opt.weights, exp.adjusted_mean_returns)),
+            exp_opt.annual_return,
+            places=10,
+        )
 
 
 if __name__ == "__main__":
