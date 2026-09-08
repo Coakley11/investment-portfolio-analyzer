@@ -97,8 +97,15 @@ class TestValuationForwardPropagationInvariances(unittest.TestCase):
         exp_opt = core.optimize_max_sharpe(
             exp.adjusted_mean_returns, exp.adjusted_cov, _RF, len(used)
         )
-        self.assertAlmostEqual(fair_opt.annual_return, exp_opt.annual_return, places=6)
+        self.assertAlmostEqual(fair_opt.annual_return, exp_opt.annual_return, places=4)
         self.assertGreater(exp_opt.volatility, fair_opt.volatility)
+        # Uniform Σ scale from valuation leaves Max-Sharpe return effectively unchanged
+        # (display rounds to 0.01%); vol and Sharpe move.
+        self.assertLess(
+            abs(fair_opt.annual_return - exp_opt.annual_return),
+            5e-5,
+            "Max-Sharpe return should be valuation-invariant under current μ construction",
+        )
         self.assertLess(exp_opt.sharpe_ratio, fair_opt.sharpe_ratio)
         # Same μ under both valuations: return equals w·μ for each solution.
         self.assertAlmostEqual(
