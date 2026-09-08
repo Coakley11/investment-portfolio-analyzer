@@ -69,6 +69,97 @@ def ensure_shared_macro_session_defaults(session_state: Any | None = None) -> No
             ss[key] = default
 
 
+FORWARD_HORIZON_MIN = 1
+FORWARD_HORIZON_MAX = 15
+FORWARD_HORIZON_FALLBACK = 5
+FORWARD_HORIZON_PERSIST_KEY = "fwd_years"
+PLAN_HORIZON_SESSION_KEY = "plan_horizon"
+
+
+def _coerce_horizon_int(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def clamp_forward_horizon_years(
+    raw: Any,
+    *,
+    min_years: int = FORWARD_HORIZON_MIN,
+    max_years: int = FORWARD_HORIZON_MAX,
+    fallback: int = FORWARD_HORIZON_FALLBACK,
+) -> int:
+    """Clamp a horizon into the Forward slider range; invalid values use fallback."""
+    n = _coerce_horizon_int(raw)
+    if n is None:
+        return int(fallback)
+    return int(min(max_years, max(min_years, n)))
+
+
+def planning_horizon_years(session_state: Any) -> int | None:
+    """Canonical planning 'Investment time horizon' if present."""
+    if PLAN_HORIZON_SESSION_KEY not in session_state:
+        return None
+    return _coerce_horizon_int(session_state.get(PLAN_HORIZON_SESSION_KEY))
+
+
+def seed_forward_horizon_from_plan_if_needed(session_state: Any | None = None) -> int:
+    """
+    First initialization only: seed Forward horizon from persisted ``plan_horizon``.
+
+    Does not overwrite an existing Forward-page value (manual override or prior seed).
+    """
+    ss = st.session_state if session_state is None else session_state
+    persist = FORWARD_HORIZON_PERSIST_KEY
+    if persist in ss:
+        ss[persist] = clamp_forward_horizon_years(ss.get(persist))
+        return int(ss[persist])
+    plan = planning_horizon_years(ss)
+    if plan is None:
+        ss[persist] = FORWARD_HORIZON_FALLBACK
+    else:
+        ss[persist] = clamp_forward_horizon_years(plan)
+    return int(ss[persist])
+
+
+def harvest_forward_horizon_widget_to_persist(session_state: Any | None = None) -> None:
+    """Copy live Forward horizon widget → persist before Streamlit tears the widget down."""
+    ss = st.session_state if session_state is None else session_state
+    wkey = macro_widget_key(FORWARD_HORIZON_PERSIST_KEY)
+    if wkey in ss:
+        ss[FORWARD_HORIZON_PERSIST_KEY] = clamp_forward_horizon_years(ss[wkey])
+
+
+def _on_forward_horizon_change() -> None:
+    harvest_forward_horizon_widget_to_persist()
+
+
+def render_forward_projection_horizon_slider() -> int:
+    """Forward Macro horizon slider — seeds from planning horizon once, then persists overrides."""
+    seed_forward_horizon_from_plan_if_needed()
+    persist = FORWARD_HORIZON_PERSIST_KEY
+    wkey = macro_widget_key(persist)
+    if wkey not in st.session_state:
+        st.session_state[wkey] = st.session_state[persist]
+    value = st.slider(
+        "Forward projection horizon (years)",
+        FORWARD_HORIZON_MIN,
+        FORWARD_HORIZON_MAX,
+        step=1,
+        key=wkey,
+        on_change=_on_forward_horizon_change,
+        help=(
+            "Defaults from your planning Investment time horizon. "
+            "Changing this slider is a Forward-page override and will not reset on navigation."
+        ),
+    )
+    harvest_forward_horizon_widget_to_persist()
+    return int(value)
+
+
 def harvest_shared_macro_widgets_to_persist(session_state: Any | None = None) -> None:
     """
     Copy any live macro widget values into canonical persist keys.
@@ -115,6 +206,7 @@ def simulate_macro_widget_teardown(session_state: dict[str, Any]) -> None:
     """Test helper: mimic Streamlit deleting unrendered widget keys."""
     for key in SHARED_MACRO_PERSIST_KEYS:
         session_state.pop(macro_widget_key(key), None)
+    session_state.pop(macro_widget_key(FORWARD_HORIZON_PERSIST_KEY), None)
 
 
 def _selectbox_persisted(

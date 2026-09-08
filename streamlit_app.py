@@ -117,7 +117,9 @@ macro_assumption_summary = _macro_engine.macro_assumption_summary
 macro_assumptions_from_session = _macro_engine.macro_assumptions_from_session
 ensure_shared_macro_session_defaults = _macro_engine.ensure_shared_macro_session_defaults
 harvest_shared_macro_widgets_to_persist = _macro_engine.harvest_shared_macro_widgets_to_persist
+harvest_forward_horizon_widget_to_persist = _macro_engine.harvest_forward_horizon_widget_to_persist
 render_shared_macro_assumption_controls = _macro_engine.render_shared_macro_assumption_controls
+render_forward_projection_horizon_slider = _macro_engine.render_forward_projection_horizon_slider
 from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
@@ -2069,6 +2071,7 @@ ensure_shared_macro_session_defaults()
 # Harvest before tab gates / workflow st.rerun so a post-select navigation run
 # still copies `_w_*` → canonical `health_*` before Streamlit tears widgets down.
 harvest_shared_macro_widgets_to_persist()
+harvest_forward_horizon_widget_to_persist()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 try:
@@ -3476,7 +3479,7 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
             override_inflation=exp_infl if use_infl else None,
             override_volatility=exp_vol if use_vol else None,
         )
-        fwd_years = st.slider("Forward projection horizon (years)", 1, 15, 5)
+        fwd_years = render_forward_projection_horizon_slider()
         with st.spinner("Running forward-looking macro analysis..."):
             forward = core.compute_forward_projection_with_profile(
                 metrics=metrics,
