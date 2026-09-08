@@ -55,7 +55,9 @@ class TestForwardMacroLabelingSemantics(unittest.TestCase):
         self.assertIn("valuation environment", opt)
         self.assertIn("does **not**", OPTIMIZER)
         self.assertIn("currently alter the optimizer's **per-asset expected-return vector**", OPTIMIZER)
-        self.assertIn("does not currently alter", opt)
+        # Newline may split "does **not**" / "currently alter" in the markdown body.
+        self.assertIn("currently alter", opt)
+        self.assertRegex(OPTIMIZER, r"does \*\*not\*\*[\s\n]+currently alter")
 
         conf = OPTIMIZER_CONFIDENCE.lower()
         self.assertIn("valuation environment", conf)
