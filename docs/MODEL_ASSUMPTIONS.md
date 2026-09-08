@@ -125,9 +125,10 @@ projected_value = initial_value * (1 + adjusted_return) ** years
 
 One compound-growth path. For outcome **ranges**, use the **Monte Carlo** tab.
 
-### Stress-Adjusted Historical Drawdown Estimate
+### Stress-Adjusted Max Drawdown
 
-**Label in UI:** *Stress-Adjusted Historical Drawdown Estimate* — not a forward drawdown forecast.
+**Label in UI:** *Stress-Adjusted Max Drawdown* — historical peak-to-trough scaled by
+recession probability; **not** a forward-simulated drawdown. Valuation does not change this metric.
 
 ```python
 adjusted_max_drawdown = historical_max_drawdown * (1 + recession_probability * 0.90)

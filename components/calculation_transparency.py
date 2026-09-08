@@ -86,15 +86,35 @@ For a **range of outcomes**, use the **Monte Carlo** tab (percentiles, probabili
 """
 
 FORWARD_DRAWDOWN = """
-### Stress-Adjusted Historical Drawdown Estimate
+### Stress-Adjusted Max Drawdown
 
 `adjusted_max_drawdown = historical_max_drawdown × drawdown_mult`
 
 where `drawdown_mult = 1 + recession_probability × 0.90`.
 
 Historical drawdown comes from loaded price history of your current weights.
-The metric is **scaled** under recession stress — it is **not** a forward-simulated drawdown forecast.
+The metric is a **recession-scaled historical peak-to-trough** — it is **not** a
+forward-simulated drawdown forecast.
+
+**Valuation Environment does not change this metric** — only recession probability
+scales the historical drawdown.
 """
+
+STRESS_ADJUSTED_MAX_DRAWDOWN_LABEL = "Stress-Adjusted Max Drawdown"
+STRESS_ADJUSTED_MAX_DRAWDOWN_HELP = (
+    "Historical peak-to-trough drawdown scaled by recession probability — not a "
+    "forward-simulated drawdown."
+)
+
+FORWARD_OPTIMIZER_SNAPSHOT_SUBTITLE = (
+    "Mean-variance outputs using forward-adjusted covariance and sleeve return shifts."
+)
+FORWARD_OPTIMIZER_SNAPSHOT_SCOPE = (
+    "Optimizer uses forward-adjusted covariance plus sleeve return shifts from rates, "
+    "inflation, and applicable economic-regime assumptions. Valuation Environment "
+    "adjusts portfolio-level forward return/volatility but does not currently alter "
+    "the optimizer's per-asset expected-return vector."
+)
 
 FORWARD_SHARPE = """
 **Forward Sharpe ratio:**
@@ -114,7 +134,13 @@ OPTIMIZER = """
 | Min volatility | `σ_p` |
 
 **Inputs:** Expected return vector `μ` and covariance `Σ` (annualized: daily mean × 252, daily cov × 252).
-Forward mode uses `adjusted_mean_returns` and `adjusted_cov` from macro projection.
+
+**Forward mode:** Uses `adjusted_mean_returns` and `adjusted_cov` from macro projection.
+Sleeve return shifts on `μ` come from **rates, inflation, and applicable economic-regime**
+assumptions. **Valuation Environment** adjusts the **portfolio-level** forward return and
+volatility model (and therefore scales `adjusted_cov` via `vol_scale`) but does **not**
+currently alter the optimizer's **per-asset expected-return vector**. That is why changing
+valuation can lower portfolio Forward Return while Max-Sharpe expected return stays the same.
 
 **Constraints:** Weights sum to 1; each weight ∈ [0, 1] (no shorting). There is **no** minimum diversification constraint, so corner solutions such as **100% in one asset** (often the lowest-volatility bond ETF) are mathematically valid for the inputs.
 
@@ -125,7 +151,8 @@ OPTIMIZER_CONFIDENCE = """
 ### Optimizers are sensitive to assumptions
 
 - Changing **expected returns** (historical vs forward macro) changes optimal weights.
-- Changing **macro assumptions** (recession, inflation, rates) changes forward μ and Σ, which changes recommendations.
+- Changing **rates, inflation, or applicable regimes** changes forward sleeve shifts on `μ` and forward `Σ`.
+- **Valuation Environment** changes portfolio-level forward return/volatility and scales forward `Σ`, but does **not** currently change per-asset `μ` — so Max-Sharpe expected return can stay unchanged while portfolio Forward Return moves.
 - Optimization finds a **mathematical optimum for your inputs** — not a forecast of future performance.
 - Long-only mean-variance often **corners** on a single name when one asset has much higher Sharpe or much lower volatility.
 - There is **no confidence interval** around optimizer outputs in the current model.
@@ -180,7 +207,7 @@ FUTURE_IMPROVEMENTS = """
 ### Current simplifications
 
 - Single-scenario macro adjustments (not a full macro simulation engine)
-- Drawdown = historical drawdown × stress multiplier (not forward path simulation)
+- Drawdown = historical drawdown × recession stress multiplier (not forward path simulation; valuation does not scale this metric)
 - Correlation stress = scalar multiplier (not regime-dependent correlation matrix)
 - No taxes, account types, or transaction costs in allocation guidance
 - Optimizer uses point estimates of μ and Σ without estimation error or robust optimization
@@ -243,7 +270,7 @@ def render_how_calculated_section(topic: str, *, expanded: bool = False) -> None
         "forward_return": ("Forward expected return", FORWARD_RETURN),
         "forward_volatility": ("Forward volatility", FORWARD_VOLATILITY),
         "forward_sharpe": ("Forward Sharpe ratio", FORWARD_SHARPE),
-        "forward_drawdown": ("Stress-adjusted historical drawdown", FORWARD_DRAWDOWN),
+        "forward_drawdown": ("Stress-Adjusted Max Drawdown", FORWARD_DRAWDOWN),
         "forward_projected": ("Single-scenario projection", FORWARD_PROJECTED_VALUE),
         "inflation": ("Inflation effects", INFLATION),
         "optimizer": ("Optimizer results", OPTIMIZER),
@@ -297,7 +324,9 @@ def optimizer_results_methodology_lead(basis_mode: str) -> str:
     if is_forward_optimizer_basis(basis_mode):
         basis_clause = (
             "Forward-looking (macro-adjusted) long-only mean-variance experiment (SLSQP). "
-            "Uses macro-adjusted expected returns and covariance."
+            "Uses forward-adjusted covariance plus sleeve return shifts from rates, inflation, "
+            "and applicable regimes. Valuation adjusts portfolio-level forward return/volatility "
+            "but does not currently alter per-asset expected returns."
         )
     else:
         basis_clause = (

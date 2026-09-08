@@ -2,7 +2,7 @@
 
 Valuation Environment adjusts portfolio-level forward return/vol via
 ``_valuation_effects``, but:
-- Forward Max Drawdown scales historical DD by recession only
+- Stress-Adjusted Max Drawdown scales historical DD by recession only
 - Optimizer μ uses ``type_shifts`` (rate/inflation/selected regimes) and does
   **not** include valuation — so Max-Sharpe return can stay fixed while vol rises
 """

@@ -57,6 +57,10 @@ try:
     from components.calculation_transparency import (
         is_forward_optimizer_basis,
         optimizer_results_methodology_lead,
+        STRESS_ADJUSTED_MAX_DRAWDOWN_HELP,
+        STRESS_ADJUSTED_MAX_DRAWDOWN_LABEL,
+        FORWARD_OPTIMIZER_SNAPSHOT_SCOPE,
+        FORWARD_OPTIMIZER_SNAPSHOT_SUBTITLE,
     )
 except ImportError:  # pragma: no cover — Cloud partial-reload fallback
     def is_forward_optimizer_basis(basis: str) -> bool:
@@ -64,6 +68,29 @@ except ImportError:  # pragma: no cover — Cloud partial-reload fallback
 
     def optimizer_results_methodology_lead(basis: str) -> str:
         return _calc_transparency.optimizer_results_methodology_lead(basis)
+
+    STRESS_ADJUSTED_MAX_DRAWDOWN_LABEL = getattr(
+        _calc_transparency, "STRESS_ADJUSTED_MAX_DRAWDOWN_LABEL", "Stress-Adjusted Max Drawdown"
+    )
+    STRESS_ADJUSTED_MAX_DRAWDOWN_HELP = getattr(
+        _calc_transparency,
+        "STRESS_ADJUSTED_MAX_DRAWDOWN_HELP",
+        "Historical peak-to-trough drawdown scaled by recession probability — not a "
+        "forward-simulated drawdown.",
+    )
+    FORWARD_OPTIMIZER_SNAPSHOT_SUBTITLE = getattr(
+        _calc_transparency,
+        "FORWARD_OPTIMIZER_SNAPSHOT_SUBTITLE",
+        "Mean-variance outputs using forward-adjusted covariance and sleeve return shifts.",
+    )
+    FORWARD_OPTIMIZER_SNAPSHOT_SCOPE = getattr(
+        _calc_transparency,
+        "FORWARD_OPTIMIZER_SNAPSHOT_SCOPE",
+        "Optimizer uses forward-adjusted covariance plus sleeve return shifts from rates, "
+        "inflation, and applicable economic-regime assumptions. Valuation Environment "
+        "adjusts portfolio-level forward return/volatility but does not currently alter "
+        "the optimizer's per-asset expected-return vector.",
+    )
 _beginner_coach = importlib.import_module("components.beginner_coach")
 render_goal_cards = _beginner_coach.render_goal_cards
 render_beginner_goal_tab = _beginner_coach.render_beginner_goal_tab
@@ -3470,7 +3497,11 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
         m3.metric("Forward Sharpe", f"{forward.adjusted_sharpe:.2f}")
         m4.metric("Forward Projected Value", _money(forward.projected_value))
         m5, m6 = st.columns(2)
-        m5.metric("Forward Max Drawdown", _pct(forward.adjusted_max_drawdown))
+        m5.metric(
+            STRESS_ADJUSTED_MAX_DRAWDOWN_LABEL,
+            _pct(forward.adjusted_max_drawdown),
+            help=STRESS_ADJUSTED_MAX_DRAWDOWN_HELP,
+        )
         m6.metric("Recession Probability", f"{recession_prob_pct}%")
 
         st.markdown("##### Forward-Looking Insights")
@@ -3483,7 +3514,8 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
             for note in forward.inflation_commentary:
                 st.markdown(f"- {note}")
 
-        section_header("Forward Optimizer Snapshot", "Optimizer outputs under your forward assumptions.")
+        section_header("Forward Optimizer Snapshot", FORWARD_OPTIMIZER_SNAPSHOT_SUBTITLE)
+        st.caption(FORWARD_OPTIMIZER_SNAPSHOT_SCOPE)
         with st.spinner("Optimizing portfolio..."):
             f_max_sharpe = core.optimize_max_sharpe(
                 forward.adjusted_mean_returns,

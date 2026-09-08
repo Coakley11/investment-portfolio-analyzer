@@ -27,7 +27,9 @@ class TestOptimizerBasisLabel(unittest.TestCase):
             lead.startswith("Forward-looking (macro-adjusted) long-only mean-variance")
         )
         self.assertIn("SLSQP", lead)
-        self.assertIn("macro-adjusted expected returns", lead)
+        self.assertIn("forward-adjusted covariance", lead.lower())
+        self.assertIn("valuation", lead.lower())
+        self.assertIn("per-asset expected returns", lead.lower())
         # Must not open with / assert Historical as the active basis.
         self.assertFalse(lead.startswith("Historical"))
         self.assertNotIn("Historical long-only", lead)
