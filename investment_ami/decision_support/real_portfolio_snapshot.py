@@ -27,6 +27,100 @@ _TICKER_SET_MISMATCH = True  # any symmetric difference in ticker sets
 _WEIGHT_TOLERANCE_PP = 2.0  # absolute percentage-point difference on shared tickers
 _FRESH_QUOTE_MAX_AGE_SEC = 90.0  # below this → market_data_status "fresh" when all priced
 
+# Health / AMI often store display strings (e.g. "60.0%") via record_rebalance_from_health.
+# These are model-portfolio Objective % labels — not an explicit real-portfolio target store.
+_TARGET_WEIGHT_METADATA_KEYS = frozenset(
+    {
+        "source",
+        "label",
+        "updated_at",
+        "schema",
+        "type",
+        "mode",
+        "quality",
+        "notes",
+        "version",
+        "origin",
+        "target_source",
+    }
+)
+
+
+def parse_weight_like_value(value: Any) -> float | None:
+    """
+    Coerce a single weight-like value to float percentage points when legitimate.
+
+    Accepts: int/float, ``"60"``, ``"60.0"``, ``"60%"``, ``"60.0%"``.
+    Rejects: None, nested dicts/lists, drift labels (``"+2.5pp"``), bare text, bools.
+    Does not invent weights.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (dict, list, tuple, set)):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    low = text.lower()
+    # Drift / commentary strings from Health AMI cache — not allocation weights.
+    if "pp" in low or "drift" in low or "avg" in low:
+        return None
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    text = text.replace(",", "")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_numeric_weight_map(raw: Any) -> dict[str, float]:
+    """
+    Extract ticker/sleeve → numeric weight from a heterogeneous mapping.
+
+    Skips metadata keys and non-coercible values. Empty result means no usable weights.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for key, val in raw.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if name.lower() in _TARGET_WEIGHT_METADATA_KEYS:
+            continue
+        parsed = parse_weight_like_value(val)
+        if parsed is None:
+            continue
+        out[name] = parsed
+    return out
+
+
+def _explicit_real_portfolio_target_allocation(session_state: Mapping[str, Any] | None) -> dict[str, float] | None:
+    """
+    Only an explicitly saved real-portfolio target becomes snapshot.target_allocation.
+
+    Health ``target_weights`` (often ``"60.0%"`` display strings) are model-portfolio
+    rebalance labels and must NOT be promoted as a user-defined real target.
+    """
+    if session_state is None:
+        return None
+    for key in (
+        "real_portfolio_target_allocation",
+        "saved_real_portfolio_target_allocation",
+    ):
+        if key not in session_state:
+            continue
+        parsed = extract_numeric_weight_map(session_state.get(key))
+        if parsed:
+            return parsed
+    return None
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -261,13 +355,11 @@ def build_real_portfolio_snapshot(
     allocation_class: dict[str, float] = {}
 
     target_weights_raw = _optional_plan_context(session_state, context).get("target_weights")
+    # Optional per-holding display context from Health/AMI cache (may be "60.0%" strings).
+    # Not treated as an authoritative real-portfolio target allocation.
     target_by_ticker: dict[str, float] = {}
-    if isinstance(target_weights_raw, dict):
-        for k, v in target_weights_raw.items():
-            try:
-                target_by_ticker[str(k).upper()] = float(v)
-            except (TypeError, ValueError):
-                continue
+    for k, v in extract_numeric_weight_map(target_weights_raw).items():
+        target_by_ticker[str(k).upper()] = float(v)
 
     for ticker, entry in sorted(ledger.items()):
         shares = float(entry.get("shares") or 0.0)
@@ -448,12 +540,19 @@ def build_real_portfolio_snapshot(
     except (TypeError, ValueError):
         near_term_f = None
 
-    target_alloc: dict[str, float] | None = None
+    # Authoritative real-portfolio target only — never invent from Health display strings.
+    target_alloc = _explicit_real_portfolio_target_allocation(session_state)
+    # Optional drift commentary map: keep only coercible numerics; skip "+2.5pp" labels.
     drift: dict[str, float] | None = None
-    if isinstance(plan_ctx.get("target_weights"), dict):
-        target_alloc = {str(k): float(v) for k, v in plan_ctx["target_weights"].items() if v is not None}
-    if isinstance(plan_ctx.get("rebalance_drift"), dict):
-        drift = {str(k): float(v) for k, v in plan_ctx["rebalance_drift"].items() if v is not None}
+    drift_raw = plan_ctx.get("rebalance_drift")
+    if isinstance(drift_raw, dict):
+        drift_parsed: dict[str, float] = {}
+        for k, v in drift_raw.items():
+            # Prefer raw float; allow numeric strings; skip "±Npp" Health labels.
+            parsed = parse_weight_like_value(v)
+            if parsed is not None:
+                drift_parsed[str(k)] = parsed
+        drift = drift_parsed or None
 
     mismatch = _holdings_df_mismatch_warning(session_state, allocation_by_holding)
 

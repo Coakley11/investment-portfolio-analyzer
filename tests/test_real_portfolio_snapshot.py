@@ -190,6 +190,137 @@ class TestHoldingsDfMismatch(unittest.TestCase):
         self.assertIsNone(result2.snapshot.holdings_df_mismatch_warning)
 
 
+class TestTargetWeightsNormalization(unittest.TestCase):
+    """Regression: Health caches target_weights as '60.0%' strings — must not crash snapshot."""
+
+    def _ledger_session(self, **extra):
+        txns = [
+            _deposit(20_000.0),
+            _buy("VOO", 10, 400.0),
+            _buy("QQQ", 5, 300.0),
+            _buy("BND", 50, 80.0),
+        ]
+        prices = {"VOO": 420.0, "QQQ": 280.0, "BND": 78.0}
+        ss = {"portfolio_transactions": txns, **extra}
+        return ss, prices
+
+    def test_live_health_percent_string_shape_does_not_crash(self) -> None:
+        # Exact shape from applied_math_context.record_rebalance_from_health.
+        ss, prices = self._ledger_session(
+            target_weights={
+                "VOO": "50.0%",
+                "QQQ": "20.0%",
+                "BND": "20.0%",
+                "VXUS": "10.0%",
+            },
+            rebalance_drift={
+                "VOO": "+2.0pp",
+                "QQQ": "-7.0pp",
+                "BND": "0.0pp",
+                "VXUS": "+5.0pp",
+            },
+        )
+        result = build_real_portfolio_snapshot(ss, prices=prices)
+        self.assertTrue(result.ok, msg=str(getattr(result.failure, "message", None)))
+        assert result.snapshot is not None
+        # Health display strings are NOT promoted to authoritative real target.
+        self.assertIsNone(result.snapshot.target_allocation)
+        # Optional per-holding display may parse percent strings.
+        voo = next(h for h in result.snapshot.holdings if h.ticker == "VOO")
+        self.assertAlmostEqual(float(voo.target_weight or 0), 50.0, places=1)
+
+    def test_plain_numeric_decimals(self) -> None:
+        from investment_ami.decision_support.real_portfolio_snapshot import extract_numeric_weight_map
+
+        self.assertEqual(
+            extract_numeric_weight_map({"VOO": 0.5, "BND": 0.5}),
+            {"VOO": 0.5, "BND": 0.5},
+        )
+
+    def test_numeric_percent_strings(self) -> None:
+        from investment_ami.decision_support.real_portfolio_snapshot import (
+            extract_numeric_weight_map,
+            parse_weight_like_value,
+        )
+
+        self.assertEqual(parse_weight_like_value("60%"), 60.0)
+        self.assertEqual(parse_weight_like_value("60.0%"), 60.0)
+        self.assertEqual(parse_weight_like_value("60"), 60.0)
+        self.assertEqual(
+            extract_numeric_weight_map({"Equity": "60%", "Bonds": "40%"}),
+            {"Equity": 60.0, "Bonds": 40.0},
+        )
+
+    def test_nested_mixed_metadata_skipped(self) -> None:
+        from investment_ami.decision_support.real_portfolio_snapshot import extract_numeric_weight_map
+
+        raw = {
+            "VOO": "50.0%",
+            "source": "health_rebalance",
+            "label": "model",
+            "meta": {"nested": True},
+            "BND": {"weight": 20},
+            "QQQ": None,
+        }
+        self.assertEqual(extract_numeric_weight_map(raw), {"VOO": 50.0})
+
+    def test_malformed_values_skipped(self) -> None:
+        from investment_ami.decision_support.real_portfolio_snapshot import parse_weight_like_value
+
+        self.assertIsNone(parse_weight_like_value("+2.5pp"))
+        self.assertIsNone(parse_weight_like_value("n/a"))
+        self.assertIsNone(parse_weight_like_value(True))
+        self.assertIsNone(parse_weight_like_value({"a": 1}))
+
+    def test_missing_target_weights_ok(self) -> None:
+        ss, prices = self._ledger_session()
+        result = build_real_portfolio_snapshot(ss, prices=prices)
+        self.assertTrue(result.ok)
+        assert result.snapshot is not None
+        self.assertIsNone(result.snapshot.target_allocation)
+
+    def test_explicit_real_target_still_attached(self) -> None:
+        ss, prices = self._ledger_session(
+            target_weights={"VOO": "99.0%"},  # Health noise — ignored for target_allocation
+            real_portfolio_target_allocation={"Equity": 60.0, "Bonds": 40.0},
+        )
+        result = build_real_portfolio_snapshot(ss, prices=prices)
+        self.assertTrue(result.ok)
+        assert result.snapshot is not None
+        self.assertEqual(result.snapshot.target_allocation, {"Equity": 60.0, "Bonds": 40.0})
+
+    def test_allocate_new_money_path_with_health_strings(self) -> None:
+        from investment_ami.decision_support.contribution_advisor import (
+            STATUS_TARGET_NOT_DEFINED,
+            recommend_contribution_allocation,
+        )
+
+        ss, prices = self._ledger_session(
+            target_weights={"VOO": "50.0%", "QQQ": "20.0%", "BND": "30.0%"},
+            rebalance_drift={"VOO": "+1.0pp"},
+        )
+        built = build_real_portfolio_snapshot(ss, prices=prices)
+        self.assertTrue(built.ok)
+        # Without an explicit Contribution Advisor target source selection → clear block.
+        blocked = recommend_contribution_allocation(
+            snapshot=built.snapshot,
+            contribution_amount=1000.0,
+            target_source="user_explicit",
+            explicit_holding_targets=None,
+        )
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.status, STATUS_TARGET_NOT_DEFINED)
+        # Recommended path still works after snapshot boots.
+        ok = recommend_contribution_allocation(
+            snapshot=built.snapshot,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="balanced growth",
+            include_cash=False,
+        )
+        self.assertTrue(ok.ok)
+
+
 class TestRealPortfolioSnapshotNoMutation(unittest.TestCase):
     def test_build_does_not_mutate_session(self) -> None:
         txns = [_deposit(2000.0), _buy("VTI", 5, 100.0)]
