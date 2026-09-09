@@ -1055,17 +1055,27 @@ def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: s
             )
 
     exposure_bits: list[str] = []
-    if eq >= 50:
+    # allocation_profile returns decimal weights (0–1), same as Health / other macro solvers.
+    eq_pct = float(eq) * 100.0
+    bonds_pct = float(bonds) * 100.0
+    reit_pct = float(reit) * 100.0
+    # Health taxonomy: Equity sleeve includes REIT / Dividend ETF; REIT is also shown separately.
+    equity_ex_reit_pct = max(0.0, eq_pct - reit_pct)
+
+    if eq_pct >= 50:
         exposure_bits.append(
-            f"Equity sleeve **{eq:.0f}%** is most exposed to earnings and risk-asset stress in a recession / expensive-valuation setting."
+            f"Equity sleeve **{eq_pct:.0f}%** (includes REIT under Health taxonomy; "
+            f"**{equity_ex_reit_pct:.0f}%** ex-REIT) is most exposed to earnings and risk-asset stress "
+            "in a recession / expensive-valuation setting."
         )
-    if bonds >= 15 and rate and "rising" in rate.lower():
+    if bonds_pct >= 15 and rate and "rising" in rate.lower():
         exposure_bits.append(
-            f"Bond sleeve **{bonds:.0f}%** can face duration pressure when rates are rising."
+            f"Bond sleeve **{bonds_pct:.0f}%** can face duration pressure when rates are rising."
         )
-    if reit >= 8:
+    if reit_pct >= 8:
         exposure_bits.append(
-            f"REIT sleeve **{reit:.0f}%** is typically sensitive to both rates and growth slowdowns."
+            f"REIT sleeve **{reit_pct:.0f}%** (also counted inside Equity) is typically sensitive "
+            "to both rates and growth slowdowns."
         )
     if not exposure_bits:
         exposure_bits.append(
@@ -1102,7 +1112,10 @@ def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: s
         f"- Recession probability: **{(recession_prob * 100):.0f}%**" if recession_prob is not None else "- Recession probability: **n/a**",
         f"- Valuation: **{valuation or 'n/a'}**",
         f"- Economic regime: **{regime or 'n/a'}**",
-        f"- Equity / bonds / REIT: **{eq:.0f}%** / **{bonds:.0f}%** / **{reit:.0f}%**",
+        (
+            f"- Equity / bonds / REIT: **{eq_pct:.0f}%** / **{bonds_pct:.0f}%** / **{reit_pct:.0f}%** "
+            f"(Equity includes REIT under Health taxonomy; equity ex-REIT **{equity_ex_reit_pct:.0f}%**)"
+        ),
     ]
     for line in fwd_lines[:3]:
         key_lines.append(f"- {line}")
@@ -1139,6 +1152,11 @@ def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: s
         "macro_summary": summary,
         "allocation_change_asked": allocation_asked,
         "forward_metrics_are_scenario_outputs": bool(ctx.get("forward_metrics_are_scenario_outputs")),
+        "sleeve_equity_pct": round(eq_pct, 1),
+        "sleeve_bonds_pct": round(bonds_pct, 1),
+        "sleeve_reit_pct": round(reit_pct, 1),
+        "sleeve_equity_ex_reit_pct": round(equity_ex_reit_pct, 1),
+        "sleeve_source": "portfolio_core.allocation_profile",
     }
     if recession_prob is not None:
         computed["recession_probability_pct"] = round(recession_prob * 100, 1)
