@@ -26,6 +26,14 @@ def _with_macro_intelligence(
         enrich_macro_solver_result,
     )
 
+    # Cold-start: resolve Forward metrics via canonical helper when missing/stale.
+    try:
+        from applied_math_context import ensure_ami_forward_scenario_metrics
+
+        ensure_ami_forward_scenario_metrics(ctx, ctx.get("_ami_session_ref"))
+    except Exception:
+        pass
+
     brief = build_macro_intelligence_brief(ctx, macro_intent=macro_intent, question=question)
     enriched = enrich_macro_solver_result(
         result,
@@ -992,6 +1000,13 @@ def _asks_allocation_change(question: str) -> bool:
 def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     """Acknowledge selected Health macro scenario and interpret portfolio / allocation implications."""
     from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    try:
+        from applied_math_context import ensure_ami_forward_scenario_metrics
+
+        ensure_ami_forward_scenario_metrics(ctx, ctx.get("_ami_session_ref"))
+    except Exception:
+        pass
 
     macro = resolve_macro_scenario_context(ctx)
     profile = macro.allocation_profile

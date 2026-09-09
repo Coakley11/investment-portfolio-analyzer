@@ -689,15 +689,23 @@ def _attach_forward_scenario_metrics_to_ami_context(
     """
     Attach Forward Macro scenario metrics without overwriting historical Health metrics.
 
-    Source: cached ``forward_projection`` from the canonical Forward Macro / MC / Optimizer path.
+    Reuses a fingerprint-valid cached projection only — does not compute on demand
+    (keeps non-macro AMI questions from triggering Forward work).
     """
+    ctx["_ami_session_ref"] = session_state
+
     # Explicit precomputed AMI payload wins (tests / submit injectors).
     pre = session_state.get("_ami_forward_scenario_metrics")
     if isinstance(pre, dict) and pre:
         _apply_forward_metric_fields(ctx, pre)
         return
 
-    fwd = session_state.get("forward_projection")
+    try:
+        from components.macro_engine import peek_valid_forward_projection
+
+        fwd = peek_valid_forward_projection(session_state)
+    except Exception:
+        fwd = None
     if fwd is None:
         return
     try:
@@ -714,6 +722,51 @@ def _attach_forward_scenario_metrics_to_ami_context(
             "sharpe": sharpe,
         },
     )
+
+
+def ensure_ami_forward_scenario_metrics(
+    ctx: dict[str, Any],
+    session_state: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Macro-only: ensure Forward modeled metrics are on ``ctx``.
+
+    Uses the shared canonical Forward helper (reuse valid cache or compute on demand).
+    Returns True when metrics are present after the call.
+    """
+    if isinstance(session_state, dict) and isinstance(session_state.get("_ami_forward_scenario_metrics"), dict):
+        _apply_forward_metric_fields(ctx, session_state["_ami_forward_scenario_metrics"])
+        return ctx.get("forward_modeled_return") is not None
+
+    ss = session_state if session_state is not None else ctx.get("_ami_session_ref")
+    if ss is None:
+        try:
+            import streamlit as st
+
+            ss = st.session_state
+        except Exception:
+            return ctx.get("forward_modeled_return") is not None
+
+    try:
+        from components.macro_engine import resolve_canonical_forward_projection
+
+        fwd = resolve_canonical_forward_projection(ss)
+    except Exception:
+        fwd = None
+    if fwd is None:
+        return ctx.get("forward_modeled_return") is not None
+    try:
+        _apply_forward_metric_fields(
+            ctx,
+            {
+                "return": float(getattr(fwd, "adjusted_return")),
+                "volatility": float(getattr(fwd, "adjusted_volatility")),
+                "sharpe": float(getattr(fwd, "adjusted_sharpe")),
+            },
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return ctx.get("forward_modeled_return") is not None
 
 
 def _apply_forward_metric_fields(ctx: dict[str, Any], metrics: dict[str, Any]) -> None:

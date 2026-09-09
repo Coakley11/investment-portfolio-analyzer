@@ -18,6 +18,10 @@ from types import ModuleType
 # Symbols imported by streamlit_app.py — keep in sync with that entrypoint.
 STREAMLIT_APP_MACRO_ENGINE_EXPORTS: tuple[str, ...] = (
     "get_forward_projection",
+    "store_forward_engine_inputs",
+    "build_canonical_forward_fingerprint",
+    "resolve_canonical_forward_projection",
+    "peek_valid_forward_projection",
     "health_settings_fingerprint",
     "macro_assumption_summary",
     "macro_assumptions_from_session",

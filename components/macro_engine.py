@@ -433,17 +433,190 @@ def forward_projection_cache_fingerprint(
     years: float,
     n_assets: int,
 ) -> str:
-    """Cache key: historical window + macro settings (+ horizon and asset count)."""
+    """Legacy cache key: historical window + macro settings (+ horizon and asset count)."""
     return (
         f"{historical_window_fingerprint(start, end)}|"
         f"{macro_assumptions_fingerprint(assumptions)}|y{years:.4f}|n{n_assets}"
     )
 
 
+FORWARD_ENGINE_INPUTS_KEY = "_forward_engine_inputs"
+FORWARD_PROJECTION_KEY = "forward_projection"
+FORWARD_PROJECTION_FP_KEY = "forward_projection_fp"
+
+
+def build_canonical_forward_fingerprint(
+    assumptions: core.ForwardMacroAssumptions,
+    *,
+    start: str,
+    end: str,
+    years: float,
+    tickers: Sequence[str],
+    weights: Any,
+    risk_free_rate: float,
+    initial_value: float,
+) -> str:
+    """
+    Validity fingerprint for cached Forward projections.
+
+    Includes holdings, weights, lookback window, shared macro assumptions,
+    projection years, risk-free rate, and initial value — everything the
+    canonical Forward engine consumes for portfolio-level return/vol/Sharpe.
+    """
+    import numpy as np
+
+    t = tuple(str(x).strip().upper() for x in tickers)
+    w = tuple(round(float(x), 8) for x in np.asarray(weights, dtype=float).ravel())
+    return "|".join(
+        [
+            historical_window_fingerprint(str(start), str(end)),
+            macro_assumptions_fingerprint(assumptions),
+            f"y{float(years):.4f}",
+            f"rf{float(risk_free_rate):.8f}",
+            f"iv{round(float(initial_value), 2):.2f}",
+            f"t{','.join(t)}",
+            f"w{','.join(f'{x:.8f}' for x in w)}",
+        ]
+    )
+
+
+def store_forward_engine_inputs(
+    session_state: Any | None = None,
+    *,
+    metrics: Any,
+    mean_returns: Any,
+    cov: Any,
+    tickers: Sequence[str],
+    weights: Any,
+    asset_types: Sequence[str],
+    start: str,
+    end: str,
+    initial_value: float,
+    risk_free_rate: float,
+) -> None:
+    """Persist analytics inputs so AMI/MC/Optimizer can resolve Forward without re-fetching."""
+    import numpy as np
+
+    ss = st.session_state if session_state is None else session_state
+    ss[FORWARD_ENGINE_INPUTS_KEY] = {
+        "metrics": metrics,
+        "mean_returns": np.asarray(mean_returns, dtype=float).copy(),
+        "cov": np.asarray(cov, dtype=float).copy(),
+        "tickers": [str(t).strip().upper() for t in tickers],
+        "weights": np.asarray(weights, dtype=float).copy(),
+        "asset_types": [str(a) for a in asset_types],
+        "start": str(start),
+        "end": str(end),
+        "initial_value": float(initial_value),
+        "risk_free_rate": float(risk_free_rate),
+    }
+
+
+def _forward_years_from_session(session_state: Any) -> float:
+    seed_forward_horizon_from_plan_if_needed(session_state)
+    return float(
+        clamp_forward_horizon_years(
+            session_state.get(FORWARD_HORIZON_PERSIST_KEY, FORWARD_HORIZON_FALLBACK)
+        )
+    )
+
+
+def peek_valid_forward_projection(session_state: Any | None = None) -> core.ForwardProjectionResult | None:
+    """Return cached ForwardProjectionResult only when fingerprint matches current inputs."""
+    ss = st.session_state if session_state is None else session_state
+    inputs = ss.get(FORWARD_ENGINE_INPUTS_KEY)
+    cached = ss.get(FORWARD_PROJECTION_KEY)
+    fp_cached = ss.get(FORWARD_PROJECTION_FP_KEY)
+    if not isinstance(inputs, dict) or cached is None or not fp_cached:
+        return None
+    assumptions = macro_assumptions_from_session(ss)
+    years = _forward_years_from_session(ss)
+    fp = build_canonical_forward_fingerprint(
+        assumptions,
+        start=str(inputs.get("start") or ""),
+        end=str(inputs.get("end") or ""),
+        years=years,
+        tickers=list(inputs.get("tickers") or []),
+        weights=inputs.get("weights"),
+        risk_free_rate=float(inputs.get("risk_free_rate") or 0.0),
+        initial_value=float(inputs.get("initial_value") or 0.0),
+    )
+    if str(fp_cached) != fp:
+        return None
+    return cached  # type: ignore[return-value]
+
+
+def resolve_canonical_forward_projection(
+    session_state: Any | None = None,
+    *,
+    years: float | None = None,
+    assumptions: core.ForwardMacroAssumptions | None = None,
+) -> core.ForwardProjectionResult | None:
+    """
+    Shared Forward path for UI / MC / Optimizer / AMI.
+
+    Reuses a fingerprint-valid cache; otherwise computes via
+    ``portfolio_core.compute_forward_projection_with_profile`` using stored engine inputs.
+    Returns None when analytics inputs are not yet available.
+    """
+    import numpy as np
+
+    ss = st.session_state if session_state is None else session_state
+    inputs = ss.get(FORWARD_ENGINE_INPUTS_KEY)
+    if not isinstance(inputs, dict):
+        return peek_valid_forward_projection(ss)
+
+    assumptions = assumptions or macro_assumptions_from_session(ss)
+    years_f = float(years) if years is not None else _forward_years_from_session(ss)
+    tickers = list(inputs.get("tickers") or [])
+    weights = np.asarray(inputs.get("weights"), dtype=float)
+    fp = build_canonical_forward_fingerprint(
+        assumptions,
+        start=str(inputs.get("start") or ""),
+        end=str(inputs.get("end") or ""),
+        years=years_f,
+        tickers=tickers,
+        weights=weights,
+        risk_free_rate=float(inputs.get("risk_free_rate") or 0.0),
+        initial_value=float(inputs.get("initial_value") or 0.0),
+    )
+
+    cached = ss.get(FORWARD_PROJECTION_KEY)
+    if cached is not None and str(ss.get(FORWARD_PROJECTION_FP_KEY) or "") == fp:
+        return cached  # type: ignore[return-value]
+
+    metrics = inputs.get("metrics")
+    mean_returns = np.asarray(inputs.get("mean_returns"), dtype=float)
+    cov = np.asarray(inputs.get("cov"), dtype=float)
+    asset_types = list(inputs.get("asset_types") or [])
+    if metrics is None or mean_returns.size == 0 or cov.size == 0 or not tickers:
+        return None
+
+    forward = core.compute_forward_projection_with_profile(
+        metrics=metrics,
+        mean_returns=mean_returns.copy(),
+        cov=cov.copy(),
+        tickers=tickers,
+        weights=weights,
+        asset_types=asset_types,
+        assumptions=assumptions,
+        initial_value=float(inputs.get("initial_value") or 0.0),
+        years=years_f,
+        risk_free_rate=float(inputs.get("risk_free_rate") or 0.0),
+    )
+    ss[FORWARD_PROJECTION_KEY] = forward
+    ss[FORWARD_PROJECTION_FP_KEY] = fp
+    ss[f"forward_proj_{fp}"] = forward
+    return forward
+
+
 def clear_forward_projection_cache() -> None:
     """Drop cached forward projections (e.g. after date or macro changes)."""
     for key in list(st.session_state.keys()):
-        if key == "forward_projection" or key == "forward_projection_fp" or key.startswith("forward_proj_"):
+        if (
+            key in (FORWARD_PROJECTION_KEY, FORWARD_PROJECTION_FP_KEY, FORWARD_ENGINE_INPUTS_KEY)
+            or key.startswith("forward_proj_")
+        ):
             st.session_state.pop(key, None)
 
 
@@ -460,16 +633,28 @@ def get_forward_projection(
     initial_value: float,
     risk_free_rate: float,
     years: float = 5.0,
+    session_state: Any | None = None,
 ) -> core.ForwardProjectionResult:
     """Compute (or reuse cached) forward macro projection for the current session assumptions."""
-    assumptions = macro_assumptions_from_session()
-    fp = forward_projection_cache_fingerprint(
-        start, end, assumptions, years=years, n_assets=len(tickers)
+    ss = st.session_state if session_state is None else session_state
+    store_forward_engine_inputs(
+        ss,
+        metrics=metrics,
+        mean_returns=mean_returns,
+        cov=cov,
+        tickers=tickers,
+        weights=weights,
+        asset_types=asset_types,
+        start=start,
+        end=end,
+        initial_value=initial_value,
+        risk_free_rate=risk_free_rate,
     )
-    cache_key = f"forward_proj_{fp}"
-    if st.session_state.get("forward_projection_fp") == fp and cache_key in st.session_state:
-        return st.session_state[cache_key]
-
+    assumptions = macro_assumptions_from_session(ss)
+    resolved = resolve_canonical_forward_projection(ss, years=float(years), assumptions=assumptions)
+    if resolved is not None:
+        return resolved
+    # Fallback (should be rare): compute directly without relying on stored inputs.
     forward = core.compute_forward_projection_with_profile(
         metrics=metrics,
         mean_returns=mean_returns,
@@ -482,9 +667,18 @@ def get_forward_projection(
         years=years,
         risk_free_rate=risk_free_rate,
     )
-    st.session_state[cache_key] = forward
-    st.session_state.forward_projection_fp = fp
-    st.session_state.forward_projection = forward
+    fp = build_canonical_forward_fingerprint(
+        assumptions,
+        start=start,
+        end=end,
+        years=float(years),
+        tickers=tickers,
+        weights=weights,
+        risk_free_rate=risk_free_rate,
+        initial_value=initial_value,
+    )
+    ss[FORWARD_PROJECTION_KEY] = forward
+    ss[FORWARD_PROJECTION_FP_KEY] = fp
     return forward
 
 

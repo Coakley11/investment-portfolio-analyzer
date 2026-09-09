@@ -112,6 +112,10 @@ from components.macro_engine_loader import load_macro_engine
 
 _macro_engine = load_macro_engine()
 get_forward_projection = _macro_engine.get_forward_projection
+store_forward_engine_inputs = getattr(_macro_engine, "store_forward_engine_inputs", None)
+build_canonical_forward_fingerprint = getattr(_macro_engine, "build_canonical_forward_fingerprint", None)
+resolve_canonical_forward_projection = getattr(_macro_engine, "resolve_canonical_forward_projection", None)
+peek_valid_forward_projection = getattr(_macro_engine, "peek_valid_forward_projection", None)
 health_settings_fingerprint = _macro_engine.health_settings_fingerprint
 macro_assumption_summary = _macro_engine.macro_assumption_summary
 macro_assumptions_from_session = _macro_engine.macro_assumptions_from_session
@@ -2376,6 +2380,20 @@ if pp.skip_heavy_work(st) and _load_analytics and _capture_fp is not None:
         )
         _analytics_ready = True
         _load_analytics = False
+        if store_forward_engine_inputs is not None:
+            store_forward_engine_inputs(
+                st.session_state,
+                metrics=metrics,
+                mean_returns=mean_rets,
+                cov=cov.values if hasattr(cov, "values") else cov,
+                tickers=tickers,
+                weights=weights,
+                asset_types=asset_types,
+                start=settings["start"],
+                end=settings["end"],
+                initial_value=settings["initial_value"],
+                risk_free_rate=settings["risk_free"],
+            )
 
 if _load_analytics:
     try:
@@ -2458,6 +2476,20 @@ if _load_analytics:
         report_text,
     )
     _analytics_ready = True
+    if store_forward_engine_inputs is not None and mean_rets is not None and cov is not None and metrics is not None:
+        store_forward_engine_inputs(
+            st.session_state,
+            metrics=metrics,
+            mean_returns=mean_rets,
+            cov=cov.values if hasattr(cov, "values") else cov,
+            tickers=tickers,
+            weights=weights,
+            asset_types=asset_types,
+            start=settings["start"],
+            end=settings["end"],
+            initial_value=settings["initial_value"],
+            risk_free_rate=settings["risk_free"],
+        )
     if pp.skip_heavy_work(st) and _capture_fp is not None:
         pp.store_capture_analytics(
             st,
@@ -3496,8 +3528,34 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
                 years=float(fwd_years),
                 risk_free_rate=settings["risk_free"],
             )
-            # Cache for AMI consumers (same ForwardProjectionResult shown in this panel).
+            # Cache for AMI / shared consumers. Fingerprint includes overrides when present
+            # so AMI (no-override path) will recompute rather than reuse override results.
             st.session_state.forward_projection = forward
+            if store_forward_engine_inputs is not None:
+                store_forward_engine_inputs(
+                    st.session_state,
+                    metrics=metrics,
+                    mean_returns=mean_rets,
+                    cov=cov.values if hasattr(cov, "values") else cov,
+                    tickers=tickers,
+                    weights=weights,
+                    asset_types=asset_types,
+                    start=settings["start"],
+                    end=settings["end"],
+                    initial_value=settings["initial_value"],
+                    risk_free_rate=settings["risk_free"],
+                )
+            if build_canonical_forward_fingerprint is not None:
+                st.session_state.forward_projection_fp = build_canonical_forward_fingerprint(
+                    assumptions,
+                    start=settings["start"],
+                    end=settings["end"],
+                    years=float(fwd_years),
+                    tickers=tickers,
+                    weights=weights,
+                    risk_free_rate=settings["risk_free"],
+                    initial_value=settings["initial_value"],
+                )
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Forward Return", _pct(forward.adjusted_return))

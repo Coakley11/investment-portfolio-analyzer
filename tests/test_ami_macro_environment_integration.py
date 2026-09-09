@@ -50,19 +50,12 @@ def _session(**extra) -> dict:
     ss["investment_active_tab"] = "Portfolio Health"
     ss["objective"] = "balanced growth"
     ss["portfolio_objective"] = "balanced growth"
-    # Canonical Forward Macro outputs for the frozen scenario (approx; live data may drift).
-    ss["forward_projection"] = SimpleNamespace(
-        adjusted_return=-0.2104,
-        adjusted_volatility=0.4712,
-        adjusted_sharpe=-0.53,
-        adjusted_max_drawdown=-0.55,
-        projected_value=10000.0,
-        forward_insights=[],
-        rate_commentary=[],
-        inflation_commentary=[],
-        adjusted_mean_returns=None,
-        adjusted_cov=None,
-    )
+    # Explicit AMI Forward metrics payload (validated cold-start path is covered separately).
+    ss["_ami_forward_scenario_metrics"] = {
+        "return": -0.2104,
+        "volatility": 0.4712,
+        "sharpe": -0.53,
+    }
     # Historical Health metrics — must remain distinct from forward_*.
     ss["health_result"] = SimpleNamespace(
         score=72.0,
