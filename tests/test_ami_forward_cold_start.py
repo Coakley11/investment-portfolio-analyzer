@@ -74,6 +74,16 @@ def _frozen_macros(ss: dict) -> None:
     ss["health_regime"] = "Recession"
 
 
+def _sync_streamlit_session(ss: dict) -> None:
+    """Populate Streamlit session for ensure/resolve (never embed proxy on AMI ctx)."""
+    import streamlit as st
+
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    for key, val in ss.items():
+        st.session_state[key] = val
+
+
 def _fresh_session(**extra) -> dict:
     ss = dict(SHARED_MACRO_DEFAULTS)
     _frozen_macros(ss)
@@ -107,6 +117,7 @@ def _fresh_session(**extra) -> dict:
     ss.pop(FORWARD_PROJECTION_KEY, None)
     ss.pop(FORWARD_PROJECTION_FP_KEY, None)
     ss.update(extra)
+    _sync_streamlit_session(ss)
     return ss
 
 
@@ -133,7 +144,9 @@ class TestAmiForwardColdStart(unittest.TestCase):
         text = (result.short_answer or "") + str(result.analyst_sections or {})
         self.assertIn("Forward modeled", text)
         self.assertIn("forward_modeled_return", result.computed or {})
-        self.assertIsNotNone(ss.get(FORWARD_PROJECTION_KEY))
+        import streamlit as st
+
+        self.assertIsNotNone(st.session_state.get(FORWARD_PROJECTION_KEY))
 
     def test_03_existing_valid_projection_reused(self) -> None:
         ss = _fresh_session()
@@ -340,6 +353,61 @@ class TestAmiForwardColdStart(unittest.TestCase):
         self.assertIn("high inflation", text)
         self.assertIn("forward modeled", text)
         self.assertIn("-", text)  # negative return under stress
+
+    def test_16_context_json_safe_with_streamlit_session_proxy(self) -> None:
+        """Regression: never embed SessionStateProxy on AMI ctx (live TypeError)."""
+        import json
+
+        import streamlit as st
+        from json_safe import json_safe_context
+
+        ss = _fresh_session()
+        # Live path passes Streamlit session into context builder.
+        ctx = build_investment_applied_math_context("Portfolio Health", st.session_state)
+        self.assertNotIn("_ami_session_ref", ctx)
+        self.assertNotIn("_ami_session_dict", ctx)
+        # Must not raise TypeError: SessionStateProxy is not JSON serializable
+        safe = json_safe_context(ctx)
+        json.dumps(safe, ensure_ascii=False)
+        ensure_ami_forward_scenario_metrics(ctx)  # uses st.session_state
+        self.assertIsNotNone(ctx.get("forward_modeled_return"))
+        safe2 = json_safe_context(ctx)
+        json.dumps(safe2, ensure_ascii=False)
+
+    def test_17_fingerprint_uses_primitives_not_session_proxy(self) -> None:
+        import streamlit as st
+
+        ss = _fresh_session()
+        assumptions = macro_assumptions_from_session(st.session_state)
+        fp = build_canonical_forward_fingerprint(
+            assumptions,
+            start=_START,
+            end=_END,
+            years=10.0,
+            tickers=_TICKERS,
+            weights=_W,
+            risk_free_rate=_RF,
+            initial_value=_IV,
+        )
+        self.assertIsInstance(fp, str)
+        self.assertNotIn("SessionState", fp)
+        self.assertIn("Rising Rates", fp)
+        self.assertIn("High Inflation", fp)
+        # Mutating via proxy updates fingerprint inputs the same as a plain dict.
+        st.session_state["health_valuation"] = "Cheap"
+        assumptions2 = macro_assumptions_from_session(st.session_state)
+        fp2 = build_canonical_forward_fingerprint(
+            assumptions2,
+            start=_START,
+            end=_END,
+            years=10.0,
+            tickers=_TICKERS,
+            weights=_W,
+            risk_free_rate=_RF,
+            initial_value=_IV,
+        )
+        self.assertNotEqual(fp, fp2)
+        self.assertIn("Cheap", fp2)
 
 
 if __name__ == "__main__":

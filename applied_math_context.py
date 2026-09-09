@@ -691,9 +691,10 @@ def _attach_forward_scenario_metrics_to_ami_context(
 
     Reuses a fingerprint-valid cached projection only — does not compute on demand
     (keeps non-macro AMI questions from triggering Forward work).
-    """
-    ctx["_ami_session_ref"] = session_state
 
+    Never attach ``st.session_state`` / SessionStateProxy onto ``ctx`` — AMI persists
+    context via JSON and proxies are not serializable.
+    """
     # Explicit precomputed AMI payload wins (tests / submit injectors).
     pre = session_state.get("_ami_forward_scenario_metrics")
     if isinstance(pre, dict) and pre:
@@ -733,12 +734,15 @@ def ensure_ami_forward_scenario_metrics(
 
     Uses the shared canonical Forward helper (reuse valid cache or compute on demand).
     Returns True when metrics are present after the call.
+
+    ``session_state`` should be a plain mapping in unit tests. In the live app, omit it
+    to use ``st.session_state`` (never copy that proxy onto ``ctx``).
     """
     if isinstance(session_state, dict) and isinstance(session_state.get("_ami_forward_scenario_metrics"), dict):
         _apply_forward_metric_fields(ctx, session_state["_ami_forward_scenario_metrics"])
         return ctx.get("forward_modeled_return") is not None
 
-    ss = session_state if session_state is not None else ctx.get("_ami_session_ref")
+    ss: Any = session_state
     if ss is None:
         try:
             import streamlit as st
@@ -746,6 +750,27 @@ def ensure_ami_forward_scenario_metrics(
             ss = st.session_state
         except Exception:
             return ctx.get("forward_modeled_return") is not None
+
+    # Explicit inject also works when living on Streamlit session.
+    try:
+        from components.macro_engine import _session_get
+
+        pre = _session_get(ss, "_ami_forward_scenario_metrics")
+    except Exception:
+        pre = None
+    if isinstance(pre, dict) and pre:
+        _apply_forward_metric_fields(ctx, pre)
+        return ctx.get("forward_modeled_return") is not None
+
+    # Ctx may already hold inject-applied metrics (unit tests) without engine inputs.
+    try:
+        from components.macro_engine import FORWARD_ENGINE_INPUTS_KEY, _session_get
+
+        has_inputs = isinstance(_session_get(ss, FORWARD_ENGINE_INPUTS_KEY), dict)
+    except Exception:
+        has_inputs = False
+    if ctx.get("forward_modeled_return") is not None and not has_inputs:
+        return True
 
     try:
         from components.macro_engine import resolve_canonical_forward_projection

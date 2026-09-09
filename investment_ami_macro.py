@@ -27,10 +27,12 @@ def _with_macro_intelligence(
     )
 
     # Cold-start: resolve Forward metrics via canonical helper when missing/stale.
+    # Uses st.session_state (or an explicit plain mapping passed by tests) — never a
+    # SessionStateProxy embedded on ctx (AMI context must stay JSON-serializable).
     try:
         from applied_math_context import ensure_ami_forward_scenario_metrics
 
-        ensure_ami_forward_scenario_metrics(ctx, ctx.get("_ami_session_ref"))
+        ensure_ami_forward_scenario_metrics(ctx)
     except Exception:
         pass
 
@@ -1004,7 +1006,7 @@ def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: s
     try:
         from applied_math_context import ensure_ami_forward_scenario_metrics
 
-        ensure_ami_forward_scenario_metrics(ctx, ctx.get("_ami_session_ref"))
+        ensure_ami_forward_scenario_metrics(ctx)
     except Exception:
         pass
 

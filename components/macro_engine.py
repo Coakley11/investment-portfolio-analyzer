@@ -61,11 +61,23 @@ def macro_widget_key(persist_key: str) -> str:
     return f"_w_{persist_key}"
 
 
+def _session_get(session_state: Any, key: str, default: Any = None) -> Any:
+    """Read a session key without using ``.get`` (AppTest SafeSessionState lacks it)."""
+    try:
+        if key in session_state:
+            return session_state[key]
+    except Exception:
+        pass
+    if isinstance(session_state, dict):
+        return session_state.get(key, default)
+    return default
+
+
 def ensure_shared_macro_session_defaults(session_state: Any | None = None) -> None:
     """Ensure canonical macro keys exist (safe every rerun; never overwrites user values)."""
     ss = st.session_state if session_state is None else session_state
     for key, default in SHARED_MACRO_DEFAULTS.items():
-        if key not in ss or ss.get(key) in (None, ""):
+        if key not in ss or _session_get(ss, key) in (None, ""):
             ss[key] = default
 
 
@@ -103,7 +115,7 @@ def planning_horizon_years(session_state: Any) -> int | None:
     """Canonical planning 'Investment time horizon' if present."""
     if PLAN_HORIZON_SESSION_KEY not in session_state:
         return None
-    return _coerce_horizon_int(session_state.get(PLAN_HORIZON_SESSION_KEY))
+    return _coerce_horizon_int(_session_get(session_state, PLAN_HORIZON_SESSION_KEY))
 
 
 def seed_forward_horizon_from_plan_if_needed(session_state: Any | None = None) -> int:
@@ -115,7 +127,7 @@ def seed_forward_horizon_from_plan_if_needed(session_state: Any | None = None) -
     ss = st.session_state if session_state is None else session_state
     persist = FORWARD_HORIZON_PERSIST_KEY
     if persist in ss:
-        ss[persist] = clamp_forward_horizon_years(ss.get(persist))
+        ss[persist] = clamp_forward_horizon_years(_session_get(ss, persist))
         return int(ss[persist])
     plan = planning_horizon_years(ss)
     if plan is None:
@@ -188,7 +200,7 @@ def seed_mc_horizon_from_plan_if_needed(session_state: Any | None = None) -> int
     ss = st.session_state if session_state is None else session_state
     persist = MC_HORIZON_PERSIST_KEY
     if persist in ss:
-        ss[persist] = clamp_mc_horizon_years(ss.get(persist))
+        ss[persist] = clamp_mc_horizon_years(_session_get(ss, persist))
         return int(ss[persist])
     plan = planning_horizon_years(ss)
     if plan is None:
@@ -383,11 +395,11 @@ def macro_assumptions_from_session(session_state: Any | None = None) -> core.For
     ss = st.session_state if session_state is None else session_state
     ensure_shared_macro_session_defaults(ss)
     return core.ForwardMacroAssumptions(
-        rate_environment=str(ss.get("health_rate_env", "Stable Rates")),
-        inflation=str(ss.get("health_inflation", "Moderate Inflation")),
-        recession_probability=float(ss.get("health_recession", 25)) / 100.0,
-        valuation=str(ss.get("health_valuation", "Fair Value")),
-        economic_regime=str(ss.get("health_regime", "Expansion")),
+        rate_environment=str(_session_get(ss, "health_rate_env", "Stable Rates")),
+        inflation=str(_session_get(ss, "health_inflation", "Moderate Inflation")),
+        recession_probability=float(_session_get(ss, "health_recession", 25)) / 100.0,
+        valuation=str(_session_get(ss, "health_valuation", "Fair Value")),
+        economic_regime=str(_session_get(ss, "health_regime", "Expansion")),
     )
 
 
@@ -516,7 +528,7 @@ def _forward_years_from_session(session_state: Any) -> float:
     seed_forward_horizon_from_plan_if_needed(session_state)
     return float(
         clamp_forward_horizon_years(
-            session_state.get(FORWARD_HORIZON_PERSIST_KEY, FORWARD_HORIZON_FALLBACK)
+            _session_get(session_state, FORWARD_HORIZON_PERSIST_KEY, FORWARD_HORIZON_FALLBACK)
         )
     )
 
@@ -524,9 +536,9 @@ def _forward_years_from_session(session_state: Any) -> float:
 def peek_valid_forward_projection(session_state: Any | None = None) -> core.ForwardProjectionResult | None:
     """Return cached ForwardProjectionResult only when fingerprint matches current inputs."""
     ss = st.session_state if session_state is None else session_state
-    inputs = ss.get(FORWARD_ENGINE_INPUTS_KEY)
-    cached = ss.get(FORWARD_PROJECTION_KEY)
-    fp_cached = ss.get(FORWARD_PROJECTION_FP_KEY)
+    inputs = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
+    cached = _session_get(ss, FORWARD_PROJECTION_KEY)
+    fp_cached = _session_get(ss, FORWARD_PROJECTION_FP_KEY)
     if not isinstance(inputs, dict) or cached is None or not fp_cached:
         return None
     assumptions = macro_assumptions_from_session(ss)
@@ -562,7 +574,7 @@ def resolve_canonical_forward_projection(
     import numpy as np
 
     ss = st.session_state if session_state is None else session_state
-    inputs = ss.get(FORWARD_ENGINE_INPUTS_KEY)
+    inputs = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
     if not isinstance(inputs, dict):
         return peek_valid_forward_projection(ss)
 
@@ -581,8 +593,8 @@ def resolve_canonical_forward_projection(
         initial_value=float(inputs.get("initial_value") or 0.0),
     )
 
-    cached = ss.get(FORWARD_PROJECTION_KEY)
-    if cached is not None and str(ss.get(FORWARD_PROJECTION_FP_KEY) or "") == fp:
+    cached = _session_get(ss, FORWARD_PROJECTION_KEY)
+    if cached is not None and str(_session_get(ss, FORWARD_PROJECTION_FP_KEY) or "") == fp:
         return cached  # type: ignore[return-value]
 
     metrics = inputs.get("metrics")

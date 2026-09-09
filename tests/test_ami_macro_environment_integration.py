@@ -45,6 +45,12 @@ def _holdings() -> pd.DataFrame:
 
 
 def _session(**extra) -> dict:
+    import streamlit as st
+
+    # Isolate from other tests that leave Forward engine inputs on st.session_state.
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
     ss = dict(_FROZEN)
     ss["holdings_df"] = _holdings()
     ss["investment_active_tab"] = "Portfolio Health"
