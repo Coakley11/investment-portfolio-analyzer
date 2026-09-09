@@ -15,13 +15,15 @@ REAL_PORTFOLIO_SUBTABS = (
     "Dashboard",
     "Positions",
     "Transactions",
+    "Allocate New Money",
     "Position Sizing",
 )
 
 SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
+SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-02-instrument-alloc-v2"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-09-contribution-advisor-v1-instrument-alloc"
 
 
 def _ss() -> Any:
@@ -384,6 +386,167 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
             st.rerun()
 
 
+def render_allocate_new_money(*, beginner: bool = False) -> None:
+    """Contribution Advisor UI — new-money-only placement against an explicit target source."""
+    st.markdown("##### Allocate New Money")
+    st.caption(
+        "Decide where an additional contribution should go using your **real portfolio ledger** "
+        "and a clearly selected target. New-money-only mode does not sell existing holdings. "
+        "Decision support only — not a trade order."
+    )
+
+    from investment_ami.decision_support.contribution_advisor import (
+        recommend_contribution_allocation_from_session,
+    )
+    from investment_ami.decision_support.real_portfolio_snapshot import build_real_portfolio_snapshot
+
+    built = build_real_portfolio_snapshot(_ss())
+    if not built.ok or built.snapshot is None:
+        st.info(
+            "No real portfolio ledger yet. Add buys/sells/deposits under **Transactions** first. "
+            "Model / demo holdings are never used for this recommendation."
+        )
+        return
+
+    snap = built.snapshot
+    if snap.unpriced_holdings_count > 0 or snap.market_data_status in ("partial", "unavailable"):
+        st.warning(
+            "Some holdings are missing current prices. Refresh market data before treating "
+            "any dollar recommendation as precise."
+        )
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        amount = st.number_input(
+            "New contribution ($)",
+            min_value=0.0,
+            value=1000.0,
+            step=100.0,
+            key="contribution_advisor_amount",
+            help="External new money to invest — not treated as investment profit.",
+        )
+    with c2:
+        source_label = st.selectbox(
+            "Target source",
+            [
+                "My target weights (explicit)",
+                "Recommended from stated objective (labeled)",
+                "Current mix (already on strategy)",
+            ],
+            key="contribution_advisor_target_source",
+            help=(
+                "Explicit targets are yours. Stated-objective mix is a recommended sleeve mapping — "
+                "not a silently saved personal target. Current mix distributes like target = today."
+            ),
+        )
+
+    source_map = {
+        "My target weights (explicit)": "user_explicit",
+        "Recommended from stated objective (labeled)": "stated_objective_recommended",
+        "Current mix (already on strategy)": "current_mix",
+    }
+    target_source = source_map[source_label]
+
+    explicit: dict[str, float] | None = None
+    if target_source == "user_explicit":
+        priced = [h for h in snap.holdings if h.current_price is not None]
+        if not priced and snap.cash <= 0:
+            st.warning("No priced holdings available.")
+            return
+        st.markdown("**My target weights (%)** — must sum near 100.")
+        saved = _ss().get(SESSION_CONTRIBUTION_TARGETS_KEY)
+        if not isinstance(saved, dict):
+            saved = {}
+        cols = st.columns(min(4, max(1, len(priced) + (1 if snap.cash > 0 else 0))))
+        explicit = {}
+        for i, h in enumerate(priced):
+            default = float(saved.get(h.ticker, h.current_weight))
+            with cols[i % len(cols)]:
+                explicit[h.ticker] = st.number_input(
+                    f"{h.ticker} target %",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(default),
+                    step=1.0,
+                    key=f"contrib_tgt_{h.ticker}",
+                )
+        if snap.cash > 0:
+            with cols[len(priced) % len(cols)]:
+                explicit["$CASH"] = st.number_input(
+                    "$CASH target %",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(saved.get("$CASH", snap.allocation_by_holding.get("$CASH", 0.0))),
+                    step=1.0,
+                    key="contrib_tgt_cash",
+                )
+        _ss()[SESSION_CONTRIBUTION_TARGETS_KEY] = dict(explicit)
+        st.caption(f"Target sum: **{sum(explicit.values()):.1f}%**")
+
+    if beginner:
+        st.caption(
+            "Tip: if one holding is behind its target, most of the new money usually goes there first."
+        )
+
+    run = st.button("Calculate allocation", type="primary", key="contribution_advisor_run")
+    if not run:
+        prior = _ss().get("_contribution_advisor_result")
+        if isinstance(prior, dict) and prior.get("ok"):
+            _render_contribution_result(prior)
+        return
+
+    result = recommend_contribution_allocation_from_session(
+        _ss(),
+        contribution_amount=float(amount),
+        target_source=target_source,  # type: ignore[arg-type]
+        explicit_holding_targets=explicit,
+        include_cash=True,
+    )
+    payload = result.to_dict()
+    _ss()["_contribution_advisor_result"] = payload
+    if not result.ok:
+        st.error(result.explanation)
+        for w in result.warnings:
+            st.warning(w)
+        return
+    _render_contribution_result(payload)
+
+
+def _render_contribution_result(payload: dict) -> None:
+    st.success(payload.get("explanation") or "Allocation ready.")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Portfolio before", pe.format_currency(float(payload.get("portfolio_value_before") or 0)))
+    m2.metric("New contribution", pe.format_currency(float(payload.get("contribution_amount") or 0)))
+    m3.metric("Portfolio after", pe.format_currency(float(payload.get("portfolio_value_after") or 0)))
+    m4.metric(
+        "Abs. drift before → after",
+        f"{100 * float(payload.get('aggregate_drift_before') or 0):.1f} → "
+        f"{100 * float(payload.get('aggregate_drift_after') or 0):.1f} pp",
+    )
+    rows = payload.get("rows") or []
+    if rows:
+        df = pd.DataFrame(
+            [
+                {
+                    "Holding": r["ticker"],
+                    "Current %": round(100 * float(r["current_weight"]), 2),
+                    "Target %": round(100 * float(r["target_weight"]), 2),
+                    "Drift pp": round(100 * float(r["drift"]), 2),
+                    "Add New Money": round(float(r["recommended_add"]), 2),
+                    "Projected %": round(100 * float(r["projected_weight"]), 2),
+                    "Remaining drift pp": round(100 * float(r["remaining_drift"]), 2),
+                }
+                for r in rows
+            ]
+        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if payload.get("assumptions"):
+        with st.expander("Assumptions", expanded=False):
+            for a in payload["assumptions"]:
+                st.markdown(f"- {a}")
+    st.caption(APP_DISCLAIMER)
+
+
 def render_position_sizing(*, beginner: bool = False) -> None:
     transactions = get_portfolio_transactions()
     summary = pe.compute_portfolio_summary(transactions)
@@ -513,4 +676,6 @@ def render_real_portfolio_tab(*, beginner: bool = False) -> None:
     elif active == labels[2]:
         render_portfolio_transactions(beginner=beginner)
     elif active == labels[3]:
+        render_allocate_new_money(beginner=beginner)
+    elif active == labels[4]:
         render_position_sizing(beginner=beginner)
