@@ -3496,6 +3496,8 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
                 years=float(fwd_years),
                 risk_free_rate=settings["risk_free"],
             )
+            # Cache for AMI consumers (same ForwardProjectionResult shown in this panel).
+            st.session_state.forward_projection = forward
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Forward Return", _pct(forward.adjusted_return))

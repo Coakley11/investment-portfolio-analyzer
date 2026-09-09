@@ -452,9 +452,13 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
     if "macro" in tab.lower():
         ctx["workflow"] = "Macro analysis"
         try:
-            from components.macro_engine import macro_assumption_summary
+            from components.macro_engine import macro_assumptions_from_session
 
-            macro = macro_assumption_summary()
+            a = macro_assumptions_from_session(session_state)
+            macro = (
+                f"{a.inflation} · {a.rate_environment} · "
+                f"Recession {a.recession_probability * 100:.0f}% · {a.valuation} · {a.economic_regime}"
+            )
             if macro:
                 ctx["macro_summary"] = macro
                 ctx["macro_outlook"] = macro
@@ -469,12 +473,17 @@ def build_investment_applied_math_context(page: str, session_state: dict[str, An
                 ctx[k] = v
 
     try:
-        from components.macro_engine import macro_assumption_summary
+        from components.macro_engine import macro_assumptions_from_session
 
-        macro = macro_assumption_summary()
+        a = macro_assumptions_from_session(session_state)
+        macro = (
+            f"{a.inflation} · {a.rate_environment} · "
+            f"Recession {a.recession_probability * 100:.0f}% · {a.valuation} · {a.economic_regime}"
+        )
         if macro:
-            ctx.setdefault("macro_summary", macro)
-            ctx.setdefault("macro_outlook", macro)
+            # Always prefer live shared macro persist keys over stale/default summary strings.
+            ctx["macro_summary"] = macro
+            ctx["macro_outlook"] = macro
     except Exception:
         pass
 
@@ -621,20 +630,38 @@ def _enrich_investment_ami_analytics(
         pass
 
     scenario: dict[str, Any] = dict(session_state.get("_ami_scenario_params") or {})
+    # Canonical shared macro persist keys → structured AMI context (all five).
+    for key in (
+        "health_rate_env",
+        "health_inflation",
+        "health_recession",
+        "health_valuation",
+        "health_regime",
+    ):
+        val = session_state.get(key)
+        if val not in (None, ""):
+            ctx[key] = val if key == "health_recession" else str(val)
+
     rate = session_state.get("health_rate_env")
     if rate not in (None, "") and "rate_shock" not in scenario:
         scenario["rate_shock"] = str(rate)
     recession = session_state.get("health_recession")
     if recession not in (None, "") and "recession_scenario" not in scenario:
         scenario["recession_scenario"] = str(recession)
-    if scenario:
-        ctx["scenario_params"] = scenario
-
+    inflation = session_state.get("health_inflation")
+    if inflation not in (None, "") and "inflation" not in scenario:
+        scenario["inflation"] = str(inflation)
+    regime = session_state.get("health_regime")
+    if regime not in (None, "") and "economic_regime" not in scenario:
+        scenario["economic_regime"] = str(regime)
     valuation = session_state.get("health_valuation")
     if valuation not in (None, ""):
         ctx["health_valuation"] = str(valuation)
         scenario.setdefault("valuation_environment", str(valuation))
+    if scenario:
         ctx["scenario_params"] = scenario
+
+    _attach_forward_scenario_metrics_to_ami_context(ctx, session_state)
 
     try:
         from investment_ami_exposure import build_tech_exposure_from_weights
@@ -653,6 +680,70 @@ def _enrich_investment_ami_analytics(
             ctx["tech_exposure"] = build_tech_exposure_from_weights(weights)
     except Exception:
         pass
+
+
+def _attach_forward_scenario_metrics_to_ami_context(
+    ctx: dict[str, Any],
+    session_state: dict[str, Any],
+) -> None:
+    """
+    Attach Forward Macro scenario metrics without overwriting historical Health metrics.
+
+    Source: cached ``forward_projection`` from the canonical Forward Macro / MC / Optimizer path.
+    """
+    # Explicit precomputed AMI payload wins (tests / submit injectors).
+    pre = session_state.get("_ami_forward_scenario_metrics")
+    if isinstance(pre, dict) and pre:
+        _apply_forward_metric_fields(ctx, pre)
+        return
+
+    fwd = session_state.get("forward_projection")
+    if fwd is None:
+        return
+    try:
+        ret = float(getattr(fwd, "adjusted_return"))
+        vol = float(getattr(fwd, "adjusted_volatility"))
+        sharpe = float(getattr(fwd, "adjusted_sharpe"))
+    except (TypeError, ValueError, AttributeError):
+        return
+    _apply_forward_metric_fields(
+        ctx,
+        {
+            "return": ret,
+            "volatility": vol,
+            "sharpe": sharpe,
+        },
+    )
+
+
+def _apply_forward_metric_fields(ctx: dict[str, Any], metrics: dict[str, Any]) -> None:
+    """Write forward_* keys only; never replace expected_return / volatility / sharpe_ratio."""
+    try:
+        ret = float(metrics.get("return"))
+        vol = float(metrics.get("volatility"))
+        sharpe = float(metrics.get("sharpe"))
+    except (TypeError, ValueError):
+        return
+
+    def _pct(val: float) -> str:
+        # Accept decimals (0.21) or already percent points (21.0).
+        f = float(val)
+        if abs(f) <= 1.5:
+            return f"{f * 100:.2f}%"
+        return f"{f:.2f}%"
+
+    ctx["forward_modeled_return"] = ret if abs(ret) <= 1.5 else ret / 100.0
+    ctx["forward_modeled_volatility"] = vol if abs(vol) <= 1.5 else vol / 100.0
+    ctx["forward_modeled_sharpe"] = sharpe
+    ctx["forward_modeled_return_display"] = _pct(ret)
+    ctx["forward_modeled_volatility_display"] = _pct(vol)
+    ctx["forward_modeled_sharpe_display"] = f"{float(sharpe):.2f}"
+    ctx["forward_metrics_are_scenario_outputs"] = True
+    ctx["forward_metrics_disclaimer"] = (
+        "Forward modeled return, volatility, and Sharpe are scenario/model outputs "
+        "based on your selected macro assumptions — not factual forecasts and not "
+        "historical realized returns."
+    )
 
 
 _INVESTMENT_SOURCE_FILTER_KEYS: tuple[str, ...] = (

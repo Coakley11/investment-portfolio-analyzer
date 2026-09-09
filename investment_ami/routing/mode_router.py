@@ -169,6 +169,9 @@ def _portfolio_change_framing(q: str) -> bool:
             "should my portfolio",
             "adjust my portfolio",
             "change my portfolio",
+            "change my allocation",
+            "should i change my allocation",
+            "should i change allocation",
             "reposition",
             "recommend",
             "would you make",
@@ -302,9 +305,15 @@ def _match_historical_scenario_analytical(q: str) -> tuple[str, str] | None:
 
 def _conditional_macro_analytical(q: str) -> tuple[str, str] | None:
     try:
-        from investment_ami_context import _is_inflation_question, _is_recession_question  # noqa: SLF001
+        from investment_ami_context import (  # noqa: SLF001
+            _is_inflation_question,
+            _is_macro_environment_question,
+            _is_recession_question,
+        )
     except ImportError:
         return None
+    if _is_macro_environment_question(q) and _portfolio_change_framing(q):
+        return "conditional_macro", "analytical:conditional_macro_environment"
     if _is_inflation_question(q) and _portfolio_change_framing(q):
         return "conditional_macro", "analytical:conditional_inflation"
     if _is_inflation_question(q) and any(
@@ -529,6 +538,24 @@ def route_investment_response_mode(
             question_tag="improvement" if any(w in q for w in ("change", "should", "issue")) else "open_ended",
             deterministic_intent="portfolio_health",
             legacy_intent_hint=legacy or "portfolio_health",
+            matched_rules=tuple(matched),
+            reasons=tuple(reasons),
+            intent_classification=intent_dict,
+        )
+
+    # Shared Health macro scenario questions stay on deterministic macro engines
+    # (including mixed allocation framing) — do not fall through to synthesis placeholders.
+    if legacy == "macro_environment":
+        matched.append("deterministic:macro_environment")
+        reasons.append(
+            "Current/selected macro environment question → deterministic `macro_environment` "
+            "(wins over rebalance phrases like 'my allocation')."
+        )
+        return ModeRoutingDecision(
+            response_mode="deterministic",
+            question_tag="conditional_macro" if _portfolio_change_framing(q) else "open_ended",
+            deterministic_intent="macro_environment",
+            legacy_intent_hint=legacy,
             matched_rules=tuple(matched),
             reasons=tuple(reasons),
             intent_classification=intent_dict,

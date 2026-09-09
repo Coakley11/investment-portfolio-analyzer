@@ -76,6 +76,7 @@ _INVESTMENT_SOLVER_INTENTS = frozenset(
         "macro_rates",
         "macro_recession",
         "macro_inflation",
+        "macro_environment",
         "allocation_recommendation",
         "allocation_advisor",
         "cash_reserve_advisor",
@@ -97,6 +98,8 @@ _REBALANCE_PHRASES = (
     "explain allocation",
     "my allocation",
     "target weights",
+    "target allocation",
+    "allocation drift",
     "drift",
 )
 
@@ -286,6 +289,21 @@ _INFLATION_PHRASES = (
     "cost of living",
 )
 
+_MACRO_ENVIRONMENT_PHRASES = (
+    "macro environment",
+    "current macro environment",
+    "current macro",
+    "under these macro assumptions",
+    "given these macro conditions",
+    "how does the macro environment",
+    "how does my current macro",
+    "because of the current macro",
+    "because of my current macro",
+    "macro assumptions",
+    "macro conditions",
+    "selected macro",
+)
+
 _CASH_RESERVE_ADVISOR_PHRASES = (
     "emergency fund",
     "keep more cash",
@@ -429,6 +447,10 @@ def detect_investment_send_intent(question: str, source_page: str = "") -> str:
         return "valuation"
     if is_portfolio_health_question(q):
         return "portfolio_health"
+    # Macro-environment framing wins before rates/inflation/recession keyword
+    # routes and before rebalance phrases like "my allocation".
+    if _is_macro_environment_question(q):
+        return "macro_environment"
     if _is_macro_rates_question(q):
         return "macro_rates"
     if _is_inflation_question(q):
@@ -561,6 +583,27 @@ def _is_recession_question(q: str) -> bool:
 
 def _is_inflation_question(q: str) -> bool:
     return any(p in q for p in _INFLATION_PHRASES)
+
+
+def _is_macro_environment_question(q: str) -> bool:
+    """True when the question asks about the selected / current macro scenario."""
+    if any(p in q for p in _MACRO_ENVIRONMENT_PHRASES):
+        return True
+    if "macro" in q and any(
+        w in q
+        for w in (
+            "environment",
+            "assumption",
+            "assumptions",
+            "condition",
+            "conditions",
+            "scenario",
+            "setting",
+            "settings",
+        )
+    ):
+        return True
+    return False
 
 
 def _is_allocation_recommendation_question(q: str) -> bool:

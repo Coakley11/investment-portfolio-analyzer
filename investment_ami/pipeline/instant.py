@@ -49,6 +49,7 @@ INSTANT_ENGINE_REGISTRY: dict[str, Any] = {
     "macro_rates": get_macroeconomic_engine("macro_rates"),
     "macro_recession": get_macroeconomic_engine("macro_recession"),
     "macro_inflation": get_macroeconomic_engine("macro_inflation"),
+    "macro_environment": get_macroeconomic_engine("macro_environment"),
     "allocation_advisor": get_allocation_advisor_engine(),
     "cash_reserve_advisor": get_cash_reserve_advisor_engine(),
     "real_portfolio_advisor": get_real_portfolio_advisor_engine(),

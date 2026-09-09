@@ -9,7 +9,7 @@ from investment_ami.engines.support.macro_context import MacroScenarioContext, r
 
 BRIEF_VERSION = "3.1.0"
 
-_MACRO_INTENTS = frozenset({"macro_rates", "macro_recession", "macro_inflation"})
+_MACRO_INTENTS = frozenset({"macro_rates", "macro_recession", "macro_inflation", "macro_environment"})
 
 
 @dataclass(frozen=True)
@@ -283,6 +283,12 @@ def _recommendation_drivers(macro_intent: str) -> tuple[str, ...]:
             "Frame decisions in real (inflation-adjusted) terms",
             "Consider cash/T-bill role for near-term flexibility",
         )
+    if macro_intent == "macro_environment":
+        return (
+            "Acknowledge the full selected macro scenario before changing weights",
+            "Keep Guided strategic allocation separate from stress-test dials",
+            "Use Forward Macro scenario metrics for awareness — not as forecasts",
+        )
     return ("Revisit Portfolio Health macro assumptions",)
 
 
@@ -291,6 +297,7 @@ def _final_conclusion(regime_label: str, macro_intent: str, top_channel: str) ->
         "macro_rates": "interest-rate and duration channels",
         "macro_recession": "earnings and defensive positioning",
         "macro_inflation": "purchasing power and real returns",
+        "macro_environment": "the full selected macro scenario versus strategic allocation",
     }.get(macro_intent, "macro conditions")
     return (
         f"Overall macro view is **{regime_label}**; for your portfolio the dominant sensitivity is "

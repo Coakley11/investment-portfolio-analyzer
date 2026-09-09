@@ -176,6 +176,28 @@ _INTENT_SPECS: dict[str, dict[str, object]] = {
         "optional": frozenset({"macro_summary", "health_inflation"}),
         "follow_up": ("macro_rates", "allocation_recommendation"),
     },
+    "macro_environment": {
+        "title": "Current macro environment",
+        "category": AmiCategory.MACROECONOMICS,
+        "description": "Interpret the selected Health macro scenario and portfolio implications.",
+        "engines": ("macroeconomic", "scenario_analysis"),
+        "output_type": "scenario",
+        "profile": "macro_only",
+        "legacy": "phase2",
+        "required": frozenset(),
+        "optional": frozenset(
+            {
+                "macro_summary",
+                "health_inflation",
+                "health_rate_env",
+                "health_recession",
+                "health_valuation",
+                "health_regime",
+                "forward_modeled_return",
+            }
+        ),
+        "follow_up": ("macro_recession", "allocation_recommendation"),
+    },
     "allocation_recommendation": {
         "title": "Allocation recommendations",
         "category": AmiCategory.ASSET_ALLOCATION,

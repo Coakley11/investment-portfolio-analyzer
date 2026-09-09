@@ -116,6 +116,10 @@ def solve_phase2_or_structured(
         from investment_ami.pipeline.instant import run_instant_engine
 
         result = run_instant_engine("macro_inflation", ctx, beginner=beginner, question=question)
+    elif intent == "macro_environment":
+        from investment_ami.pipeline.instant import run_instant_engine
+
+        result = run_instant_engine("macro_environment", ctx, beginner=beginner, question=question)
     elif intent == "allocation_recommendation":
         from investment_ami.pipeline.instant import run_instant_engine
 

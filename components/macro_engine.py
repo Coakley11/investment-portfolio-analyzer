@@ -488,9 +488,9 @@ def get_forward_projection(
     return forward
 
 
-def macro_assumption_summary() -> str:
+def macro_assumption_summary(session_state: Any | None = None) -> str:
     """One-line summary of current macro settings for UI captions."""
-    a = macro_assumptions_from_session()
+    a = macro_assumptions_from_session(session_state)
     return (
         f"{a.inflation} · {a.rate_environment} · "
         f"Recession {a.recession_probability * 100:.0f}% · {a.valuation} · {a.economic_regime}"

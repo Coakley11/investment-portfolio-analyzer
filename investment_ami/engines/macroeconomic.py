@@ -6,6 +6,7 @@ from typing import Any
 
 from investment_ami.engines.base import InstantEngineRequest
 from investment_ami_macro import (
+    _macro_environment_solve,
     _macro_inflation_solve,
     _macro_rates_solve,
     _macro_recession_solve,
@@ -15,6 +16,7 @@ _MACRO_SOLVERS = {
     "macro_rates": _macro_rates_solve,
     "macro_recession": _macro_recession_solve,
     "macro_inflation": _macro_inflation_solve,
+    "macro_environment": _macro_environment_solve,
 }
 
 

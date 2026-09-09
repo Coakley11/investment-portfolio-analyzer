@@ -27,13 +27,37 @@ def _with_macro_intelligence(
     )
 
     brief = build_macro_intelligence_brief(ctx, macro_intent=macro_intent, question=question)
-    return enrich_macro_solver_result(
+    enriched = enrich_macro_solver_result(
         result,
         brief,
         beginner=beginner,
         macro_intent=macro_intent,
         question=question,
     )
+    # Cite Forward Macro scenario metrics when available (labeled; do not replace historical metrics).
+    fwd_lines = _forward_scenario_metric_lines(ctx)
+    short = str(getattr(enriched, "short_answer", "") or "")
+    if fwd_lines and "forward modeled return" not in short.lower():
+        block = "\n".join(f"- {line}" for line in fwd_lines)
+        short = short + "\n\n**Forward Macro scenario metrics**\n" + block
+        computed = dict(getattr(enriched, "computed", None) or {})
+        computed["forward_modeled_return"] = ctx.get("forward_modeled_return")
+        computed["forward_modeled_volatility"] = ctx.get("forward_modeled_volatility")
+        computed["forward_modeled_sharpe"] = ctx.get("forward_modeled_sharpe")
+        computed["forward_metrics_are_scenario_outputs"] = True
+        return enriched.__class__(
+            short_answer=short,
+            math_idea=getattr(enriched, "math_idea", ""),
+            problem_type=getattr(enriched, "problem_type", ""),
+            model_name=getattr(enriched, "model_name", ""),
+            variables=getattr(enriched, "variables", ""),
+            assumptions=list(getattr(enriched, "assumptions", None) or [])
+            + [str(ctx.get("forward_metrics_disclaimer") or "Forward metrics are scenario outputs.")],
+            confidence_pct=getattr(enriched, "confidence_pct", None),
+            computed=computed,
+            analyst_sections=dict(getattr(enriched, "analyst_sections", None) or {}),
+        )
+    return enriched
 
 
 def infer_rate_shock_direction(question: str) -> int:
@@ -924,6 +948,231 @@ def _macro_inflation_solve(ctx: dict[str, Any], *, beginner: bool, question: str
     )
 
 
+def _forward_scenario_metric_lines(ctx: dict[str, Any]) -> list[str]:
+    """Labeled Forward Macro scenario outputs when present on AMI context."""
+    ret = ctx.get("forward_modeled_return_display")
+    vol = ctx.get("forward_modeled_volatility_display")
+    sharpe = ctx.get("forward_modeled_sharpe_display")
+    if not (ret and vol and sharpe):
+        return []
+    disclaimer = str(
+        ctx.get("forward_metrics_disclaimer")
+        or (
+            "These are scenario/model outputs based on your selected macro assumptions — "
+            "not factual forecasts and not historical realized returns."
+        )
+    )
+    return [
+        f"Forward modeled return: **{ret}** (scenario/model output)",
+        f"Forward modeled volatility: **{vol}** (scenario/model output)",
+        f"Forward modeled Sharpe: **{sharpe}** (scenario/model output)",
+        disclaimer,
+    ]
+
+
+def _asks_allocation_change(question: str) -> bool:
+    q = str(question or "").strip().lower()
+    if not q:
+        return False
+    if any(
+        p in q
+        for p in (
+            "change my allocation",
+            "change allocation",
+            "should i change",
+            "rebalance",
+            "adjust my portfolio",
+            "change my portfolio",
+        )
+    ):
+        return True
+    return False
+
+
+def _macro_environment_solve(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    """Acknowledge selected Health macro scenario and interpret portfolio / allocation implications."""
+    from investment_ami.engines.support.macro_context import resolve_macro_scenario_context
+
+    macro = resolve_macro_scenario_context(ctx)
+    profile = macro.allocation_profile
+    inflation = str(ctx.get("health_inflation") or macro.scenario_params.get("inflation") or "").strip()
+    rate = macro.rate_environment or str(ctx.get("health_rate_env") or "").strip()
+    regime = macro.economic_regime or str(ctx.get("health_regime") or "").strip()
+    valuation = macro.valuation_environment or str(ctx.get("health_valuation") or "").strip()
+    recession_prob = macro.recession_probability
+    # Prefer structured shared macro fields over any stale summary string.
+    rec_bit = (
+        f"Recession {recession_prob * 100:.0f}%"
+        if recession_prob is not None
+        else "Recession n/a"
+    )
+    summary = " · ".join(
+        p for p in (inflation, rate, rec_bit, valuation, regime) if p
+    )
+    if not summary:
+        summary = str(ctx.get("macro_summary") or ctx.get("macro_outlook") or "").strip()
+
+    severe = False
+    if inflation and "high" in inflation.lower():
+        severe = True
+    if rate and "rising" in rate.lower():
+        severe = True
+    if recession_prob is not None and recession_prob >= 0.5:
+        severe = True
+    if valuation and valuation.lower() in ("expensive", "bubble-like", "bubble"):
+        severe = True
+    if regime and regime.lower() == "recession":
+        severe = True
+
+    fwd_lines = _forward_scenario_metric_lines(ctx)
+    eq = float(profile.get("equity") or 0)
+    bonds = float(profile.get("bonds") or 0)
+    reit = float(profile.get("reit") or 0)
+
+    if beginner:
+        direct = f"Your selected macro scenario is **{summary}**."
+        if severe:
+            direct += " That is a **severe stress** set of assumptions, not a normal baseline outlook."
+        if fwd_lines:
+            direct += (
+                f" Under this scenario the Forward Macro model shows about **{ctx.get('forward_modeled_return_display')}** "
+                f"modeled return and **{ctx.get('forward_modeled_volatility_display')}** modeled volatility "
+                "(scenario outputs, not forecasts)."
+            )
+    else:
+        direct = f"Selected macro scenario: **{summary}**."
+        if severe:
+            direct += (
+                " Together these settings are a **severe user-selected stress scenario** "
+                "(high inflation / rising rates / elevated recession odds / rich valuation / recession regime as applicable)."
+            )
+        if fwd_lines:
+            direct += (
+                f" Forward Macro modeled portfolio metrics under this scenario: return **{ctx.get('forward_modeled_return_display')}**, "
+                f"volatility **{ctx.get('forward_modeled_volatility_display')}**, "
+                f"Sharpe **{ctx.get('forward_modeled_sharpe_display')}** "
+                "(scenario/model outputs — not forecasts or historical realized returns)."
+            )
+
+    exposure_bits: list[str] = []
+    if eq >= 50:
+        exposure_bits.append(
+            f"Equity sleeve **{eq:.0f}%** is most exposed to earnings and risk-asset stress in a recession / expensive-valuation setting."
+        )
+    if bonds >= 15 and rate and "rising" in rate.lower():
+        exposure_bits.append(
+            f"Bond sleeve **{bonds:.0f}%** can face duration pressure when rates are rising."
+        )
+    if reit >= 8:
+        exposure_bits.append(
+            f"REIT sleeve **{reit:.0f}%** is typically sensitive to both rates and growth slowdowns."
+        )
+    if not exposure_bits:
+        exposure_bits.append(
+            "Sleeve mix still matters — equities and REITs usually absorb more stress than cash-like ballast."
+        )
+
+    analyst = " ".join(exposure_bits)
+    if fwd_lines:
+        analyst += " " + " ".join(fwd_lines)
+
+    allocation_asked = _asks_allocation_change(question)
+    objective = str(ctx.get("objective") or "").strip()
+    if allocation_asked:
+        alloc_lines = [
+            "Do **not** change your long-term strategic allocation solely because one adverse stress scenario is selected.",
+            "Strategic allocation should stay anchored to your Guided / stated objective"
+            + (f" (**{objective}**)" if objective else "")
+            + "; treat this macro set as a **stress test**, not a new permanent plan.",
+            "Use the scenario for **risk awareness and preparedness** — rebalance only if objective drift, constraints, or your own policy justify it.",
+            "Optimizer Max-Sharpe / Min-Vol corner solutions are mathematical experiments under this scenario — **not** automatic recommendations to concentrate into a single fund.",
+        ]
+        analyst += "\n\n**Allocation interpretation:** " + " ".join(alloc_lines)
+        actions = alloc_lines
+    else:
+        actions = [
+            "Review whether this stress scenario matches your risk tolerance and planning horizon.",
+            "Keep strategic weights tied to Guided / stated objectives; use Forward Macro for scenario awareness.",
+            "Revisit Portfolio Health macro assumptions if any setting was set more severely than intended.",
+        ]
+
+    key_lines = [
+        f"- Inflation: **{inflation or 'n/a'}**",
+        f"- Rates: **{rate or 'n/a'}**",
+        f"- Recession probability: **{(recession_prob * 100):.0f}%**" if recession_prob is not None else "- Recession probability: **n/a**",
+        f"- Valuation: **{valuation or 'n/a'}**",
+        f"- Economic regime: **{regime or 'n/a'}**",
+        f"- Equity / bonds / REIT: **{eq:.0f}%** / **{bonds:.0f}%** / **{reit:.0f}%**",
+    ]
+    for line in fwd_lines[:3]:
+        key_lines.append(f"- {line}")
+
+    tradeoffs = (
+        "**Stress scenario** → lower modeled return / higher modeled vol under Forward Macro assumptions.\n"
+        "**Guided strategic allocation** → long-horizon mix tied to objectives, not one scenario dial.\n"
+        "**Optimizer math** → mean-variance experiment under the selected basis; corner weights are not advice."
+    )
+
+    sections = build_analyst_sections(
+        direct_answer=direct,
+        portfolio_analyst_view=analyst,
+        key_variables="\n".join(key_lines),
+        tradeoffs=tradeoffs,
+        what_if_scenarios="" if beginner else (
+            "- Soften recession probability or valuation → Forward modeled stress typically eases\n"
+            "- Keep Guided targets while monitoring defensive ballast in severe scenarios\n"
+            "- Do not treat Max-Sharpe corner weights as a rebalance instruction"
+        ),
+        recommended_actions=" ".join(actions[:4]),
+        risk_notes=(
+            "Scenario outputs are educational models, not predictions. "
+            "This is not personal financial advice."
+        ),
+        beginner=beginner,
+    )
+
+    computed: dict[str, Any] = {
+        "health_inflation": inflation,
+        "health_rate_env": rate,
+        "health_regime": regime,
+        "health_valuation": valuation,
+        "macro_summary": summary,
+        "allocation_change_asked": allocation_asked,
+        "forward_metrics_are_scenario_outputs": bool(ctx.get("forward_metrics_are_scenario_outputs")),
+    }
+    if recession_prob is not None:
+        computed["recession_probability_pct"] = round(recession_prob * 100, 1)
+    if ctx.get("forward_modeled_return") is not None:
+        computed["forward_modeled_return"] = ctx.get("forward_modeled_return")
+        computed["forward_modeled_volatility"] = ctx.get("forward_modeled_volatility")
+        computed["forward_modeled_sharpe"] = ctx.get("forward_modeled_sharpe")
+
+    return _with_macro_intelligence(
+        InvestmentSolverResult(
+            short_answer=(
+                direct
+                if not allocation_asked
+                else direct + "\n\n" + " ".join(actions)
+            ),
+            analyst_sections=sections,
+            problem_type="macro_environment",
+            model_name="Macro environment analyst",
+            math_idea="Shared Health macro assumptions → Forward Macro scenario metrics + sleeve exposure narrative.",
+            assumptions=[
+                "Uses Portfolio Health shared macro persist keys.",
+                str(ctx.get("forward_metrics_disclaimer") or "Forward metrics are scenario outputs when present."),
+                "Not personal financial advice.",
+            ],
+            confidence_pct=84 if fwd_lines else 78,
+            computed=computed,
+        ),
+        ctx,
+        macro_intent="macro_environment",
+        beginner=beginner,
+        question=question,
+    )
+
+
 def macro_rates_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
     from investment_ami.pipeline.instant import run_instant_engine
 
@@ -940,3 +1189,9 @@ def macro_inflation_answer(ctx: dict[str, Any], *, beginner: bool, question: str
     from investment_ami.pipeline.instant import run_instant_engine
 
     return run_instant_engine("macro_inflation", ctx, beginner=beginner, question=question)
+
+
+def macro_environment_answer(ctx: dict[str, Any], *, beginner: bool, question: str = "") -> InvestmentSolverResult:
+    from investment_ami.pipeline.instant import run_instant_engine
+
+    return run_instant_engine("macro_environment", ctx, beginner=beginner, question=question)
