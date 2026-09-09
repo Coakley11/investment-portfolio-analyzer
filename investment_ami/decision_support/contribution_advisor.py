@@ -193,13 +193,20 @@ def assess_market_data_for_contribution(
     Missing/incomplete prices block precise recommendations.
     Stale cached quotes block by default (caller may surface warning-only later).
     """
+    from investment_ami.decision_support.real_portfolio_snapshot import unpriced_holding_tickers
+
     warnings: list[str] = []
-    if snapshot.unpriced_holdings_count > 0 or snapshot.market_data_status in ("partial", "unavailable"):
+    missing = unpriced_holding_tickers(snapshot)
+    if missing or snapshot.unpriced_holdings_count > 0 or snapshot.market_data_status in ("partial", "unavailable"):
+        named = ", ".join(missing) if missing else "one or more holdings"
         return (
             STATUS_MISSING_PRICES,
             (
-                "One or more holdings are missing current market prices. "
-                "Refresh market data before using this as a precise new-money recommendation.",
+                f"Missing current market prices for: {named}. "
+                "The Real Portfolio Dashboard may still show a cost-basis estimate for these names, "
+                "but Contribution Advisor will not invent a tradeable mark. "
+                "Refresh market data (or fix non-quotable tickers such as CASH / US TREASURY) "
+                "before treating this as a precise new-money recommendation.",
             ),
         )
     age = snapshot.market_data_age_seconds

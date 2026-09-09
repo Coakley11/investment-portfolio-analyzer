@@ -321,6 +321,67 @@ class TestTargetWeightsNormalization(unittest.TestCase):
         self.assertTrue(ok.ok)
 
 
+class TestSnapshotQuotePathAlignment(unittest.TestCase):
+    def test_uses_dashboard_batch_quotes_not_avg_cost_fallback(self) -> None:
+        """Snapshot must share get_latest_quotes with Dashboard and never avg-cost mark."""
+        from unittest.mock import MagicMock, patch
+
+        txns = [
+            _deposit(10_000.0),
+            _buy("VTI", 10, 200.0),
+            _buy("BADTK", 5, 10.0),
+        ]
+        ss = {"portfolio_transactions": txns}
+        provider = MagicMock()
+        provider.get_latest_quotes.return_value = {
+            "VTI": (210.0, "yfinance_batch_close"),
+            "BADTK": (None, ""),
+        }
+        provider.get_spot_quote_freshness.side_effect = lambda sym: (
+            (210.0, "yfinance_batch_close", 1_700_000_000.0) if sym == "VTI" else (None, "", None)
+        )
+        with patch(
+            "investment_market_data.get_market_data_provider",
+            return_value=provider,
+        ):
+            result = build_real_portfolio_snapshot(ss)
+        self.assertTrue(result.ok)
+        assert result.snapshot is not None
+        provider.get_latest_quotes.assert_called()
+        vti = next(h for h in result.snapshot.holdings if h.ticker == "VTI")
+        bad = next(h for h in result.snapshot.holdings if h.ticker == "BADTK")
+        self.assertAlmostEqual(float(vti.current_price or 0), 210.0)
+        self.assertIsNone(bad.current_price)
+        self.assertIn("missing_price", bad.data_quality_flags)
+        # Dashboard would avg-cost BADTK at $10; snapshot must not.
+        self.assertNotAlmostEqual(bad.current_value, 5 * 10.0)
+        from investment_ami.decision_support.real_portfolio_snapshot import unpriced_holding_tickers
+
+        self.assertEqual(unpriced_holding_tickers(result.snapshot), ("BADTK",))
+
+    def test_skip_spot_cash_ticker_flagged_not_fabricated(self) -> None:
+        txns = [
+            _deposit(5_000.0),
+            pe.PortfolioTransaction(
+                id=pe._new_id(),
+                action="buy",
+                date="2024-01-15",
+                ticker="CASH",
+                quantity=100.0,
+                execution_price=1.0,
+                company_name="Cash",
+                asset_type="cash",
+            ).to_record(),
+        ]
+        result = build_real_portfolio_snapshot({"portfolio_transactions": txns}, prices={})
+        self.assertTrue(result.ok)
+        assert result.snapshot is not None
+        cash_pos = next(h for h in result.snapshot.holdings if h.ticker == "CASH")
+        self.assertIsNone(cash_pos.current_price)
+        self.assertIn("missing_price", cash_pos.data_quality_flags)
+        self.assertIn("non_market_quoted_instrument", cash_pos.data_quality_flags)
+
+
 class TestRealPortfolioSnapshotNoMutation(unittest.TestCase):
     def test_build_does_not_mutate_session(self) -> None:
         txns = [_deposit(2000.0), _buy("VTI", 5, 100.0)]

@@ -272,6 +272,48 @@ class TestContributionAdvisorGates(unittest.TestCase):
             unpriced=1,
             flags=("missing_prices",),
         )
+        # Attach an unpriced holding so the warning can name it.
+        from investment_ami.decision_support.real_portfolio_models import RealHoldingSnapshot
+        from datetime import datetime, timezone
+
+        unpriced = RealHoldingSnapshot(
+            ticker="BADTK",
+            name="BADTK",
+            shares=10.0,
+            average_cost=10.0,
+            total_cost_basis=100.0,
+            current_price=None,
+            current_value=0.0,
+            gain_loss_dollars=None,
+            gain_loss_pct=None,
+            current_weight=0.0,
+            target_weight=None,
+            asset_class="ETFs",
+            price_source="",
+            price_as_of=None,
+            data_quality_flags=("missing_price",),
+        )
+        snap = RealPortfolioSnapshot(
+            as_of=snap.as_of,
+            market_data_status="partial",
+            market_data_age_seconds=10,
+            data_source="real_portfolio_engine",
+            total_market_value=snap.total_market_value,
+            total_cost_basis=snap.total_cost_basis,
+            total_gain_loss_dollars=None,
+            total_gain_loss_pct=None,
+            priced_holdings_gain_loss_pct=None,
+            cash=0.0,
+            holdings=snap.holdings + (unpriced,),
+            allocation_by_holding=snap.allocation_by_holding,
+            allocation_by_asset_class={},
+            largest_positions=snap.largest_positions,
+            concentration_metrics={},
+            health_objective="balanced growth",
+            data_quality_flags=("missing_prices",),
+            known_marked_securities_value=5000.0,
+            unpriced_holdings_count=1,
+        )
         result = recommend_contribution_allocation(
             snapshot=snap,
             contribution_amount=500.0,
@@ -279,6 +321,7 @@ class TestContributionAdvisorGates(unittest.TestCase):
         )
         self.assertFalse(result.ok)
         self.assertEqual(result.status, STATUS_MISSING_PRICES)
+        self.assertTrue(any("BADTK" in w for w in result.warnings))
 
     def test_i_stale_prices_block(self) -> None:
         snap = _snapshot_from_values(

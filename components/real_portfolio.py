@@ -23,7 +23,7 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-09-contribution-advisor-v1-instrument-alloc"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-09-contribution-prices-v2-instrument-alloc"
 
 
 def _ss() -> Any:
@@ -398,7 +398,10 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
     from investment_ami.decision_support.contribution_advisor import (
         recommend_contribution_allocation_from_session,
     )
-    from investment_ami.decision_support.real_portfolio_snapshot import build_real_portfolio_snapshot
+    from investment_ami.decision_support.real_portfolio_snapshot import (
+        build_real_portfolio_snapshot,
+        unpriced_holding_tickers,
+    )
 
     built = build_real_portfolio_snapshot(_ss())
     if not built.ok or built.snapshot is None:
@@ -409,11 +412,33 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
         return
 
     snap = built.snapshot
-    if snap.unpriced_holdings_count > 0 or snap.market_data_status in ("partial", "unavailable"):
+    missing = unpriced_holding_tickers(snap)
+    if missing or snap.unpriced_holdings_count > 0 or snap.market_data_status in ("partial", "unavailable"):
+        named = ", ".join(missing) if missing else "one or more holdings"
         st.warning(
-            "Some holdings are missing current prices. Refresh market data before treating "
-            "any dollar recommendation as precise."
+            f"**Missing market marks for:** {named}. "
+            "Dashboard/Positions may still show a cost-basis estimate for those names "
+            "(avg-cost fallback). Contribution Advisor uses the ledger snapshot **without** "
+            "inventing prices — precise $ allocation stays blocked until marks are available. "
+            "Non-quotable tickers (CASH, US TREASURY, …) need a different instrument treatment."
         )
+        # Show snapshot status so the user can compare with Positions.
+        priced = [h for h in snap.holdings if h.current_price is not None]
+        if priced:
+            src = ", ".join(
+                f"{h.ticker} @ {pe.format_currency(float(h.current_price))} ({h.price_source or 'quote'})"
+                for h in priced[:8]
+            )
+            st.caption(f"Priced marks in use: {src}")
+        if missing:
+            st.caption(
+                "Unpriced ledger positions: "
+                + ", ".join(
+                    f"{h.ticker} ({h.shares:g} sh, flags={','.join(h.data_quality_flags) or 'none'})"
+                    for h in snap.holdings
+                    if h.ticker in missing
+                )
+            )
 
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -423,7 +448,7 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
             value=1000.0,
             step=100.0,
             key="contribution_advisor_amount",
-            help="External new money to invest — not treated as investment profit.",
+            help="External new money to invest — not treated as investment profit. Calculate does not record a deposit or buy.",
         )
     with c2:
         source_label = st.selectbox(
@@ -454,9 +479,15 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
             st.warning("No priced holdings available.")
             return
         st.markdown("**My target weights (%)** — must sum near 100.")
+        st.caption(
+            "Draft fields below are **seeded from your current portfolio weights** as a starting "
+            "point — not Health objective weights, not optimizer corners, and not a previously "
+            "saved personal target. Edit them to define your explicit target."
+        )
         saved = _ss().get(SESSION_CONTRIBUTION_TARGETS_KEY)
         if not isinstance(saved, dict):
             saved = {}
+        # Prefer last edited explicit draft; otherwise seed from current mix (labeled above).
         cols = st.columns(min(4, max(1, len(priced) + (1 if snap.cash > 0 else 0))))
         explicit = {}
         for i, h in enumerate(priced):
@@ -504,6 +535,7 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
     )
     payload = result.to_dict()
     _ss()["_contribution_advisor_result"] = payload
+    # Decision support only — never write deposits/buys from Calculate.
     if not result.ok:
         st.error(result.explanation)
         for w in result.warnings:
@@ -514,6 +546,10 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
 
 def _render_contribution_result(payload: dict) -> None:
     st.success(payload.get("explanation") or "Allocation ready.")
+    st.caption(
+        "Decision support only — this calculation does **not** record a cash deposit or buy "
+        "in your transaction ledger, and does not count the contribution as investment profit."
+    )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Portfolio before", pe.format_currency(float(payload.get("portfolio_value_before") or 0)))
     m2.metric("New contribution", pe.format_currency(float(payload.get("contribution_amount") or 0)))
@@ -529,10 +565,12 @@ def _render_contribution_result(payload: dict) -> None:
             [
                 {
                     "Holding": r["ticker"],
+                    "Current Value": round(float(r["current_value"]), 2),
                     "Current %": round(100 * float(r["current_weight"]), 2),
                     "Target %": round(100 * float(r["target_weight"]), 2),
                     "Drift pp": round(100 * float(r["drift"]), 2),
                     "Add New Money": round(float(r["recommended_add"]), 2),
+                    "Projected Value": round(float(r["projected_value"]), 2),
                     "Projected %": round(100 * float(r["projected_weight"]), 2),
                     "Remaining drift pp": round(100 * float(r["remaining_drift"]), 2),
                 }

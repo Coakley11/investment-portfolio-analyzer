@@ -8,7 +8,7 @@ Does not read holdings_df, planning sidebar value keys, presets, or demo portfol
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -147,31 +147,79 @@ def _quote_for_ticker(
     Returns price, source, price_as_of, cache_age_seconds.
     price_as_of is documented as UTC time the quote was cached or fetched — not exchange time.
     """
-    sym = str(ticker or "").strip().upper()
+    batch = _batch_quotes_for_tickers([ticker], prices=prices, as_of=as_of)
+    return batch.get(str(ticker or "").strip().upper(), (None, "", None, None))
+
+
+def _batch_quotes_for_tickers(
+    tickers: Sequence[str],
+    *,
+    prices: dict[str, float] | None,
+    as_of: datetime,
+) -> dict[str, tuple[float | None, str, datetime | None, float | None]]:
+    """
+    Resolve quotes using the **same provider path as Real Portfolio Dashboard**
+    (``get_latest_quotes`` / ``portfolio_engine._fetch_prices``).
+
+    Never falls back to average cost — missing quotes stay missing for contribution safety.
+    """
+    syms = [str(t or "").strip().upper() for t in tickers if str(t or "").strip()]
+    syms = list(dict.fromkeys(syms))
+    out: dict[str, tuple[float | None, str, datetime | None, float | None]] = {}
+    if not syms:
+        return out
+
     if prices is not None:
-        if sym in prices:
-            px = prices[sym]
-            if px is None or float(px) <= 0:
-                return None, "injected", None, None
-            return float(px), "injected_test", as_of, 0.0
-        return None, "", None, None
+        for sym in syms:
+            if sym in prices:
+                try:
+                    px = float(prices[sym])
+                except (TypeError, ValueError):
+                    px = None
+                if px is not None and px > 0:
+                    out[sym] = (px, "injected_test", as_of, 0.0)
+                else:
+                    out[sym] = (None, "injected", None, None)
+            else:
+                out[sym] = (None, "", None, None)
+        return out
+
     try:
         from investment_market_data import get_market_data_provider
+        import time
 
         provider = get_market_data_provider()
-        px, src, stored_at = provider.get_spot_quote_freshness(sym)
-        price_as_of = _stored_at_to_utc(stored_at) or as_of
-        age = None
-        if stored_at is not None:
-            import time
-
-            age = max(0.0, time.time() - float(stored_at))
-        if px is None or float(px) <= 0:
-            return None, str(src or ""), price_as_of, age
-        return float(px), str(src or "market_data_provider"), price_as_of, age
+        # Dashboard-aligned batch spot fetch (shared session cache).
+        batch = provider.get_latest_quotes(syms)
+        now = time.time()
+        for sym in syms:
+            px, src = batch.get(sym, (None, ""))
+            if px is None or float(px) <= 0:
+                out[sym] = (None, str(src or ""), None, None)
+                continue
+            # Cache metadata for age (hit after batch write; no extra Yahoo call).
+            _px2, src2, stored_at = provider.get_spot_quote_freshness(sym)
+            price_as_of = _stored_at_to_utc(stored_at) or as_of
+            age = max(0.0, now - float(stored_at)) if stored_at is not None else 0.0
+            out[sym] = (
+                float(_px2 if _px2 is not None else px),
+                str(src2 or src or "market_data_provider"),
+                price_as_of,
+                age,
+            )
     except Exception:
-        return None, "", None, None
+        for sym in syms:
+            out.setdefault(sym, (None, "", None, None))
+    return out
 
+
+def unpriced_holding_tickers(snapshot: RealPortfolioSnapshot) -> tuple[str, ...]:
+    """Tickers on the snapshot that lack a usable market mark (not avg-cost fallback)."""
+    out: list[str] = []
+    for h in snapshot.holdings:
+        if h.current_price is None or "missing_price" in (h.data_quality_flags or ()):
+            out.append(str(h.ticker).strip().upper())
+    return tuple(out)
 
 def _ledger_has_open_securities(transactions: list[pe.PortfolioTransaction]) -> bool:
     ledger, _cash = pe._ledger_from_transactions(transactions)
@@ -361,6 +409,13 @@ def build_real_portfolio_snapshot(
     for k, v in extract_numeric_weight_map(target_weights_raw).items():
         target_by_ticker[str(k).upper()] = float(v)
 
+    ledger_tickers = [
+        str(t).strip().upper()
+        for t, entry in ledger.items()
+        if float(entry.get("shares") or 0.0) > 1e-9
+    ]
+    quote_map = _batch_quotes_for_tickers(ledger_tickers, prices=prices, as_of=as_of)
+
     for ticker, entry in sorted(ledger.items()):
         shares = float(entry.get("shares") or 0.0)
         if shares <= 1e-9:
@@ -375,7 +430,7 @@ def build_real_portfolio_snapshot(
         asset_class = pe.economic_exposure_bucket(asset_type, ticker)
         company = str(entry.get("company_name") or pe.infer_company_name(ticker))
 
-        px, src, price_as_of, age = _quote_for_ticker(ticker, prices=prices, as_of=as_of)
+        px, src, price_as_of, age = quote_map.get(ticker, (None, "", None, None))
         if age is not None:
             quote_ages.append(age)
 
@@ -383,6 +438,9 @@ def build_real_portfolio_snapshot(
         if px is None or px <= 0:
             unpriced_count += 1
             flags.append("missing_price")
+            # Distinguish never-quoted / SKIP_SPOT labels from ordinary quote failures.
+            if str(ticker).strip().upper() in ("CASH", "US TREASURY", "MORTGAGE", "CORP BOND"):
+                flags.append("non_market_quoted_instrument")
             holding = RealHoldingSnapshot(
                 ticker=ticker,
                 name=company,
@@ -483,9 +541,10 @@ def build_real_portfolio_snapshot(
     sorted_holdings = sorted(holdings, key=lambda h: h.current_value, reverse=True)
     largest = tuple(sorted_holdings[:5])
 
+    priced_count = sum(1 for h in holdings if h.current_price is not None and float(h.current_price) > 0)
     max_age = max(quote_ages) if quote_ages else None
     market_status = _resolve_market_data_status(
-        priced_count=len(weights_list),
+        priced_count=priced_count,
         total_positions=len(holdings),
         max_age=max_age,
         any_quote=bool(quote_ages),
