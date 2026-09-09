@@ -24,8 +24,10 @@ STREAMLIT_APP_MACRO_ENGINE_EXPORTS: tuple[str, ...] = (
     "ensure_shared_macro_session_defaults",
     "harvest_shared_macro_widgets_to_persist",
     "harvest_forward_horizon_widget_to_persist",
+    "harvest_mc_horizon_widget_to_persist",
     "render_shared_macro_assumption_controls",
     "render_forward_projection_horizon_slider",
+    "render_monte_carlo_projection_years_slider",
 )
 
 _MODULE_NAME = "components.macro_engine"

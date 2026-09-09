@@ -160,6 +160,79 @@ def render_forward_projection_horizon_slider() -> int:
     return int(value)
 
 
+MC_HORIZON_MIN = 1
+MC_HORIZON_MAX = 15
+MC_HORIZON_FALLBACK = 5
+MC_HORIZON_PERSIST_KEY = "mc_years"
+
+
+def clamp_mc_horizon_years(
+    raw: Any,
+    *,
+    min_years: int = MC_HORIZON_MIN,
+    max_years: int = MC_HORIZON_MAX,
+    fallback: int = MC_HORIZON_FALLBACK,
+) -> int:
+    """Clamp a horizon into the Monte Carlo slider range; invalid values use fallback."""
+    return clamp_forward_horizon_years(
+        raw, min_years=min_years, max_years=max_years, fallback=fallback
+    )
+
+
+def seed_mc_horizon_from_plan_if_needed(session_state: Any | None = None) -> int:
+    """
+    First initialization only: seed Monte Carlo horizon from persisted ``plan_horizon``.
+
+    Independent of ``fwd_years``. Does not overwrite an existing MC-page value.
+    """
+    ss = st.session_state if session_state is None else session_state
+    persist = MC_HORIZON_PERSIST_KEY
+    if persist in ss:
+        ss[persist] = clamp_mc_horizon_years(ss.get(persist))
+        return int(ss[persist])
+    plan = planning_horizon_years(ss)
+    if plan is None:
+        ss[persist] = MC_HORIZON_FALLBACK
+    else:
+        ss[persist] = clamp_mc_horizon_years(plan)
+    return int(ss[persist])
+
+
+def harvest_mc_horizon_widget_to_persist(session_state: Any | None = None) -> None:
+    """Copy live Monte Carlo horizon widget → persist before Streamlit tears the widget down."""
+    ss = st.session_state if session_state is None else session_state
+    wkey = macro_widget_key(MC_HORIZON_PERSIST_KEY)
+    if wkey in ss:
+        ss[MC_HORIZON_PERSIST_KEY] = clamp_mc_horizon_years(ss[wkey])
+
+
+def _on_mc_horizon_change() -> None:
+    harvest_mc_horizon_widget_to_persist()
+
+
+def render_monte_carlo_projection_years_slider() -> int:
+    """Monte Carlo Projection years — seeds from planning horizon once, then persists overrides."""
+    seed_mc_horizon_from_plan_if_needed()
+    persist = MC_HORIZON_PERSIST_KEY
+    wkey = macro_widget_key(persist)
+    if wkey not in st.session_state:
+        st.session_state[wkey] = st.session_state[persist]
+    value = st.slider(
+        "Projection years",
+        MC_HORIZON_MIN,
+        MC_HORIZON_MAX,
+        step=1,
+        key=wkey,
+        on_change=_on_mc_horizon_change,
+        help=(
+            "Defaults from your planning Investment time horizon. "
+            "Changing this slider is a Monte Carlo override and stays independent of Forward horizon."
+        ),
+    )
+    harvest_mc_horizon_widget_to_persist()
+    return int(value)
+
+
 def harvest_shared_macro_widgets_to_persist(session_state: Any | None = None) -> None:
     """
     Copy any live macro widget values into canonical persist keys.
@@ -207,6 +280,7 @@ def simulate_macro_widget_teardown(session_state: dict[str, Any]) -> None:
     for key in SHARED_MACRO_PERSIST_KEYS:
         session_state.pop(macro_widget_key(key), None)
     session_state.pop(macro_widget_key(FORWARD_HORIZON_PERSIST_KEY), None)
+    session_state.pop(macro_widget_key(MC_HORIZON_PERSIST_KEY), None)
 
 
 def _selectbox_persisted(

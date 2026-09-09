@@ -118,6 +118,7 @@ _PERSIST_SCALAR_KEYS = (
     "plan_monthly_provided",
     "plan_horizon",
     "fwd_years",
+    "mc_years",
     "plan_risk",
     "investment_plan_generated",
     "investment_plan_applied_portfolio_value",

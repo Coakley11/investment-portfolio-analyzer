@@ -118,8 +118,10 @@ macro_assumptions_from_session = _macro_engine.macro_assumptions_from_session
 ensure_shared_macro_session_defaults = _macro_engine.ensure_shared_macro_session_defaults
 harvest_shared_macro_widgets_to_persist = _macro_engine.harvest_shared_macro_widgets_to_persist
 harvest_forward_horizon_widget_to_persist = _macro_engine.harvest_forward_horizon_widget_to_persist
+harvest_mc_horizon_widget_to_persist = _macro_engine.harvest_mc_horizon_widget_to_persist
 render_shared_macro_assumption_controls = _macro_engine.render_shared_macro_assumption_controls
 render_forward_projection_horizon_slider = _macro_engine.render_forward_projection_horizon_slider
+render_monte_carlo_projection_years_slider = _macro_engine.render_monte_carlo_projection_years_slider
 from components.monthly_review import render_monthly_review_workflow
 from components.rebalancing_panel import render_rebalancing_panel
 from components.ui_helpers import (
@@ -2072,6 +2074,7 @@ ensure_shared_macro_session_defaults()
 # still copies `_w_*` → canonical `health_*` before Streamlit tears widgets down.
 harvest_shared_macro_widgets_to_persist()
 harvest_forward_horizon_widget_to_persist()
+harvest_mc_horizon_widget_to_persist()
 HELP = HELP_BEGINNER if beginner_mode else HELP_ADVANCED
 render_branded_header(beginner_mode)
 try:
@@ -3574,7 +3577,7 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
         if st.session_state.get("run_mc", False):
             mc1, mc2 = st.columns(2)
             with mc1:
-                mc_years = st.slider("Projection years", 1, 15, 5)
+                mc_years = render_monte_carlo_projection_years_slider()
             with mc2:
                 mc_sims = st.selectbox("Simulations", [200, 500, 1000], index=2)
                 mc_target = st.number_input(
