@@ -732,11 +732,15 @@ def ensure_ami_forward_scenario_metrics(
     """
     Macro-only: ensure Forward modeled metrics are on ``ctx``.
 
-    Uses the shared canonical Forward helper (reuse valid cache or compute on demand).
+    Uses the shared canonical Forward helper (reuse valid cache, or materialize
+    engine inputs from holdings/session + compute on demand).
     Returns True when metrics are present after the call.
 
     ``session_state`` should be a plain mapping in unit tests. In the live app, omit it
     to use ``st.session_state`` (never copy that proxy onto ``ctx``).
+
+    Does **not** require a prior Forward Macro / Analytics page visit: missing
+    ``_forward_engine_inputs`` is rebuilt from authoritative portfolio session state.
     """
     if isinstance(session_state, dict) and isinstance(session_state.get("_ami_forward_scenario_metrics"), dict):
         _apply_forward_metric_fields(ctx, session_state["_ami_forward_scenario_metrics"])

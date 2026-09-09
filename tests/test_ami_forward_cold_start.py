@@ -20,8 +20,10 @@ from components.macro_engine import (
     FORWARD_PROJECTION_KEY,
     SHARED_MACRO_DEFAULTS,
     build_canonical_forward_fingerprint,
+    ensure_forward_engine_inputs,
     macro_assumptions_from_session,
     peek_valid_forward_projection,
+    portfolio_calc_params_from_session,
     resolve_canonical_forward_projection,
     store_forward_engine_inputs,
 )
@@ -84,7 +86,19 @@ def _sync_streamlit_session(ss: dict) -> None:
         st.session_state[key] = val
 
 
-def _fresh_session(**extra) -> dict:
+def _fake_price_history(symbols, start, end=None):
+    """Offline market-data stand-in used by true cold-start materialization."""
+    rng = np.random.default_rng(21)
+    idx = pd.date_range(str(start)[:10], periods=900, freq="B")
+    cols = [str(t).strip().upper() for t in symbols]
+    data = {
+        t: 100.0 * np.cumprod(1.0 + rng.normal(0.0004, 0.01, len(idx))) for t in cols
+    }
+    return pd.DataFrame(data, index=idx)
+
+
+def _base_session(**extra) -> dict:
+    """Authoritative portfolio + macros only — no Forward page / engine-input cache."""
     ss = dict(SHARED_MACRO_DEFAULTS)
     _frozen_macros(ss)
     ss[FORWARD_HORIZON_PERSIST_KEY] = 10
@@ -92,31 +106,53 @@ def _fresh_session(**extra) -> dict:
         [
             {"Ticker": "VTI", "Weight (%)": 40.0, "Asset Type": "Equity"},
             {"Ticker": "VXUS", "Weight (%)": 20.0, "Asset Type": "Equity"},
-            {"Ticker": "BND", "Weight (%)": 30.0, "Asset Type": "Bond"},
+            {"Ticker": "BND", "Weight (%)": 30.0, "Asset Type": "Bonds"},
             {"Ticker": "VNQ", "Weight (%)": 10.0, "Asset Type": "REIT"},
         ]
     )
-    ss["investment_active_tab"] = "Portfolio Health"
+    ss["investment_active_tab"] = "Goal"
     ss["portfolio_objective"] = "balanced growth"
     ss["risk_free_pct"] = 4.0
-    metrics, mean_rets, cov = _engine_bundle()
-    store_forward_engine_inputs(
-        ss,
-        metrics=metrics,
-        mean_returns=mean_rets,
-        cov=cov,
-        tickers=_TICKERS,
-        weights=_W,
-        asset_types=_TYPES,
-        start=_START,
-        end=_END,
-        initial_value=_IV,
-        risk_free_rate=_RF,
-    )
-    # Explicitly no prior Forward UI visit.
+    ss["analysis_start_date"] = _START
+    ss["analysis_end_date"] = _END
+    ss["sidebar_portfolio_value"] = _IV
+    ss.pop(FORWARD_ENGINE_INPUTS_KEY, None)
     ss.pop(FORWARD_PROJECTION_KEY, None)
     ss.pop(FORWARD_PROJECTION_FP_KEY, None)
     ss.update(extra)
+    return ss
+
+
+def _fresh_session(**extra) -> dict:
+    """Session with optional pre-seeded engine cache (invalidation / parity tests)."""
+    ss = _base_session(**extra)
+    if FORWARD_ENGINE_INPUTS_KEY not in ss:
+        metrics, mean_rets, cov = _engine_bundle()
+        store_forward_engine_inputs(
+            ss,
+            metrics=metrics,
+            mean_returns=mean_rets,
+            cov=cov,
+            tickers=_TICKERS,
+            weights=_W,
+            asset_types=_TYPES,
+            start=_START,
+            end=_END,
+            initial_value=_IV,
+            risk_free_rate=_RF,
+        )
+    # Explicitly no prior Forward UI visit.
+    ss.pop(FORWARD_PROJECTION_KEY, None)
+    ss.pop(FORWARD_PROJECTION_FP_KEY, None)
+    _sync_streamlit_session(ss)
+    return ss
+
+
+def _true_cold_start_session(**extra) -> dict:
+    """Fresh session with NO ``_forward_engine_inputs`` (matches live reboot path)."""
+    ss = _base_session(**extra)
+    assert FORWARD_ENGINE_INPUTS_KEY not in ss
+    assert FORWARD_PROJECTION_KEY not in ss
     _sync_streamlit_session(ss)
     return ss
 
@@ -133,20 +169,50 @@ class TestAmiForwardColdStart(unittest.TestCase):
         self.assertIsNotNone(ctx.get("forward_modeled_volatility"))
         self.assertIsNotNone(ctx.get("forward_modeled_sharpe"))
 
+    def test_01b_true_cold_start_without_engine_input_cache(self) -> None:
+        """Regression: live reboot has holdings/macros but no ``_forward_engine_inputs``."""
+        ss = _true_cold_start_session()
+        self.assertNotIn(FORWARD_ENGINE_INPUTS_KEY, ss)
+        ctx = build_investment_applied_math_context("Portfolio Health", ss)
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            ok = ensure_ami_forward_scenario_metrics(ctx, ss)
+        self.assertTrue(ok)
+        self.assertIsNotNone(ctx.get("forward_modeled_return"))
+        self.assertIsNotNone(ctx.get("forward_modeled_volatility"))
+        self.assertIsNotNone(ctx.get("forward_modeled_sharpe"))
+        self.assertIsInstance(ss.get(FORWARD_ENGINE_INPUTS_KEY), dict)
+
+    def test_01c_resolve_materializes_from_holdings_not_page_cache(self) -> None:
+        ss = _true_cold_start_session()
+        params = portfolio_calc_params_from_session(ss)
+        assert params is not None
+        self.assertEqual(params["tickers"], _TICKERS)
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history) as fetch:
+            fwd = resolve_canonical_forward_projection(ss)
+            self.assertEqual(fetch.call_count, 1)
+        self.assertIsNotNone(fwd)
+        # Second resolve reuses materialized cache — no second fetch.
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=AssertionError("should use cache")):
+            fwd2 = resolve_canonical_forward_projection(ss)
+        self.assertIs(fwd2, fwd)
+
     def test_02_forward_page_never_visited_metrics_available(self) -> None:
-        ss = _fresh_session()
+        ss = _true_cold_start_session()
         self.assertIsNone(ss.get(FORWARD_PROJECTION_KEY))
-        result = _macro_environment_solve(
-            build_investment_applied_math_context("Portfolio Health", ss),
-            beginner=False,
-            question=_ORIG,
-        )
+        self.assertNotIn(FORWARD_ENGINE_INPUTS_KEY, ss)
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            result = _macro_environment_solve(
+                build_investment_applied_math_context("Portfolio Health", ss),
+                beginner=False,
+                question=_ORIG,
+            )
         text = (result.short_answer or "") + str(result.analyst_sections or {})
         self.assertIn("Forward modeled", text)
         self.assertIn("forward_modeled_return", result.computed or {})
         import streamlit as st
 
         self.assertIsNotNone(st.session_state.get(FORWARD_PROJECTION_KEY))
+        self.assertIsInstance(st.session_state.get(FORWARD_ENGINE_INPUTS_KEY), dict)
 
     def test_03_existing_valid_projection_reused(self) -> None:
         ss = _fresh_session()
@@ -175,14 +241,17 @@ class TestAmiForwardColdStart(unittest.TestCase):
         first = resolve_canonical_forward_projection(ss)
         assert first is not None
         old_fp = ss[FORWARD_PROJECTION_FP_KEY]
-        inputs = dict(ss[FORWARD_ENGINE_INPUTS_KEY])
-        inputs["tickers"] = ["VTI", "BND", "VXUS", "VNQ"]  # order change
-        inputs["weights"] = np.array([0.40, 0.30, 0.20, 0.10])
-        ss[FORWARD_ENGINE_INPUTS_KEY] = inputs
-        # Keep stale projection+fp deliberately.
-        peeked = peek_valid_forward_projection(ss)
-        self.assertIsNone(peeked)
-        second = resolve_canonical_forward_projection(ss)
+        ss["holdings_df"] = pd.DataFrame(
+            [
+                {"Ticker": "VTI", "Weight (%)": 50.0, "Asset Type": "Equity"},
+                {"Ticker": "VXUS", "Weight (%)": 10.0, "Asset Type": "Equity"},
+                {"Ticker": "BND", "Weight (%)": 30.0, "Asset Type": "Bonds"},
+                {"Ticker": "VNQ", "Weight (%)": 10.0, "Asset Type": "REIT"},
+            ]
+        )
+        self.assertIsNone(peek_valid_forward_projection(ss))
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            second = resolve_canonical_forward_projection(ss)
         assert second is not None
         self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
 
@@ -190,22 +259,57 @@ class TestAmiForwardColdStart(unittest.TestCase):
         ss = _fresh_session()
         resolve_canonical_forward_projection(ss)
         old_fp = ss[FORWARD_PROJECTION_FP_KEY]
-        inputs = dict(ss[FORWARD_ENGINE_INPUTS_KEY])
-        inputs["weights"] = np.array([0.50, 0.10, 0.30, 0.10])
-        ss[FORWARD_ENGINE_INPUTS_KEY] = inputs
+        ss["holdings_df"] = pd.DataFrame(
+            [
+                {"Ticker": "VTI", "Weight (%)": 55.0, "Asset Type": "Equity"},
+                {"Ticker": "VXUS", "Weight (%)": 5.0, "Asset Type": "Equity"},
+                {"Ticker": "BND", "Weight (%)": 30.0, "Asset Type": "Bonds"},
+                {"Ticker": "VNQ", "Weight (%)": 10.0, "Asset Type": "REIT"},
+            ]
+        )
         self.assertIsNone(peek_valid_forward_projection(ss))
-        resolve_canonical_forward_projection(ss)
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            resolve_canonical_forward_projection(ss)
         self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
 
     def test_07_risk_free_change_invalidates(self) -> None:
         ss = _fresh_session()
         resolve_canonical_forward_projection(ss)
         old_fp = ss[FORWARD_PROJECTION_FP_KEY]
-        inputs = dict(ss[FORWARD_ENGINE_INPUTS_KEY])
-        inputs["risk_free_rate"] = 0.055
-        ss[FORWARD_ENGINE_INPUTS_KEY] = inputs
+        ss["risk_free_pct"] = 5.5
         self.assertIsNone(peek_valid_forward_projection(ss))
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            resolve_canonical_forward_projection(ss)
+        self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
+
+    def test_07b_lookback_change_invalidates(self) -> None:
+        ss = _fresh_session()
         resolve_canonical_forward_projection(ss)
+        old_fp = ss[FORWARD_PROJECTION_FP_KEY]
+        ss["analysis_start_date"] = "2015-01-01"
+        self.assertIsNone(peek_valid_forward_projection(ss))
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            resolve_canonical_forward_projection(ss)
+        self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
+
+    def test_07c_years_change_invalidates(self) -> None:
+        ss = _fresh_session()
+        resolve_canonical_forward_projection(ss)
+        old_fp = ss[FORWARD_PROJECTION_FP_KEY]
+        ss[FORWARD_HORIZON_PERSIST_KEY] = 7
+        self.assertIsNone(peek_valid_forward_projection(ss))
+        second = resolve_canonical_forward_projection(ss)
+        assert second is not None
+        self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
+
+    def test_07d_initial_value_change_invalidates(self) -> None:
+        ss = _fresh_session()
+        resolve_canonical_forward_projection(ss)
+        old_fp = ss[FORWARD_PROJECTION_FP_KEY]
+        ss["sidebar_portfolio_value"] = 50_000.0
+        self.assertIsNone(peek_valid_forward_projection(ss))
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            resolve_canonical_forward_projection(ss)
         self.assertNotEqual(ss[FORWARD_PROJECTION_FP_KEY], old_fp)
 
     def test_08_ami_matches_canonical_helper(self) -> None:
@@ -344,15 +448,22 @@ class TestAmiForwardColdStart(unittest.TestCase):
         self.assertEqual(ss[FORWARD_PROJECTION_FP_KEY], fp)
 
     def test_end_to_end_macro_question_cold_start(self) -> None:
-        ss = _fresh_session()
+        import streamlit as st
+
+        ss = _true_cold_start_session()
+        self.assertNotIn(FORWARD_ENGINE_INPUTS_KEY, ss)
+        self.assertNotIn(FORWARD_ENGINE_INPUTS_KEY, st.session_state)
         ctx = build_investment_applied_math_context("Portfolio Health", ss)
-        pair = solve_instant_insight(_ORIG, ctx)
+        with mock.patch("portfolio_core.fetch_price_history", side_effect=_fake_price_history):
+            pair = solve_instant_insight(_ORIG, ctx)
         assert pair is not None
         _, result = pair
         text = (result.short_answer or "").lower()
         self.assertIn("high inflation", text)
         self.assertIn("forward modeled", text)
         self.assertIn("-", text)  # negative return under stress
+        # Live ensure path writes to st.session_state (not the detached ss copy).
+        self.assertIsInstance(st.session_state.get(FORWARD_ENGINE_INPUTS_KEY), dict)
 
     def test_16_context_json_safe_with_streamlit_session_proxy(self) -> None:
         """Regression: never embed SessionStateProxy on AMI ctx (live TypeError)."""

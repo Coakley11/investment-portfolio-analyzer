@@ -506,7 +506,7 @@ def store_forward_engine_inputs(
     initial_value: float,
     risk_free_rate: float,
 ) -> None:
-    """Persist analytics inputs so AMI/MC/Optimizer can resolve Forward without re-fetching."""
+    """Cache analytics inputs (optimization only — not required for correctness)."""
     import numpy as np
 
     ss = st.session_state if session_state is None else session_state
@@ -524,6 +524,193 @@ def store_forward_engine_inputs(
     }
 
 
+def _iso_date(value: Any) -> str | None:
+    """Normalize date / datetime / ISO string to YYYY-MM-DD."""
+    if value is None or value == "":
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return str(value.isoformat())[:10]
+        except Exception:
+            pass
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _parse_holdings_arrays(session_state: Any) -> tuple[list[str], Any, list[str]] | None:
+    """Tickers / decimal weights / asset types from authoritative ``holdings_df``."""
+    import numpy as np
+    import pandas as pd
+
+    df = _session_get(session_state, "holdings_df")
+    if df is None:
+        return None
+    try:
+        if not isinstance(df, pd.DataFrame) or df.empty or "Ticker" not in df.columns:
+            return None
+        clean = df.dropna(subset=["Ticker"]).copy()
+        clean["Ticker"] = clean["Ticker"].astype(str).str.strip().str.upper()
+        clean = clean[clean["Ticker"] != ""]
+        if clean.empty:
+            return None
+        if "Weight (%)" in clean.columns:
+            wp = clean["Weight (%)"].fillna(0).astype(float).to_numpy()
+        else:
+            wp = np.zeros(len(clean), dtype=float)
+        weights = (
+            np.ones(len(clean), dtype=float) / len(clean)
+            if float(wp.sum()) <= 0
+            else core.normalize_weights(wp / 100.0)
+        )
+        if "Asset Type" in clean.columns:
+            types = [str(a) if a is not None and str(a).strip() else "Equity" for a in clean["Asset Type"].tolist()]
+        else:
+            types = ["Equity"] * len(clean)
+        return clean["Ticker"].tolist(), weights, types
+    except Exception:
+        return None
+
+
+def portfolio_calc_params_from_session(session_state: Any | None = None) -> dict[str, Any] | None:
+    """
+    Authoritative Forward calculation inputs from portfolio/session state.
+
+    Does not require Forward/Analytics page execution or ``_forward_engine_inputs``.
+    """
+    import datetime as dt
+
+    ss = st.session_state if session_state is None else session_state
+    parsed = _parse_holdings_arrays(ss)
+    if parsed is None:
+        return None
+    tickers, weights, asset_types = parsed
+
+    end = _iso_date(_session_get(ss, "analysis_end_date")) or dt.date.today().isoformat()
+    start = _iso_date(_session_get(ss, "analysis_start_date"))
+    if not start:
+        try:
+            end_d = dt.date.fromisoformat(str(end)[:10])
+            start = (end_d - dt.timedelta(days=365 * 5)).isoformat()
+        except Exception:
+            start = "2018-01-01"
+
+    rf_pct = _session_get(ss, "risk_free_pct", 4.0)
+    try:
+        risk_free_rate = float(rf_pct) / 100.0
+    except (TypeError, ValueError):
+        risk_free_rate = 0.04
+
+    iv_raw = _session_get(ss, "sidebar_portfolio_value")
+    if iv_raw is None:
+        iv_raw = _session_get(ss, "initial_value", 100_000.0)
+    try:
+        initial_value = float(iv_raw)
+    except (TypeError, ValueError):
+        initial_value = 100_000.0
+    if initial_value <= 0:
+        initial_value = 100_000.0
+
+    return {
+        "tickers": tickers,
+        "weights": weights,
+        "asset_types": asset_types,
+        "start": str(start),
+        "end": str(end),
+        "initial_value": float(initial_value),
+        "risk_free_rate": float(risk_free_rate),
+    }
+
+
+def _engine_inputs_match_params(inputs: dict[str, Any], params: dict[str, Any]) -> bool:
+    """True when cached engine bundle still matches authoritative portfolio params."""
+    import numpy as np
+
+    try:
+        t_in = tuple(str(t).strip().upper() for t in (inputs.get("tickers") or []))
+        t_p = tuple(str(t).strip().upper() for t in (params.get("tickers") or []))
+        if t_in != t_p or not t_in:
+            return False
+        w_in = tuple(round(float(x), 8) for x in np.asarray(inputs.get("weights"), dtype=float).ravel())
+        w_p = tuple(round(float(x), 8) for x in np.asarray(params.get("weights"), dtype=float).ravel())
+        if w_in != w_p:
+            return False
+        if str(inputs.get("start") or "") != str(params.get("start") or ""):
+            return False
+        if str(inputs.get("end") or "") != str(params.get("end") or ""):
+            return False
+        if round(float(inputs.get("risk_free_rate") or 0.0), 8) != round(float(params["risk_free_rate"]), 8):
+            return False
+        if round(float(inputs.get("initial_value") or 0.0), 2) != round(float(params["initial_value"]), 2):
+            return False
+        if inputs.get("metrics") is None:
+            return False
+        mean_returns = np.asarray(inputs.get("mean_returns"), dtype=float)
+        cov = np.asarray(inputs.get("cov"), dtype=float)
+        if mean_returns.size == 0 or cov.size == 0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def ensure_forward_engine_inputs(session_state: Any | None = None) -> dict[str, Any] | None:
+    """
+    Return Forward engine inputs from cache or build them from session portfolio state.
+
+    ``store_forward_engine_inputs`` is an optimization populated when analytics load.
+    Correctness does **not** require a prior Forward / Analytics / MC / Optimizer visit:
+    missing or stale cache is rebuilt via ``portfolio_core.fetch_price_history`` and the
+    same μ/Σ / metrics path the Forward UI uses.
+    """
+    import numpy as np
+
+    ss = st.session_state if session_state is None else session_state
+    params = portfolio_calc_params_from_session(ss)
+    if params is None:
+        return None
+
+    existing = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
+    if isinstance(existing, dict) and _engine_inputs_match_params(existing, params):
+        return existing
+
+    tickers = list(params["tickers"])
+    weights = np.asarray(params["weights"], dtype=float)
+    asset_types = list(params["asset_types"])
+    start = str(params["start"])
+    end = str(params["end"])
+    initial_value = float(params["initial_value"])
+    risk_free_rate = float(params["risk_free_rate"])
+    try:
+        prices = core.fetch_price_history(tickers, start, end)
+        returns = core.daily_returns(prices)
+        mean_returns, cov, aligned = core.annualized_mean_and_cov(returns, tickers, weights)
+        metrics = core.compute_extended_metrics(
+            aligned,
+            weights,
+            risk_free_rate,
+            initial_value,
+            tickers=tickers,
+        )
+    except Exception:
+        return None
+
+    store_forward_engine_inputs(
+        ss,
+        metrics=metrics,
+        mean_returns=mean_returns,
+        cov=cov.values if hasattr(cov, "values") else cov,
+        tickers=tickers,
+        weights=weights,
+        asset_types=asset_types,
+        start=start,
+        end=end,
+        initial_value=initial_value,
+        risk_free_rate=risk_free_rate,
+    )
+    stored = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
+    return stored if isinstance(stored, dict) else None
+
+
 def _forward_years_from_session(session_state: Any) -> float:
     seed_forward_horizon_from_plan_if_needed(session_state)
     return float(
@@ -534,12 +721,19 @@ def _forward_years_from_session(session_state: Any) -> float:
 
 
 def peek_valid_forward_projection(session_state: Any | None = None) -> core.ForwardProjectionResult | None:
-    """Return cached ForwardProjectionResult only when fingerprint matches current inputs."""
+    """Return cached ForwardProjectionResult only when fingerprint matches current inputs.
+
+    Cache-only — does not fetch market data or materialize engine inputs
+    (keeps non-macro AMI attach path free of Forward compute work).
+    """
     ss = st.session_state if session_state is None else session_state
     inputs = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
     cached = _session_get(ss, FORWARD_PROJECTION_KEY)
     fp_cached = _session_get(ss, FORWARD_PROJECTION_FP_KEY)
     if not isinstance(inputs, dict) or cached is None or not fp_cached:
+        return None
+    params = portfolio_calc_params_from_session(ss)
+    if params is None or not _engine_inputs_match_params(inputs, params):
         return None
     assumptions = macro_assumptions_from_session(ss)
     years = _forward_years_from_session(ss)
@@ -568,15 +762,17 @@ def resolve_canonical_forward_projection(
     Shared Forward path for UI / MC / Optimizer / AMI.
 
     Reuses a fingerprint-valid cache; otherwise computes via
-    ``portfolio_core.compute_forward_projection_with_profile`` using stored engine inputs.
-    Returns None when analytics inputs are not yet available.
+    ``portfolio_core.compute_forward_projection_with_profile``.
+
+    Engine inputs come from the analytics cache when valid, otherwise from
+    authoritative holdings + lookback/RF/value in session (page-independent).
     """
     import numpy as np
 
     ss = st.session_state if session_state is None else session_state
-    inputs = _session_get(ss, FORWARD_ENGINE_INPUTS_KEY)
+    inputs = ensure_forward_engine_inputs(ss)
     if not isinstance(inputs, dict):
-        return peek_valid_forward_projection(ss)
+        return None
 
     assumptions = assumptions or macro_assumptions_from_session(ss)
     years_f = float(years) if years is not None else _forward_years_from_session(ss)
@@ -623,7 +819,7 @@ def resolve_canonical_forward_projection(
 
 
 def clear_forward_projection_cache() -> None:
-    """Drop cached forward projections (e.g. after date or macro changes)."""
+    """Drop cached forward projections and engine-input cache (e.g. market-data refresh)."""
     for key in list(st.session_state.keys()):
         if (
             key in (FORWARD_PROJECTION_KEY, FORWARD_PROJECTION_FP_KEY, FORWARD_ENGINE_INPUTS_KEY)

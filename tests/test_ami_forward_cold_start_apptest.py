@@ -37,11 +37,13 @@ class TestAmiForwardColdStartAppTest(unittest.TestCase):
         self.assertEqual(vals.get("ok"), "1")
         self.assertEqual(vals.get("has_forward"), "True")
         self.assertEqual(vals.get("answer_has_forward"), "True")
+        self.assertEqual(vals.get("engine_inputs_materialized"), "True")
         self.assertTrue(vals.get("ret"))
         self.assertTrue(vals.get("vol"))
         self.assertTrue(vals.get("sharpe"))
-        # No Forward page visit required; on-demand resolve populates cache.
+        # No Forward page visit; resolver materializes engine inputs from holdings.
         self.assertIn("forward_projection", at.session_state)
+        self.assertIn("_forward_engine_inputs", at.session_state)
 
 
 if __name__ == "__main__":
