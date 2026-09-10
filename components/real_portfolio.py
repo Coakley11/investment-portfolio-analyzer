@@ -23,7 +23,8 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-10-contribution-prose-escape-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-record-contribution-v1"
+SESSION_CONTRIBUTION_PENDING_KEY = "_contribution_record_pending"
 
 
 def _ss() -> Any:
@@ -181,11 +182,13 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
         return
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
+    cash_ledger = pe.compute_cash_ledger_summary(transactions)
+    net_contributions = cash_ledger.total_deposits - cash_ledger.total_withdrawals
     _metric_row(
         [c1, c2, c3, c4, c5, c6],
         [
             "Total Portfolio Value",
-            "Total Invested",
+            "Securities cost basis",
             "Total Gain/Loss $",
             "Total Gain/Loss %",
             "Cash Balance",
@@ -199,6 +202,11 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
             pe.format_currency(summary.cash_balance),
             str(summary.num_holdings),
         ],
+    )
+    st.caption(
+        f"Net external contributions (deposits − withdrawals): **{pe.format_currency(net_contributions)}**. "
+        "Securities cost basis is purchase cost of open holdings — not the same as contributions, "
+        "and deposits are not counted as investment gain."
     )
 
     if summary.cash_balance < -0.01:
@@ -566,28 +574,67 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
         )
 
     run = st.button("Calculate allocation", type="primary", key="contribution_advisor_run")
-    if not run:
-        prior = _ss().get("_contribution_advisor_result")
-        if isinstance(prior, dict) and prior.get("ok"):
-            _render_contribution_result(prior)
+    if run:
+        # New calculation invalidates any pending record confirmation.
+        _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+        result = recommend_contribution_allocation_from_session(
+            _ss(),
+            contribution_amount=float(amount),
+            target_source=target_source,  # type: ignore[arg-type]
+            explicit_holding_targets=explicit,
+            include_cash=True,
+        )
+        payload = result.to_dict()
+        if result.ok:
+            from investment_ami.decision_support.contribution_recorder import (
+                attach_application_metadata_to_payload,
+            )
+
+            records = _ss().get(SESSION_TRANSACTIONS_KEY) or []
+            payload = attach_application_metadata_to_payload(
+                payload,
+                records=records if isinstance(records, list) else [],
+                contribution_amount=float(amount),
+                target_source=target_source,
+                targets=explicit,
+                workspace_token=_contribution_workspace_token(),
+            )
+        _ss()["_contribution_advisor_result"] = payload
+        # Decision support only — never write deposits/buys from Calculate.
+        if not result.ok:
+            st.error(_streamlit_prose(result.explanation))
+            for w in result.warnings:
+                st.warning(_streamlit_prose(w))
+            return
+
+    prior = _ss().get("_contribution_advisor_result")
+    if isinstance(prior, dict) and prior.get("ok"):
+        _render_contribution_result(prior)
+        _render_contribution_record_controls(prior, contribution_amount=float(amount), target_source=target_source, explicit=explicit)
+    elif not run:
         return
 
-    result = recommend_contribution_allocation_from_session(
-        _ss(),
-        contribution_amount=float(amount),
-        target_source=target_source,  # type: ignore[arg-type]
-        explicit_holding_targets=explicit,
-        include_cash=True,
-    )
-    payload = result.to_dict()
-    _ss()["_contribution_advisor_result"] = payload
-    # Decision support only — never write deposits/buys from Calculate.
-    if not result.ok:
-        st.error(_streamlit_prose(result.explanation))
-        for w in result.warnings:
-            st.warning(_streamlit_prose(w))
-        return
-    _render_contribution_result(payload)
+
+def _contribution_workspace_token() -> str:
+    ss = _ss()
+    meta = ss.get("_suite_workspace_persist_meta")
+    if isinstance(meta, dict):
+        for key in ("workspace_id", "user_id", "account_id"):
+            val = meta.get(key)
+            if val:
+                return str(val)
+    for key in ("auth_email", "suite_auth_email", "user_email"):
+        val = ss.get(key)
+        if val:
+            return str(val)
+    return "local"
+
+
+def _persist_transaction_records(records: list[dict]) -> tuple[bool, str]:
+    """Replace the session ledger with validated records and persist once."""
+    txns = pe.transactions_from_records(records)
+    set_portfolio_transactions(txns)
+    return _persist_portfolio_ledger_change(trigger="portfolio_transactions_change")
 
 
 def _streamlit_prose(text: str) -> str:
@@ -603,8 +650,9 @@ def _streamlit_prose(text: str) -> str:
 def _render_contribution_result(payload: dict) -> None:
     st.success(_streamlit_prose(payload.get("explanation") or "Allocation ready."))
     st.caption(
-        "Decision support only — this calculation does **not** record a cash deposit or buy "
-        "in your transaction ledger, and does not count the contribution as investment profit."
+        "Decision support only until you explicitly **Record this contribution**. "
+        "Calculate does **not** write deposits or buys, and does not count the contribution "
+        "as investment profit."
     )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Portfolio before", pe.format_currency(float(payload.get("portfolio_value_before") or 0)))
@@ -637,8 +685,276 @@ def _render_contribution_result(payload: dict) -> None:
     if payload.get("assumptions"):
         with st.expander("Assumptions", expanded=False):
             for a in payload["assumptions"]:
-                st.markdown(f"- {a}")
+                st.markdown(f"- {_streamlit_prose(a)}")
     st.caption(APP_DISCLAIMER)
+
+
+def _render_contribution_record_controls(
+    payload: dict,
+    *,
+    contribution_amount: float,
+    target_source: str,
+    explicit: dict[str, float] | None,
+) -> None:
+    from investment_ami.decision_support.contribution_recorder import (
+        STATUS_ALREADY_APPLIED,
+        STATUS_STALE,
+        apply_contribution_plan_to_records,
+        build_simulated_application_plan,
+        event_already_applied,
+        fingerprints_match,
+        ledger_state_fingerprint,
+        recommendation_fingerprint,
+    )
+
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    application_id = str(meta.get("application_id") or "")
+    stored_fp = meta.get("recommendation_fingerprint") if isinstance(meta.get("recommendation_fingerprint"), dict) else {}
+    applied_flag = bool(meta.get("applied"))
+    records = _ss().get(SESSION_TRANSACTIONS_KEY) or []
+    if not isinstance(records, list):
+        records = []
+
+    if application_id and (applied_flag or event_already_applied(records, application_id)):
+        st.info(_streamlit_prose("This recommendation was already recorded into the ledger."))
+        return
+
+    pending = _ss().get(SESSION_CONTRIBUTION_PENDING_KEY)
+    if isinstance(pending, dict) and pending.get("application_id") == application_id:
+        _render_contribution_confirmation(pending, payload)
+        return
+
+    st.markdown("##### Record this contribution")
+    st.caption(
+        "After you actually contribute and invest (or when recording a **simulated** Shadow fill), "
+        "confirm below. This writes a deposit plus buys to **your app ledger** — not a brokerage order."
+    )
+
+    # Freshness vs current UI inputs (amount / targets / ledger).
+    rows = payload.get("rows") or []
+    adds = {
+        str(r.get("ticker") or "").upper(): float(r.get("recommended_add") or 0.0)
+        for r in rows
+        if isinstance(r, dict)
+    }
+    live_fp = recommendation_fingerprint(
+        ledger_fp=ledger_state_fingerprint(records),
+        contribution_amount=float(contribution_amount),
+        target_source=target_source,
+        targets=explicit,
+        recommended_adds=adds,
+        portfolio_value_before=float(payload.get("portfolio_value_before") or 0.0),
+        workspace_token=_contribution_workspace_token(),
+    )
+    if stored_fp and not fingerprints_match(stored_fp, live_fp):
+        st.warning(
+            "Inputs or the ledger changed since Calculate. "
+            "Recalculate allocation before recording."
+        )
+        return
+
+    security_adds = {k: v for k, v in adds.items() if k not in ("$CASH", "CASH") and v > 0.0005}
+    if not security_adds:
+        st.caption("Nothing to record — recommended security purchases are $0.")
+        return
+
+    if st.button("Record this contribution", type="secondary", key="contribution_record_start"):
+        # Build simulated plan with current marks (validate quotes before confirm UI).
+        quotes: dict[str, float] = {}
+        sources: dict[str, str] = {}
+        asset_types: dict[str, str] = {}
+        snap_holdings = {}
+        try:
+            from investment_ami.decision_support.real_portfolio_snapshot import build_real_portfolio_snapshot
+
+            built = build_real_portfolio_snapshot(_ss())
+            if built.ok and built.snapshot is not None:
+                for h in built.snapshot.holdings:
+                    snap_holdings[h.ticker] = h
+                    if h.ticker in security_adds:
+                        if h.current_price is None or float(h.current_price) <= 0:
+                            st.error(_streamlit_prose(f"Missing market quote for {h.ticker}. Recalculate when marks are available."))
+                            return
+                        if "missing_price" in (h.data_quality_flags or ()):
+                            st.error(_streamlit_prose(f"Unusable mark for {h.ticker}. Recalculate when quotes are fresh."))
+                            return
+                        quotes[h.ticker] = float(h.current_price)
+                        sources[h.ticker] = str(h.price_source or "snapshot")
+                        asset_types[h.ticker] = "etf"
+                # Block stale / partial snapshot the same way Calculate does.
+                if built.snapshot.market_data_status in ("partial", "unavailable"):
+                    st.error("Market data is incomplete. Recalculate when quotes are available.")
+                    return
+                from investment_ami.decision_support.real_portfolio_recommendation_rules import (
+                    STALE_QUOTE_AGE_SECONDS,
+                )
+
+                age = built.snapshot.market_data_age_seconds
+                if (
+                    built.snapshot.market_data_status == "cached"
+                    and age is not None
+                    and age > STALE_QUOTE_AGE_SECONDS
+                ):
+                    st.error("Market quotes look stale. Recalculate with fresher marks before recording.")
+                    return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not refresh market marks: {exc}")
+            return
+
+        missing = [t for t in security_adds if t not in quotes]
+        if missing:
+            # Fall back to engine quote helper for tickers not in snapshot holdings list.
+            for t in missing:
+                px, src = pe.fetch_latest_price(t)
+                if px is None or px <= 0:
+                    st.error(_streamlit_prose(f"Missing market quote for {t}."))
+                    return
+                quotes[t] = float(px)
+                sources[t] = src or "market_data_provider"
+                asset_types[t] = "etf"
+
+        plan_result = build_simulated_application_plan(
+            application_id=application_id,
+            contribution_amount=float(payload.get("contribution_amount") or contribution_amount),
+            recommended_adds=security_adds,
+            quotes=quotes,
+            fingerprint=stored_fp or live_fp,
+            quote_sources=sources,
+            asset_types=asset_types,
+        )
+        if not plan_result.ok or plan_result.plan is None:
+            st.error(_streamlit_prose(plan_result.message))
+            return
+        _ss()[SESSION_CONTRIBUTION_PENDING_KEY] = plan_result.plan.to_dict()
+        st.rerun()
+
+
+def _render_contribution_confirmation(pending: dict, payload: dict) -> None:
+    from investment_ami.decision_support.contribution_recorder import (
+        STATUS_ALREADY_APPLIED,
+        STATUS_STALE,
+        ContributionApplicationPlan,
+        PlannedPurchase,
+        apply_contribution_plan_to_records,
+        ledger_state_fingerprint,
+    )
+
+    st.markdown("##### Confirm & record contribution")
+    amount = float(pending.get("contribution_amount") or 0.0)
+    purchases = pending.get("purchases") or []
+    st.warning(
+        _streamlit_prose(
+            f"Record ${amount:,.2f} contribution? This writes an external deposit and "
+            "simulated purchases to your Real Portfolio ledger (not a brokerage order)."
+        )
+    )
+    st.markdown(_streamlit_prose(f"**Contribution (external deposit):** ${amount:,.2f}"))
+    st.markdown("**Planned purchases (simulated fill at current market quote):**")
+    lines = []
+    for p in purchases:
+        lines.append(
+            f"- **{p.get('ticker')}**: ${float(p.get('recommended_dollars') or 0):,.2f} recommended → "
+            f"{float(p.get('shares') or 0):.6f} sh @ ${float(p.get('execution_price') or 0):,.4f} "
+            f"(cost ${float(p.get('cost') or 0):,.2f}, source {p.get('price_source') or 'quote'})"
+        )
+    st.markdown("\n".join(lines))
+    total_cost = float(pending.get("total_purchase_cost") or sum(float(p.get("cost") or 0) for p in purchases))
+    st.markdown(_streamlit_prose(f"**Total purchases:** ${total_cost:,.2f}"))
+    st.caption(
+        "This will: record the external contribution, record the corresponding purchases, "
+        "update holdings and contributed capital, and will **not** classify the contribution "
+        "as investment return."
+    )
+    for w in pending.get("warnings") or []:
+        st.caption(_streamlit_prose(w))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        confirm = st.button("Confirm & record", type="primary", key="contribution_record_confirm")
+    with c2:
+        cancel = st.button("Cancel", key="contribution_record_cancel")
+
+    if cancel:
+        _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+        st.rerun()
+
+    if not confirm:
+        return
+
+    # Rebuild frozen plan object from pending dict.
+    plan = ContributionApplicationPlan(
+        application_id=str(pending.get("application_id") or ""),
+        contribution_amount=amount,
+        trade_date=str(pending.get("trade_date") or ""),
+        execution_policy=str(pending.get("execution_policy") or ""),
+        deposit_record=dict(pending.get("deposit_record") or {}),
+        buy_records=tuple(dict(r) for r in (pending.get("buy_records") or [])),
+        purchases=tuple(
+            PlannedPurchase(
+                ticker=str(p.get("ticker") or ""),
+                recommended_dollars=float(p.get("recommended_dollars") or 0),
+                execution_price=float(p.get("execution_price") or 0),
+                shares=float(p.get("shares") or 0),
+                cost=float(p.get("cost") or 0),
+                price_source=str(p.get("price_source") or ""),
+                asset_type=str(p.get("asset_type") or "etf"),
+            )
+            for p in purchases
+        ),
+        fingerprint=dict(pending.get("fingerprint") or {}),
+        warnings=tuple(pending.get("warnings") or ()),
+        meta=dict(pending.get("meta") or {}),
+    )
+
+    records = _ss().get(SESSION_TRANSACTIONS_KEY) or []
+    if not isinstance(records, list):
+        records = []
+
+    # Re-check ledger fingerprint only (amount/targets already gated before pending).
+    live_ledger_fp = ledger_state_fingerprint(records)
+    if live_ledger_fp != str(plan.fingerprint.get("ledger_fp") or ""):
+        _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+        st.error(
+            "The transaction ledger changed since this recommendation was calculated. "
+            "Recalculate allocation before recording."
+        )
+        return
+
+    result = apply_contribution_plan_to_records(
+        records,
+        plan,
+        current_fingerprint=plan.fingerprint,
+        require_fingerprint_match=True,
+    )
+    if not result.ok:
+        st.error(_streamlit_prose(result.message))
+        if result.status == STATUS_STALE:
+            _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+        return
+
+    if result.already_applied or result.status == STATUS_ALREADY_APPLIED:
+        _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+        meta = dict(payload.get("meta") or {})
+        meta["applied"] = True
+        payload["meta"] = meta
+        _ss()["_contribution_advisor_result"] = payload
+        st.info(_streamlit_prose(result.message))
+        st.rerun()
+        return
+
+    ok, msg = _persist_transaction_records([dict(t) for t in result.transactions])
+    _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+    _ss().pop("_contribution_advisor_result", None)
+    if ok:
+        st.success(_streamlit_prose(result.message + " " + msg))
+    else:
+        st.error(
+            _streamlit_prose(
+                result.message
+                + f" Ledger updated in this session, but durable save reported: {msg}"
+            )
+        )
+    st.rerun()
 
 
 def render_position_sizing(*, beginner: bool = False) -> None:

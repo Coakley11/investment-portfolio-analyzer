@@ -514,9 +514,12 @@ class PortfolioTransaction:
     notes: str = ""
     company_name: str = ""
     asset_type: str = "stock"
+    # Optional audit fields — empty for manual form entries.
+    contribution_event_id: str = ""
+    source: str = ""
 
     def to_record(self) -> dict[str, Any]:
-        return {
+        rec: dict[str, Any] = {
             "id": self.id,
             "action": self.action,
             "date": self.date,
@@ -527,6 +530,11 @@ class PortfolioTransaction:
             "execution_price": float(self.execution_price),
             "notes": self.notes,
         }
+        if self.contribution_event_id:
+            rec["contribution_event_id"] = str(self.contribution_event_id)
+        if self.source:
+            rec["source"] = str(self.source)
+        return rec
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> PortfolioTransaction:
@@ -549,6 +557,8 @@ class PortfolioTransaction:
             notes=str(record.get("notes") or ""),
             company_name=str(record.get("company_name") or infer_company_name(ticker)),
             asset_type=str(asset_resolved),
+            contribution_event_id=str(record.get("contribution_event_id") or ""),
+            source=str(record.get("source") or ""),
         )
 
 
