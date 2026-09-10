@@ -4,6 +4,17 @@ Deterministic, session-free math: given current market values, explicit target
 weights, and a contribution amount, allocate dollars to holdings without sales.
 
 Does not fetch prices, read DEFAULT_HOLDINGS, or mutate ledgers.
+
+Core rule
+---------
+Solve against the **post-contribution** portfolio value ``V' = V + C``:
+
+    need_i = target_weight_i * V' - current_value_i
+
+When every ``need_i >= 0``, ``sum(need_i) == C`` and allocating ``need_i`` reaches
+target exactly. Pre-contribution weight underweights must **not** gate which
+names may receive dollars — a name that is slightly overweight today can still
+need a positive buy to stay on-target after the pie expands.
 """
 
 from __future__ import annotations
@@ -26,10 +37,12 @@ REASON_ALREADY_AT_TARGET = "already_at_target"
 REASON_OVERWEIGHT_SKIP = "overweight_skip_new_money"
 REASON_NO_ALLOCATION = "no_allocation"
 REASON_ROUNDING = "rounding_residual"
+REASON_REACH_TARGET = "reach_post_contribution_target"
 
 WEIGHT_SUM_TOLERANCE = 0.02  # fraction (±2 pp)
 DOLLAR_SUM_TOLERANCE = 0.02  # cents-level for float noise
 BALANCED_DRIFT_TOLERANCE = 0.005  # |w - t| < 0.5 pp → treat as balanced for narrative
+NEED_EPS = 1e-9  # treat tiny negative needs as zero (float noise)
 
 
 @dataclass(frozen=True)
@@ -130,17 +143,59 @@ def _aggregate_abs_drift(weights: dict[str, float], targets: dict[str, float]) -
     return sum(abs(weights.get(k, 0.0) - targets.get(k, 0.0)) for k in keys)
 
 
+def _round_cents(amount: float) -> float:
+    return round(float(amount) + 0.0, 2)
+
+
+def _allocate_cents(raw: dict[str, float], total: float, tickers: list[str]) -> dict[str, float]:
+    """
+    Deterministic cent rounding so allocations sum exactly to ``total`` (2 dp).
+
+    Largest-remainder method on the fractional cents, tie-broken by ticker.
+    """
+    total_cents = int(round(_round_cents(total) * 100))
+    if total_cents <= 0 or not tickers:
+        return {t: 0.0 for t in tickers}
+
+    raw_sum = sum(max(0.0, float(raw.get(t, 0.0))) for t in tickers)
+    if raw_sum <= NEED_EPS:
+        # Degenerate: dump into first ticker by sort order.
+        out = {t: 0.0 for t in tickers}
+        out[tickers[0]] = total_cents / 100.0
+        return out
+
+    scaled = {t: max(0.0, float(raw.get(t, 0.0))) / raw_sum * total_cents for t in tickers}
+    floors = {t: int(scaled[t]) for t in tickers}
+    assigned = sum(floors.values())
+    remainder = total_cents - assigned
+    fracs = sorted(
+        ((scaled[t] - floors[t], t) for t in tickers),
+        key=lambda x: (-x[0], x[1]),
+    )
+    for i in range(max(0, remainder)):
+        floors[fracs[i % len(fracs)][1]] += 1
+    return {t: floors[t] / 100.0 for t in tickers}
+
+
 def _build_explanation(
     rows: list[HoldingContributionRow],
     *,
     contribution: float,
     already_balanced: bool,
-    filled_then_prorata: bool,
+    reached_target: bool,
+    infeasible_without_sales: bool,
 ) -> str:
     if contribution <= 0:
         return "Enter a positive contribution amount to see a new-money allocation."
     adds = sorted(rows, key=lambda r: -r.recommended_add)
     top = [r for r in adds if r.recommended_add > 0.005]
+    if reached_target:
+        bits = ", ".join(f"{r.ticker} (${r.recommended_add:,.2f})" for r in top[:4]) or "target weights"
+        return (
+            f"This ${contribution:,.0f} is enough to bring every holding to your selected "
+            f"target on the post-contribution portfolio ({bits}). "
+            "No sales are required."
+        )
     if already_balanced:
         bits = ", ".join(f"{r.ticker} (${r.recommended_add:,.0f})" for r in top[:4]) or "target weights"
         return (
@@ -155,27 +210,26 @@ def _build_explanation(
             "Check holdings, targets, and data quality."
         )
     primary = top[0]
-    under_bits = ", ".join(
-        f"{r.ticker} (underweight by {abs(r.drift) * 100:.1f} pp → ${r.recommended_add:,.0f})"
-        for r in top[:3]
-        if r.reason_code == REASON_FILL_UNDERWEIGHT or r.drift < -BALANCED_DRIFT_TOLERANCE
-    )
-    if filled_then_prorata:
+    if infeasible_without_sales:
+        under_bits = ", ".join(
+            f"{r.ticker} (+${r.recommended_add:,.0f})"
+            for r in top[:3]
+        )
         return (
-            f"Most of this ${contribution:,.0f} first corrects underweight positions"
+            f"This ${contribution:,.0f} is allocated to holdings that still need buys to "
+            f"approach your post-contribution targets"
             + (f" ({under_bits})" if under_bits else f" (led by {primary.ticker})")
-            + ". After those deficits are filled, the remaining dollars follow the "
-            "target weights so the contribution does not create a new distortion. "
-            "Overweight holdings are not sold in new-money-only mode."
+            + ". Some holdings are already above their target share of the larger portfolio, "
+            "so new-money-only mode cannot remove all drift without sales. "
+            "Those overweight names receive $0."
         )
     if primary.reason_code == REASON_FILL_UNDERWEIGHT or primary.drift < -BALANCED_DRIFT_TOLERANCE:
         return (
             f"Most of this ${contribution:,.0f} is directed toward **{primary.ticker}** "
-            f"(${primary.recommended_add:,.0f}) because it is the most underweight relative "
-            f"to your selected target"
-            + (f" ({under_bits})." if under_bits and primary.ticker not in under_bits else ".")
-            + " Existing overweight holdings receive $0 new money while underweights can "
-            "absorb the contribution. No sales are recommended in this mode."
+            f"(${primary.recommended_add:,.0f}) because it needs the most new money to reach "
+            f"its target share of the post-contribution portfolio. "
+            "Holdings already above that post-contribution target receive $0. "
+            "No sales are recommended in this mode."
         )
     return (
         f"This ${contribution:,.0f} is allocated according to your selected target "
@@ -198,17 +252,20 @@ def allocate_contribution_new_money_only(
 
     Algorithm
     ---------
-    1. Let V = sum(current_values), V' = V + C, target dollars T_i = t_i * V'.
-    2. Underweight set U = {i : current_weight_i < target_weight_i}.
-    3. For i in U, need_i = max(0, T_i - v_i); overweight / at-target get need 0.
-    4. If sum(need) >= C: allocate C proportional to needs (overweights stay at $0).
-    5. Else: fill all needs, then allocate remainder R proportional to t_i (large-C case).
-    6. If nothing is underweight, distribute C by target weights (already-balanced case).
+    1. Let ``V = sum(current_values)``, ``V' = V + C``.
+    2. ``need_i = target_weight_i * V' - current_value_i`` (post-contribution dollar gap).
+    3. If every ``need_i >= 0``: allocate exactly ``need_i`` (reaches target; sum equals C).
+    4. If some ``need_i < 0``: those names are already above target dollars after the
+       contribution — they get $0. Distribute C across positive-need names in proportion
+       to ``need_i`` (best feasible buy-only allocation; remaining drift is unavoidable).
+    5. Already-at-target portfolios yield ``need_i = t_i * C`` (pro-rata by target).
+    6. Cent-round so recommended adds sum to C.
     """
     base_assumptions = list(
         assumptions
         or (
             "New-money-only mode: recommendations add cash to holdings; they do not sell.",
+            "Allocations are solved against post-contribution portfolio value (V + contribution).",
             "Decision support only — not a trade order or guaranteed advice.",
         )
     )
@@ -220,6 +277,7 @@ def allocate_contribution_new_money_only(
         c = 0.0
     if c < 0:
         c = 0.0
+    c = _round_cents(c)
 
     values: dict[str, float] = {}
     for k, v in current_values.items():
@@ -324,7 +382,13 @@ def allocate_contribution_new_money_only(
             aggregate_drift_before=agg_before,
             aggregate_drift_after=agg_before,
             rows=tuple(rows),
-            explanation=_build_explanation(rows, contribution=0.0, already_balanced=already_balanced, filled_then_prorata=False),
+            explanation=_build_explanation(
+                rows,
+                contribution=0.0,
+                already_balanced=already_balanced,
+                reached_target=False,
+                infeasible_without_sales=False,
+            ),
             assumptions=tuple(base_assumptions),
             reason_codes=(REASON_NO_ALLOCATION,),
             target_source=target_source,
@@ -332,71 +396,58 @@ def allocate_contribution_new_money_only(
         )
 
     v_after = v_total + c
-    target_dollars = {t: targets[t] * v_after for t in tickers}
-    # Weight-overweight names get $0 while underweights can absorb the contribution.
-    # (Dollar gap alone would still give pie-expansion buys to slight overweights.)
-    underweight = {t for t in tickers if current_w[t] < targets[t] - 1e-12}
-    pos_gaps = {
-        t: (max(0.0, target_dollars[t] - values[t]) if t in underweight else 0.0) for t in tickers
-    }
-    total_pos_gap = sum(pos_gaps.values())
+    # Post-contribution dollar targets — the only gap that matters for buys.
+    need = {t: targets[t] * v_after - values[t] for t in tickers}
+    # Clamp microscopic float noise so "exact reach" is recognized.
+    need = {t: (0.0 if abs(need[t]) <= NEED_EPS else need[t]) for t in tickers}
 
-    adds = {t: 0.0 for t in tickers}
+    positive_need = {t: max(0.0, need[t]) for t in tickers}
+    total_positive = sum(positive_need.values())
+    min_need = min(need.values()) if need else 0.0
+    # Exact reachability: no name is already above its post-contribution target dollar.
+    exact_reach = min_need >= -NEED_EPS and abs(total_positive - c) <= max(0.02, 1e-6 * max(c, 1.0))
+    infeasible_without_sales = min_need < -NEED_EPS
+
+    raw_adds: dict[str, float] = {t: 0.0 for t in tickers}
     reason = {t: REASON_OVERWEIGHT_SKIP for t in tickers}
-    filled_then_prorata = False
+    reached_target = False
 
-    if not underweight or total_pos_gap <= 1e-9:
-        # Already at/above target weights — distribute by target.
+    if exact_reach:
+        reached_target = True
         for t in tickers:
-            adds[t] = c * targets[t]
+            raw_adds[t] = positive_need[t]
+            if positive_need[t] > NEED_EPS:
+                reason[t] = (
+                    REASON_ALREADY_AT_TARGET
+                    if already_balanced
+                    else REASON_REACH_TARGET
+                )
+            else:
+                reason[t] = REASON_ALREADY_AT_TARGET if already_balanced else REASON_OVERWEIGHT_SKIP
+    elif total_positive <= NEED_EPS:
+        # No positive post-contribution gaps (degenerate / all zero targets) — fall back.
+        for t in tickers:
+            raw_adds[t] = c * targets[t]
             reason[t] = REASON_ALREADY_AT_TARGET if already_balanced else REASON_PRO_RATA_TARGET
-    elif total_pos_gap >= c - 1e-9:
-        for t in tickers:
-            if pos_gaps[t] > 0:
-                adds[t] = c * (pos_gaps[t] / total_pos_gap)
-                reason[t] = REASON_FILL_UNDERWEIGHT
-            else:
-                adds[t] = 0.0
-                reason[t] = REASON_OVERWEIGHT_SKIP
+        reached_target = already_balanced
     else:
-        filled_then_prorata = True
+        # Best feasible buy-only: give all new money to names with positive post-C need.
         for t in tickers:
-            if pos_gaps[t] > 0:
-                adds[t] = pos_gaps[t]
+            if positive_need[t] > NEED_EPS:
+                raw_adds[t] = c * (positive_need[t] / total_positive)
                 reason[t] = REASON_FILL_UNDERWEIGHT
             else:
-                adds[t] = 0.0
+                raw_adds[t] = 0.0
                 reason[t] = REASON_OVERWEIGHT_SKIP
-        remainder = c - total_pos_gap
-        for t in tickers:
-            extra = remainder * targets[t]
-            if extra > 0:
-                adds[t] += extra
-                if reason[t] == REASON_OVERWEIGHT_SKIP and extra > 1e-9:
-                    reason[t] = REASON_PRO_RATA_TARGET
-                elif reason[t] == REASON_FILL_UNDERWEIGHT and extra > 1e-9:
-                    reason[t] = REASON_FILL_UNDERWEIGHT  # keep primary story
 
-    # Fix float drift so adds sum exactly to c (give residual to largest underweight / add).
-    add_sum = sum(adds.values())
-    residual = c - add_sum
-    if abs(residual) > 1e-9 and tickers:
-        prefer = sorted(tickers, key=lambda t: (-adds[t], drift_before[t], t))
-        sink = prefer[0]
-        adds[sink] = max(0.0, adds[sink] + residual)
-        if abs(residual) >= 0.005:
-            reason[sink] = REASON_ROUNDING if reason[sink] == REASON_OVERWEIGHT_SKIP else reason[sink]
-
-    # Guard: no negatives in new-money-only.
+    adds = _allocate_cents(raw_adds, c, tickers)
     for t in tickers:
-        if adds[t] < 0:
-            adds[t] = 0.0
-
-    # Re-normalize tiny float error if needed.
-    add_sum = sum(adds.values())
-    if add_sum > 0 and abs(add_sum - c) > DOLLAR_SUM_TOLERANCE:
-        scale = c / add_sum
-        adds = {t: adds[t] * scale for t in tickers}
+        if adds[t] <= 0 and reason[t] not in (REASON_OVERWEIGHT_SKIP, REASON_ALREADY_AT_TARGET):
+            reason[t] = REASON_OVERWEIGHT_SKIP
+        if abs(adds[t] - raw_adds[t]) >= 0.005 and adds[t] > 0:
+            # Cent residual applied; keep semantic reason unless it was a pure skip.
+            if reason[t] == REASON_OVERWEIGHT_SKIP:
+                reason[t] = REASON_ROUNDING
 
     rows: list[HoldingContributionRow] = []
     projected_w: dict[str, float] = {}
@@ -411,7 +462,7 @@ def allocate_contribution_new_money_only(
                 current_weight=current_w[t],
                 target_weight=targets[t],
                 drift=drift_before[t],
-                recommended_add=round(adds[t], 6),
+                recommended_add=adds[t],
                 projected_value=round(proj_v, 6),
                 projected_weight=proj_w,
                 remaining_drift=proj_w - targets[t],
@@ -420,19 +471,23 @@ def allocate_contribution_new_money_only(
         )
 
     agg_after = _aggregate_abs_drift(projected_w, targets)
+    # After cent rounding, treat near-zero remaining drift as reached.
+    if exact_reach and agg_after <= 2e-4:
+        reached_target = True
     codes = tuple(dict.fromkeys(r.reason_code for r in rows if r.recommended_add > 0.005))
     explanation = _build_explanation(
         rows,
         contribution=c,
         already_balanced=already_balanced,
-        filled_then_prorata=filled_then_prorata,
+        reached_target=reached_target,
+        infeasible_without_sales=infeasible_without_sales,
     )
 
     return ContributionAllocationResult(
         ok=True,
         status=STATUS_OK,
         mode="new_money_only",
-        contribution_amount=round(c, 6),
+        contribution_amount=c,
         portfolio_value_before=round(v_total, 6),
         portfolio_value_after=round(v_after, 6),
         aggregate_drift_before=agg_before,
@@ -444,8 +499,12 @@ def allocate_contribution_new_money_only(
         target_source=target_source,
         warnings=tuple(warn),
         meta={
-            "filled_then_prorata": filled_then_prorata,
+            "exact_reach": exact_reach,
+            "reached_target": reached_target,
+            "infeasible_without_sales": infeasible_without_sales,
             "already_balanced": already_balanced,
-            "total_positive_gap": total_pos_gap,
+            "total_positive_need": total_positive,
+            # Backward-compatible key (old fill-then-prorata path removed).
+            "filled_then_prorata": False,
         },
     )

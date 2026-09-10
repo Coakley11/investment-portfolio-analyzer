@@ -130,7 +130,7 @@ def _snapshot_from_values(
 
 class TestContributionEngineCases(unittest.TestCase):
     def test_a_underweight_asset_gets_most_new_money(self) -> None:
-        # VOO overweight, QQQ underweight vs 50/50.
+        # VOO overweight vs post-contribution target → all new money to QQQ.
         values = {"VOO": 7000.0, "QQQ": 3000.0}
         targets = {"VOO": 0.50, "QQQ": 0.50}
         result = allocate_contribution_new_money_only(
@@ -139,7 +139,8 @@ class TestContributionEngineCases(unittest.TestCase):
         self.assertTrue(result.ok)
         by = {r.ticker: r for r in result.rows}
         self.assertGreater(by["QQQ"].recommended_add, by["VOO"].recommended_add)
-        self.assertGreater(by["QQQ"].recommended_add, 700.0)
+        self.assertAlmostEqual(by["VOO"].recommended_add, 0.0, delta=0.02)
+        self.assertAlmostEqual(by["QQQ"].recommended_add, 1000.0, delta=0.02)
         self.assertAlmostEqual(by["QQQ"].projected_value, 3000.0 + by["QQQ"].recommended_add, places=4)
         self.assertAlmostEqual(sum(r.recommended_add for r in result.rows), 1000.0, delta=DOLLAR_SUM_TOLERANCE)
 
@@ -153,22 +154,23 @@ class TestContributionEngineCases(unittest.TestCase):
         by = {r.ticker: r for r in result.rows}
         self.assertAlmostEqual(by["VOO"].recommended_add, 500.0, delta=1.0)
         self.assertAlmostEqual(by["BND"].recommended_add, 500.0, delta=1.0)
-        self.assertIn("close to the selected target", result.explanation.lower())
+        self.assertAlmostEqual(by["VOO"].projected_weight, 0.50, places=3)
+        self.assertAlmostEqual(by["BND"].projected_weight, 0.50, places=3)
 
-    def test_c_overweight_receives_zero_while_underweights_absorb(self) -> None:
-        # Example-shaped portfolio from the roadmap (scaled dollars).
+    def test_c_overweight_above_post_contribution_target_gets_zero(self) -> None:
+        # VXUS already above its post-contribution target dollars → $0.
+        # Names with positive post-C need share the contribution.
         values = {"VOO": 5200.0, "QQQ": 1300.0, "BND": 2000.0, "VXUS": 1500.0}
         targets = {"VOO": 0.50, "QQQ": 0.20, "BND": 0.20, "VXUS": 0.10}
-        # C within underweight capacity so overweight names stay at $0.
         result = allocate_contribution_new_money_only(
             current_values=values, target_weights=targets, contribution=800.0
         )
         self.assertTrue(result.ok)
         by = {r.ticker: r for r in result.rows}
-        self.assertAlmostEqual(by["VOO"].recommended_add, 0.0, delta=0.02)
         self.assertAlmostEqual(by["VXUS"].recommended_add, 0.0, delta=0.02)
-        self.assertGreater(by["QQQ"].recommended_add, 0.0)
-        self.assertAlmostEqual(by["QQQ"].recommended_add, 800.0, delta=0.02)
+        self.assertGreater(by["QQQ"].recommended_add, by["VOO"].recommended_add)
+        self.assertGreater(by["QQQ"].recommended_add, by["BND"].recommended_add)
+        self.assertAlmostEqual(sum(r.recommended_add for r in result.rows), 800.0, delta=0.02)
         for r in result.rows:
             self.assertGreaterEqual(r.recommended_add, -1e-9)
 
@@ -184,22 +186,23 @@ class TestContributionEngineCases(unittest.TestCase):
         by = {r.ticker: r for r in result.rows}
         self.assertAlmostEqual(by["VOO"].recommended_add, 0.0, delta=0.02)
         self.assertAlmostEqual(by["QQQ"].recommended_add, 200.0, delta=0.02)
+        self.assertTrue(result.meta.get("infeasible_without_sales"))
 
-    def test_e_large_contribution_fills_then_prorata(self) -> None:
+    def test_e_large_contribution_reaches_target_exactly(self) -> None:
+        # Large C makes every post-contribution need non-negative → exact target.
         values = {"VOO": 7000.0, "QQQ": 3000.0}
         targets = {"VOO": 0.50, "QQQ": 0.50}
         result = allocate_contribution_new_money_only(
             current_values=values, target_weights=targets, contribution=10_000.0
         )
         self.assertTrue(result.ok)
-        self.assertTrue(result.meta.get("filled_then_prorata"))
+        self.assertTrue(result.meta.get("exact_reach") or result.meta.get("reached_target"))
         by = {r.ticker: r for r in result.rows}
-        # Phase-1 fills QQQ underweight; remainder is pro-rata (VOO may get remainder only).
-        self.assertGreater(by["QQQ"].recommended_add, by["VOO"].recommended_add)
-        self.assertGreater(by["VOO"].recommended_add, 0.0)
-        self.assertLess(result.aggregate_drift_after, result.aggregate_drift_before)
-        # Without sales, exact 50/50 may be unreachable; QQQ should move closer to target.
-        self.assertLess(abs(by["QQQ"].remaining_drift), abs(by["QQQ"].drift))
+        self.assertAlmostEqual(by["VOO"].recommended_add, 3000.0, delta=0.02)
+        self.assertAlmostEqual(by["QQQ"].recommended_add, 7000.0, delta=0.02)
+        self.assertAlmostEqual(by["VOO"].projected_weight, 0.50, places=4)
+        self.assertAlmostEqual(by["QQQ"].projected_weight, 0.50, places=4)
+        self.assertAlmostEqual(result.aggregate_drift_after, 0.0, delta=1e-4)
 
     def test_f_market_values_change_changes_recommendation(self) -> None:
         targets = {"VOO": 0.50, "QQQ": 0.50}
@@ -237,6 +240,132 @@ class TestContributionEngineCases(unittest.TestCase):
             result.portfolio_value_before + c,
             places=4,
         )
+
+
+class TestShadow1LiveExactReach(unittest.TestCase):
+    """Exact manual acceptance case from Shadow #1 ($4,242.10 / $1,000 / 35-25-30-10)."""
+
+    VALUES = {
+        "BND": 1273.76,
+        "VNQ": 420.92,
+        "VTI": 1693.51,
+        "VXUS": 853.91,
+    }
+    TARGETS = {"BND": 30, "VNQ": 10, "VTI": 35, "VXUS": 25}
+    CONTRIBUTION = 1000.0
+
+    def test_live_case_reaches_explicit_targets(self) -> None:
+        self.assertAlmostEqual(sum(self.VALUES.values()), 4242.10, places=2)
+        result = allocate_contribution_new_money_only(
+            current_values=self.VALUES,
+            target_weights=self.TARGETS,
+            contribution=self.CONTRIBUTION,
+        )
+        self.assertTrue(result.ok)
+        self.assertAlmostEqual(result.portfolio_value_before, 4242.10, places=2)
+        self.assertAlmostEqual(result.portfolio_value_after, 5242.10, places=2)
+        self.assertAlmostEqual(
+            sum(r.recommended_add for r in result.rows),
+            self.CONTRIBUTION,
+            delta=DOLLAR_SUM_TOLERANCE,
+        )
+        by = {r.ticker: r for r in result.rows}
+        # Exact post-contribution needs (before cent rounding).
+        self.assertAlmostEqual(by["BND"].recommended_add, 298.87, delta=0.02)
+        self.assertAlmostEqual(by["VNQ"].recommended_add, 103.29, delta=0.02)
+        self.assertAlmostEqual(by["VTI"].recommended_add, 141.23, delta=0.02)
+        self.assertAlmostEqual(by["VXUS"].recommended_add, 456.62, delta=0.02)
+        # Projected weights must be the targets — not merely that dollars sum to $1,000.
+        self.assertAlmostEqual(by["BND"].projected_weight, 0.30, places=3)
+        self.assertAlmostEqual(by["VNQ"].projected_weight, 0.10, places=3)
+        self.assertAlmostEqual(by["VTI"].projected_weight, 0.35, places=3)
+        self.assertAlmostEqual(by["VXUS"].projected_weight, 0.25, places=3)
+        self.assertAlmostEqual(result.aggregate_drift_after, 0.0, delta=1e-3)
+        self.assertTrue(result.meta.get("exact_reach") or result.meta.get("reached_target"))
+        # Must not reproduce the prior buggy split.
+        self.assertNotAlmostEqual(by["BND"].recommended_add, 132.03, delta=1.0)
+        self.assertNotAlmostEqual(by["VXUS"].recommended_add, 566.64, delta=1.0)
+
+    def test_projected_values_equal_current_plus_add(self) -> None:
+        result = allocate_contribution_new_money_only(
+            current_values=self.VALUES,
+            target_weights=self.TARGETS,
+            contribution=self.CONTRIBUTION,
+        )
+        for r in result.rows:
+            self.assertAlmostEqual(r.projected_value, r.current_value + r.recommended_add, places=4)
+            self.assertAlmostEqual(
+                r.projected_weight,
+                r.projected_value / result.portfolio_value_after,
+                places=6,
+            )
+
+
+class TestContributionEngineEdgeCases(unittest.TestCase):
+    def test_insufficient_contribution_minimizes_drift_overweights_get_zero(self) -> None:
+        values = {"VOO": 8000.0, "QQQ": 2000.0}
+        targets = {"VOO": 0.50, "QQQ": 0.50}
+        result = allocate_contribution_new_money_only(
+            current_values=values, target_weights=targets, contribution=500.0
+        )
+        by = {r.ticker: r for r in result.rows}
+        self.assertAlmostEqual(by["VOO"].recommended_add, 0.0, delta=0.02)
+        self.assertAlmostEqual(by["QQQ"].recommended_add, 500.0, delta=0.02)
+        self.assertGreater(result.aggregate_drift_after, 0.01)
+        self.assertLess(result.aggregate_drift_after, result.aggregate_drift_before)
+
+    def test_excess_contribution_keeps_final_at_target(self) -> None:
+        # Mild drift; large C expands the pie so every need_i >= 0 → exact target.
+        values = {"A": 6000.0, "B": 4000.0}
+        targets = {"A": 0.50, "B": 0.50}
+        result = allocate_contribution_new_money_only(
+            current_values=values, target_weights=targets, contribution=5000.0
+        )
+        by = {r.ticker: r for r in result.rows}
+        self.assertAlmostEqual(by["A"].projected_weight, 0.50, places=4)
+        self.assertAlmostEqual(by["B"].projected_weight, 0.50, places=4)
+        self.assertAlmostEqual(by["A"].recommended_add, 1500.0, delta=0.02)
+        self.assertAlmostEqual(by["B"].recommended_add, 3500.0, delta=0.02)
+        self.assertAlmostEqual(result.aggregate_drift_after, 0.0, delta=1e-4)
+
+    def test_overweight_infeasible_without_sales(self) -> None:
+        values = {"VOO": 9000.0, "BND": 1000.0}
+        targets = {"VOO": 0.40, "BND": 0.60}
+        result = allocate_contribution_new_money_only(
+            current_values=values, target_weights=targets, contribution=1000.0
+        )
+        by = {r.ticker: r for r in result.rows}
+        self.assertAlmostEqual(by["VOO"].recommended_add, 0.0, delta=0.02)
+        self.assertAlmostEqual(by["BND"].recommended_add, 1000.0, delta=0.02)
+        self.assertTrue(result.meta.get("infeasible_without_sales"))
+        self.assertGreater(result.aggregate_drift_after, 0.05)
+
+    def test_already_balanced_pro_rata(self) -> None:
+        values = {"VTI": 4000.0, "VXUS": 2000.0, "BND": 3000.0, "VNQ": 1000.0}
+        targets = {"VTI": 40, "VXUS": 20, "BND": 30, "VNQ": 10}
+        result = allocate_contribution_new_money_only(
+            current_values=values, target_weights=targets, contribution=1000.0
+        )
+        by = {r.ticker: r for r in result.rows}
+        self.assertAlmostEqual(by["VTI"].recommended_add, 400.0, delta=0.02)
+        self.assertAlmostEqual(by["VXUS"].recommended_add, 200.0, delta=0.02)
+        self.assertAlmostEqual(by["BND"].recommended_add, 300.0, delta=0.02)
+        self.assertAlmostEqual(by["VNQ"].recommended_add, 100.0, delta=0.02)
+        for t, tw in [("VTI", 0.40), ("VXUS", 0.20), ("BND", 0.30), ("VNQ", 0.10)]:
+            self.assertAlmostEqual(by[t].projected_weight, tw, places=4)
+
+    def test_cent_rounding_sums_exactly(self) -> None:
+        values = {"AAA": 100.0, "BBB": 100.0, "CCC": 100.0}
+        targets = {"AAA": 1 / 3, "BBB": 1 / 3, "CCC": 1 / 3}
+        result = allocate_contribution_new_money_only(
+            current_values=values, target_weights=targets, contribution=100.0
+        )
+        adds = [r.recommended_add for r in result.rows]
+        self.assertAlmostEqual(sum(adds), 100.0, places=2)
+        for a in adds:
+            # Exactly two decimal places.
+            self.assertEqual(a, round(a, 2))
+
 
 
 class TestContributionAdvisorGates(unittest.TestCase):
