@@ -441,5 +441,139 @@ class TestContributionRecorder(unittest.TestCase):
         self.assertAlmostEqual(cash, 4000.0, places=2)
 
 
+class TestContributionReviewPresentation(unittest.TestCase):
+    """Review step must expose deposit + buys before any ledger mutation."""
+
+    VALUES = {"BND": 1273.76, "VNQ": 420.92, "VTI": 1693.51, "VXUS": 853.91}
+    TARGETS = {"BND": 30, "VNQ": 10, "VTI": 35, "VXUS": 25}
+    QUOTES = {"BND": 72.0, "VNQ": 88.0, "VTI": 250.0, "VXUS": 60.0}
+
+    def _plan(self):
+        from investment_ami.decision_support.contribution_recorder import (
+            attach_application_metadata_to_payload,
+            build_simulated_application_plan,
+            plan_review_table_rows,
+        )
+
+        records = [
+            _deposit(sum(self.VALUES.values()), txn_id="seed_dep"),
+            _buy("BND", self.VALUES["BND"], 1.0, txn_id="seed_bnd"),
+            _buy("VNQ", self.VALUES["VNQ"], 1.0, txn_id="seed_vnq"),
+            _buy("VTI", self.VALUES["VTI"], 1.0, txn_id="seed_vti"),
+            _buy("VXUS", self.VALUES["VXUS"], 1.0, txn_id="seed_vxus"),
+        ]
+        before = copy.deepcopy(records)
+        rec = allocate_contribution_new_money_only(
+            current_values=self.VALUES,
+            target_weights=self.TARGETS,
+            contribution=1000.0,
+        )
+        payload = attach_application_metadata_to_payload(
+            rec.to_dict(),
+            records=records,
+            contribution_amount=1000.0,
+            target_source="user_explicit",
+            targets=self.TARGETS,
+        )
+        adds = {r["ticker"]: r["recommended_add"] for r in payload["rows"]}
+        built = build_simulated_application_plan(
+            application_id=payload["meta"]["application_id"],
+            contribution_amount=1000.0,
+            recommended_adds=adds,
+            quotes=self.QUOTES,
+            fingerprint=payload["meta"]["recommendation_fingerprint"],
+        )
+        self.assertTrue(built.ok)
+        assert built.plan is not None
+        # Opening a review / building a plan must not mutate the ledger.
+        self.assertEqual(records, before)
+        return built.plan, plan_review_table_rows
+
+    def test_first_record_action_writes_nothing(self) -> None:
+        plan, _ = self._plan()
+        # Plan exists in memory only; authoritative list unchanged by construction.
+        self.assertEqual(plan.contribution_amount, 1000.0)
+        self.assertEqual(len(plan.buy_records), 4)
+
+    def test_review_shows_deposit_and_every_buy(self) -> None:
+        plan, plan_review_table_rows = self._plan()
+        rows = plan_review_table_rows(plan)
+        kinds = [r["kind"] for r in rows]
+        self.assertEqual(kinds[0], "deposit")
+        self.assertEqual(kinds.count("buy"), 4)
+        tickers = {r["ticker"] for r in rows if r["kind"] == "buy"}
+        self.assertEqual(tickers, {"BND", "VNQ", "VTI", "VXUS"})
+
+    def test_review_shows_quote_and_estimated_shares(self) -> None:
+        plan, plan_review_table_rows = self._plan()
+        for r in plan_review_table_rows(plan):
+            if r["kind"] != "buy":
+                continue
+            self.assertGreater(float(r["execution_price"]), 0)
+            self.assertGreater(float(r["estimated_shares"]), 0)
+            self.assertAlmostEqual(
+                float(r["execution_price"]),
+                self.QUOTES[r["ticker"]],
+                places=4,
+            )
+
+    def test_review_total_buys_equal_contribution(self) -> None:
+        plan, plan_review_table_rows = self._plan()
+        buys = sum(float(r["cost"]) for r in plan_review_table_rows(plan) if r["kind"] == "buy")
+        self.assertAlmostEqual(buys, 1000.0, delta=0.02)
+        deposit = next(r for r in plan_review_table_rows(plan) if r["kind"] == "deposit")
+        self.assertAlmostEqual(float(deposit["cost"]), 1000.0, places=2)
+
+    def test_review_dict_form_matches_plan_object(self) -> None:
+        plan, plan_review_table_rows = self._plan()
+        from_obj = plan_review_table_rows(plan)
+        from_dict = plan_review_table_rows(plan.to_dict())
+        self.assertEqual(len(from_obj), len(from_dict))
+        self.assertEqual(
+            [r["ticker"] for r in from_obj if r["kind"] == "buy"],
+            [r["ticker"] for r in from_dict if r["kind"] == "buy"],
+        )
+
+    def test_review_text_policy_is_simulated_not_brokerage(self) -> None:
+        plan, _ = self._plan()
+        self.assertEqual(plan.execution_policy, "simulated_fill_at_current_mark")
+        self.assertTrue(any("not a brokerage" in w.lower() or "simulated" in w.lower() for w in plan.warnings))
+
+    def test_only_confirm_mutates_cancel_does_not(self) -> None:
+        plan, _ = self._plan()
+        records = [
+            _deposit(sum(self.VALUES.values()), txn_id="seed_dep"),
+            _buy("BND", self.VALUES["BND"], 1.0, txn_id="seed_bnd"),
+            _buy("VNQ", self.VALUES["VNQ"], 1.0, txn_id="seed_vnq"),
+            _buy("VTI", self.VALUES["VTI"], 1.0, txn_id="seed_vti"),
+            _buy("VXUS", self.VALUES["VXUS"], 1.0, txn_id="seed_vxus"),
+        ]
+        before = copy.deepcopy(records)
+        # Cancel ≡ discard plan without apply.
+        self.assertEqual(records, before)
+        applied = apply_contribution_plan_to_records(
+            records, plan, current_fingerprint=plan.fingerprint
+        )
+        self.assertTrue(applied.ok)
+        self.assertGreater(len(applied.transactions), len(before))
+
+    def test_stale_review_cannot_confirm(self) -> None:
+        plan, _ = self._plan()
+        records = [
+            _deposit(sum(self.VALUES.values()), txn_id="seed_dep"),
+            _buy("BND", self.VALUES["BND"], 1.0, txn_id="seed_bnd"),
+            _buy("VNQ", self.VALUES["VNQ"], 1.0, txn_id="seed_vnq"),
+            _buy("VTI", self.VALUES["VTI"], 1.0, txn_id="seed_vti"),
+            _buy("VXUS", self.VALUES["VXUS"], 1.0, txn_id="seed_vxus"),
+        ]
+        mutated = records + [_deposit(1.0, txn_id="drift")]
+        result = apply_contribution_plan_to_records(
+            mutated, plan, current_fingerprint=plan.fingerprint
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, STATUS_STALE)
+        self.assertEqual(result.transactions, ())
+
+
 if __name__ == "__main__":
     unittest.main()

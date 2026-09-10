@@ -135,7 +135,7 @@ class TestTransactionSaveReloadDashboardAllocation(unittest.TestCase):
 
     def test_build_id_bumped_for_deploy_verification(self) -> None:
         self.assertTrue(rp.REAL_PORTFOLIO_BUILD_ID)
-        self.assertIn("record-contribution", rp.REAL_PORTFOLIO_BUILD_ID)
+        self.assertIn("contribution-review", rp.REAL_PORTFOLIO_BUILD_ID)
 
 
 if __name__ == "__main__":

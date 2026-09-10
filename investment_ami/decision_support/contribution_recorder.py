@@ -499,6 +499,66 @@ def apply_contribution_plan_to_records(
     )
 
 
+def plan_review_table_rows(plan: ContributionApplicationPlan | Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a plan (object or dict) into review-table rows for UI/tests."""
+    if isinstance(plan, ContributionApplicationPlan):
+        purchases = plan.purchases
+        deposit = float(plan.contribution_amount)
+        aid = plan.application_id
+        policy = plan.execution_policy
+    else:
+        purchases = plan.get("purchases") or []
+        deposit = float(plan.get("contribution_amount") or 0.0)
+        aid = str(plan.get("application_id") or "")
+        policy = str(plan.get("execution_policy") or "")
+    rows: list[dict[str, Any]] = [
+        {
+            "kind": "deposit",
+            "ticker": "CASH",
+            "label": "External cash deposit",
+            "recommended_dollars": deposit,
+            "execution_price": None,
+            "estimated_shares": None,
+            "cost": deposit,
+            "price_source": "",
+            "application_id": aid,
+            "execution_policy": policy,
+        }
+    ]
+    for p in purchases:
+        if isinstance(p, PlannedPurchase):
+            rows.append(
+                {
+                    "kind": "buy",
+                    "ticker": p.ticker,
+                    "label": f"Buy {p.ticker}",
+                    "recommended_dollars": float(p.recommended_dollars),
+                    "execution_price": float(p.execution_price),
+                    "estimated_shares": float(p.shares),
+                    "cost": float(p.cost),
+                    "price_source": p.price_source,
+                    "application_id": aid,
+                    "execution_policy": policy,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "kind": "buy",
+                    "ticker": str(p.get("ticker") or ""),
+                    "label": f"Buy {p.get('ticker') or ''}",
+                    "recommended_dollars": float(p.get("recommended_dollars") or 0.0),
+                    "execution_price": float(p.get("execution_price") or 0.0),
+                    "estimated_shares": float(p.get("shares") or 0.0),
+                    "cost": float(p.get("cost") or 0.0),
+                    "price_source": str(p.get("price_source") or ""),
+                    "application_id": aid,
+                    "execution_policy": policy,
+                }
+            )
+    return rows
+
+
 def attach_application_metadata_to_payload(
     payload: dict[str, Any],
     *,
