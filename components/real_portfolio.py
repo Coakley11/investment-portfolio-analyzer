@@ -23,7 +23,7 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-09-weight-coherence-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-contribution-prose-escape-v1"
 
 
 def _ss() -> Any:
@@ -583,15 +583,25 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
     _ss()["_contribution_advisor_result"] = payload
     # Decision support only — never write deposits/buys from Calculate.
     if not result.ok:
-        st.error(result.explanation)
+        st.error(_streamlit_prose(result.explanation))
         for w in result.warnings:
-            st.warning(w)
+            st.warning(_streamlit_prose(w))
         return
     _render_contribution_result(payload)
 
 
+def _streamlit_prose(text: str) -> str:
+    """Escape ``$`` so Streamlit Markdown does not collapse currency into LaTeX."""
+    try:
+        from investment_ami_answer_format import escape_streamlit_markdown_prose
+
+        return escape_streamlit_markdown_prose(str(text or ""))
+    except ImportError:
+        return str(text or "").replace("$", "\\$")
+
+
 def _render_contribution_result(payload: dict) -> None:
-    st.success(payload.get("explanation") or "Allocation ready.")
+    st.success(_streamlit_prose(payload.get("explanation") or "Allocation ready."))
     st.caption(
         "Decision support only — this calculation does **not** record a cash deposit or buy "
         "in your transaction ledger, and does not count the contribution as investment profit."

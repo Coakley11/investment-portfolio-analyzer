@@ -286,6 +286,30 @@ class TestShadow1LiveExactReach(unittest.TestCase):
         self.assertNotAlmostEqual(by["BND"].recommended_add, 132.03, delta=1.0)
         self.assertNotAlmostEqual(by["VXUS"].recommended_add, 566.64, delta=1.0)
 
+    def test_explanation_escapes_currency_for_streamlit_markdown(self) -> None:
+        """Regression: bare ``$1,000`` in st.success is eaten as LaTeX (words concatenate)."""
+        from investment_ami_answer_format import escape_streamlit_markdown_prose
+
+        import components.real_portfolio as rp
+
+        result = allocate_contribution_new_money_only(
+            current_values=self.VALUES,
+            target_weights=self.TARGETS,
+            contribution=self.CONTRIBUTION,
+        )
+        raw = result.explanation
+        self.assertIn("$1,000", raw)
+        self.assertIn(" is enough ", raw)
+        self.assertIn("BND", raw)
+        # Presentation helper must escape every currency ``$`` for Streamlit Markdown.
+        escaped = rp._streamlit_prose(raw)
+        self.assertEqual(escaped, escape_streamlit_markdown_prose(raw))
+        self.assertIn("\\$1,000", escaped)
+        self.assertIn(" is enough ", escaped)
+        self.assertIn("\\$", escaped)
+        # No unescaped dollar left for KaTeX to swallow intervening prose.
+        self.assertNotRegex(escaped, r"(?<!\\)\$")
+
     def test_projected_values_equal_current_plus_add(self) -> None:
         result = allocate_contribution_new_money_only(
             current_values=self.VALUES,
