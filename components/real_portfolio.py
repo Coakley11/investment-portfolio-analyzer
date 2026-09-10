@@ -23,11 +23,33 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-09-contribution-prices-v2-instrument-alloc"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-09-vnq-ticker-identity-v1"
 
 
 def _ss() -> Any:
     return st.session_state
+
+
+def _ensure_known_ticker_identity_corrections() -> list[str]:
+    """
+    Rewrite known corrupted trade tickers in the authoritative ledger and persist once.
+
+    Identity-only (e.g. VN! → VNQ). Does not invent sells/buys or change economics.
+    """
+    records = _ss().get(SESSION_TRANSACTIONS_KEY)
+    if not isinstance(records, list) or not records:
+        return []
+    repaired, notes = pe.apply_known_ticker_identity_corrections(records)
+    if not notes:
+        return []
+    _ss()[SESSION_TRANSACTIONS_KEY] = repaired
+    _ss()["_real_portfolio_ledger_touched"] = True
+    ok, msg = _persist_portfolio_ledger_change(trigger="portfolio_ticker_identity_correction")
+    if ok:
+        _ss()["_ticker_identity_correction_notice"] = notes
+    else:
+        _ss()["_ticker_identity_correction_notice"] = notes + [f"Persist deferred: {msg}"]
+    return notes
 
 
 def get_portfolio_transactions() -> list[pe.PortfolioTransaction]:
@@ -331,9 +353,9 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
                 )
                 _persist_new_transaction(transactions, txn)
         else:
-            sym = str(ticker or "").strip().upper()
-            if not sym:
-                st.error("Enter a ticker for buy/sell transactions.")
+            ok_ticker, sym, ticker_err = pe.validate_trade_ticker(ticker)
+            if not ok_ticker:
+                st.error(ticker_err or "Enter a valid ticker for buy/sell transactions.")
             elif quantity <= 0:
                 st.error("Quantity must be greater than zero.")
             elif price <= 0:
@@ -689,6 +711,13 @@ def render_real_portfolio_tab(*, beginner: bool = False) -> None:
         st.caption(f"Deploy commit: `{resolve_git_commit_short()}` · Real Portfolio UI: `{REAL_PORTFOLIO_BUILD_ID}`")
     except ImportError:
         st.caption(f"Real Portfolio UI: `{REAL_PORTFOLIO_BUILD_ID}`")
+
+    # Repair known corrupted tickers (VN! → VNQ) before any sub-tab reads the ledger.
+    _ensure_known_ticker_identity_corrections()
+    notice = _ss().pop("_ticker_identity_correction_notice", None)
+    if notice:
+        for line in notice:
+            st.info(line)
 
     labels = list(REAL_PORTFOLIO_SUBTABS)
     try:

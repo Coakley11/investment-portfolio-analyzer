@@ -720,7 +720,11 @@ def _autosave_would_clobber_saved_portfolio(
     trigger: str = "",
 ) -> tuple[bool, str]:
     """Block writes that would replace a saved cloud portfolio with empty/default holdings."""
-    if trigger in ("portfolio_transactions_change", "portfolio_transactions_import"):
+    if trigger in (
+        "portfolio_transactions_change",
+        "portfolio_transactions_import",
+        "portfolio_ticker_identity_correction",
+    ):
         return False, ""
     if _state_has_real_portfolio_ledger_blob(state):
         return False, ""
@@ -1933,6 +1937,7 @@ _CLOUD_READBACK_TRIGGERS = frozenset(
         "insight_store",
         "portfolio_transactions_change",
         "portfolio_transactions_import",
+        "portfolio_ticker_identity_correction",
     }
 )
 
@@ -2052,6 +2057,7 @@ def autosave_investment_state(st: Any, *, end_of_run: bool = False, trigger: str
             "insight_store",
             "portfolio_transactions_change",
             "portfolio_transactions_import",
+            "portfolio_ticker_identity_correction",
         ):
             event["outcome"] = "skipped_fp_unchanged"
             _append_diag_log(st, _AUTOSAVE_LOG_KEY, event)

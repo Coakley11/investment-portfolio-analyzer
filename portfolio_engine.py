@@ -8,6 +8,7 @@ No brokerage integration; manual entry only.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -19,6 +20,16 @@ import etf_holdings as eh
 TransactionAction = Literal["buy", "sell", "cash_deposit", "cash_withdrawal"]
 AssetType = Literal["stock", "etf", "bond", "cash", "other"]
 RiskTolerance = Literal["Conservative", "Moderate", "Aggressive"]
+
+# Trade tickers: letters/digits with optional Yahoo class separators (BRK.B, BF-B).
+# Rejects punctuation such as ``!`` that cannot be quoted and was observed as ``VN!``.
+_TRADE_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,14}$")
+
+# Known ledger identity corruptions (not market-data aliases). Applied only via
+# ``correct_transaction_ticker_identity`` / repair helpers — never as quote fallbacks.
+KNOWN_TICKER_IDENTITY_CORRECTIONS: tuple[tuple[str, str], ...] = (
+    ("VN!", "VNQ"),  # Shadow #1 REIT mistyped / unsanitized entry
+)
 
 POSITION_COLUMNS = [
     "Ticker",
@@ -218,6 +229,110 @@ def _apply_split_to_ledger(ledger: dict[str, dict[str, Any]], ticker: str, ratio
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def normalize_trade_ticker(raw: Any) -> str:
+    """Strip and uppercase a trade ticker; does not invent aliases."""
+    return str(raw or "").strip().upper()
+
+
+def validate_trade_ticker(raw: Any) -> tuple[bool, str, str]:
+    """
+    Validate a trade ticker for ledger entry.
+
+    Returns ``(ok, normalized, error_message)``. Empty normalized when invalid.
+    Blocks unsupported punctuation (e.g. ``VN!``) rather than auto-correcting.
+    """
+    normalized = normalize_trade_ticker(raw)
+    if not normalized:
+        return False, "", "Ticker is required."
+    if not _TRADE_TICKER_RE.fullmatch(normalized):
+        return (
+            False,
+            "",
+            (
+                f"Invalid ticker '{normalized}'. Use letters/numbers only "
+                "(optional '.' or '-' for share classes, e.g. BRK.B). "
+                "Punctuation such as '!' is not allowed."
+            ),
+        )
+    return True, normalized, ""
+
+
+def correct_transaction_ticker_identity(
+    transactions: list[dict[str, Any]] | None,
+    *,
+    from_ticker: str,
+    to_ticker: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Identity correction: rewrite ticker on existing trade rows only.
+
+    Preserves date, action, quantity, price, notes, ids, and ownership fields.
+    Does not insert sells/buys or change economics. Cash rows are left unchanged.
+    """
+    src = normalize_trade_ticker(from_ticker)
+    ok, dst, err = validate_trade_ticker(to_ticker)
+    if not src:
+        raise ValueError("from_ticker is required")
+    if not ok:
+        raise ValueError(err or "to_ticker is invalid")
+
+    out: list[dict[str, Any]] = []
+    n_changed = 0
+    for raw in transactions or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        action = str(row.get("action") or "").strip().lower()
+        if action in ("buy", "sell"):
+            cur = normalize_trade_ticker(row.get("ticker"))
+            if cur == src:
+                row["ticker"] = dst
+                # Refresh display name when it was blank or mirrored the old symbol.
+                prev_name = str(row.get("company_name") or "").strip()
+                if (not prev_name) or prev_name.upper() == src:
+                    row["company_name"] = infer_company_name(dst)
+                n_changed += 1
+        out.append(row)
+    return out, n_changed
+
+
+def apply_known_ticker_identity_corrections(
+    transactions: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Apply documented ledger identity fixes (e.g. VN! → VNQ).
+
+    Returns ``(transactions, human-readable change notes)``.
+    """
+    txs = [dict(t) for t in (transactions or []) if isinstance(t, dict)]
+    notes: list[str] = []
+    for src, dst in KNOWN_TICKER_IDENTITY_CORRECTIONS:
+        txs, n = correct_transaction_ticker_identity(txs, from_ticker=src, to_ticker=dst)
+        if n:
+            notes.append(f"Corrected ticker identity on {n} transaction(s): {src} → {dst}")
+    return txs, notes
+
+
+def find_malformed_trade_tickers(
+    transactions: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Return sorted unique buy/sell tickers that fail ``validate_trade_ticker``."""
+    bad: set[str] = set()
+    for raw in transactions or []:
+        if not isinstance(raw, dict):
+            continue
+        action = str(raw.get("action") or "").strip().lower()
+        if action not in ("buy", "sell"):
+            continue
+        sym = normalize_trade_ticker(raw.get("ticker"))
+        if not sym:
+            continue
+        ok, _, _ = validate_trade_ticker(sym)
+        if not ok:
+            bad.add(sym)
+    return sorted(bad)
 
 
 def _parse_date(value: Any) -> dt.date:

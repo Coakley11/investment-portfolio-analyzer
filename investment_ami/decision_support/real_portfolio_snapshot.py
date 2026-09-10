@@ -388,6 +388,22 @@ def build_real_portfolio_snapshot(
             )
         )
 
+    # Identity-only ledger repair (e.g. VN! → VNQ). UI path also persists for durability.
+    records, _identity_notes = pe.apply_known_ticker_identity_corrections(
+        [r for r in records if isinstance(r, dict)]
+    )
+    if _identity_notes and session_state is not None and isinstance(
+        session_state.get("portfolio_transactions"), list
+    ):
+        try:
+            session_state["portfolio_transactions"] = records  # type: ignore[index]
+        except Exception:
+            pass
+    if _identity_notes and isinstance(context, dict) and isinstance(
+        context.get("portfolio_transactions"), list
+    ):
+        context["portfolio_transactions"] = records
+
     txns = pe.transactions_from_records(records)
     ledger, cash_balance = pe._ledger_from_transactions(txns)
     as_of = _utc_now()
