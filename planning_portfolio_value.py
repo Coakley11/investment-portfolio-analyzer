@@ -1,6 +1,13 @@
 """Canonical planning-page portfolio value (How Much → Apply to sidebar).
 
-Separate from holdings market value, plan total cash, and AMI snapshots.
+This is an **analytical / simulation starting amount** for weight-based dollar
+estimates (optimizer, tables, suggestions). It is intentionally separate from:
+
+- Real Portfolio ledger NAV (``portfolio_engine`` / My Portfolio Dashboard)
+- holdings market value from ``holdings_df``
+- plan total cash / AMI snapshots
+
+Recording a Contribution Advisor deposit+buys must **not** mutate this value.
 """
 
 from __future__ import annotations

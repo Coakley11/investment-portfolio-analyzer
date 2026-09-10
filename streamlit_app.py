@@ -1318,8 +1318,11 @@ def render_sidebar() -> dict:
     refresh_market_data_sidebar()
 
     st.sidebar.divider()
-    st.sidebar.markdown("### Investment amount")
-    st.sidebar.caption("Used for dollar amounts across all tables and suggestions.")
+    st.sidebar.markdown("### Planning portfolio value")
+    st.sidebar.caption(
+        "Analytical starting amount for weight-based tables, optimizer dollars, and suggestions. "
+        "**Not** My Portfolio / Real Portfolio live NAV — that comes from your transaction ledger."
+    )
     from investment_persistent_state import (
         _PORTFOLIO_VALUE_USER_SET_KEY,
         ensure_sidebar_portfolio_value_default,
@@ -1339,11 +1342,15 @@ def render_sidebar() -> dict:
         notify_global_settings_change(st, source="portfolio_value_widget")
 
     initial_value = st.sidebar.number_input(
-        "Portfolio value ($)",
+        "Planning portfolio value ($)",
         min_value=1_000,
         max_value=10_000_000,
         step=5_000,
-        help="Total investable amount for allocation dollar estimates.",
+        help=(
+            "Used only for analytical/simulation dollar estimates (weights × this amount). "
+            "Recording a Real Portfolio contribution does not change this field — "
+            "see My Portfolio → Dashboard for ledger market value."
+        ),
         key="sidebar_portfolio_value",
         on_change=_on_portfolio_value_widget_change,
     )

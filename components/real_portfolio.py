@@ -206,7 +206,9 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
     st.caption(
         f"Net external contributions (deposits − withdrawals): **{pe.format_currency(net_contributions)}**. "
         "Securities cost basis is purchase cost of open holdings — not the same as contributions, "
-        "and deposits are not counted as investment gain."
+        "and deposits are not counted as investment gain. "
+        "This **Total Portfolio Value** is your Real Portfolio ledger NAV — independent of the "
+        "sidebar **Planning portfolio value** used for analytical/simulation dollars."
     )
 
     if summary.cash_balance < -0.01:

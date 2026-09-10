@@ -539,6 +539,134 @@ class TestContributionReviewPresentation(unittest.TestCase):
         self.assertEqual(plan.execution_policy, "simulated_fill_at_current_mark")
         self.assertTrue(any("not a brokerage" in w.lower() or "simulated" in w.lower() for w in plan.warnings))
 
+    def test_recording_contribution_does_not_change_sidebar_planning_value(self) -> None:
+        """Sidebar planning value is independent of Real Portfolio ledger NAV."""
+        records = [
+            _deposit(sum(self.VALUES.values()), txn_id="seed_dep"),
+            _buy("BND", self.VALUES["BND"], 1.0, txn_id="seed_bnd"),
+            _buy("VNQ", self.VALUES["VNQ"], 1.0, txn_id="seed_vnq"),
+            _buy("VTI", self.VALUES["VTI"], 1.0, txn_id="seed_vti"),
+            _buy("VXUS", self.VALUES["VXUS"], 1.0, txn_id="seed_vxus"),
+        ]
+        plan, _ = self._plan()
+        # Re-bind fingerprint to these exact records.
+        from investment_ami.decision_support.contribution_recorder import (
+            apply_contribution_plan_to_records,
+            ledger_state_fingerprint,
+        )
+        from investment_ami.decision_support.contribution_recorder import ContributionApplicationPlan
+
+        fp = dict(plan.fingerprint)
+        fp["ledger_fp"] = ledger_state_fingerprint(records)
+        plan = ContributionApplicationPlan(
+            application_id=plan.application_id,
+            contribution_amount=plan.contribution_amount,
+            trade_date=plan.trade_date,
+            execution_policy=plan.execution_policy,
+            deposit_record=plan.deposit_record,
+            buy_records=plan.buy_records,
+            purchases=plan.purchases,
+            fingerprint=fp,
+            warnings=plan.warnings,
+            meta=plan.meta,
+        )
+        session = {"sidebar_portfolio_value": 100_000, "portfolio_transactions": copy.deepcopy(records)}
+        before_sidebar = session["sidebar_portfolio_value"]
+        applied = apply_contribution_plan_to_records(
+            records, plan, current_fingerprint=plan.fingerprint
+        )
+        self.assertTrue(applied.ok)
+        session["portfolio_transactions"] = list(applied.transactions)
+        # Recorder never touches the planning sidebar field.
+        self.assertEqual(session["sidebar_portfolio_value"], before_sidebar)
+        self.assertEqual(session["sidebar_portfolio_value"], 100_000)
+
+    def test_live_shadow_fill_accounting_invariants(self) -> None:
+        """Post-contribution ledger economics (shares/cash/deposits/gain) without touching sidebar."""
+        fills = {
+            "BND": (4.1596, 71.29, 296.54),
+            "VNQ": (1.1041, 94.01, 103.80),
+            "VTI": (0.3761, 373.04, 140.31),
+            "VXUS": (5.3273, 86.22, 459.35),
+        }
+        post_shares = {"VTI": 4.8854, "VXUS": 15.0963, "BND": 21.9173, "VNQ": 5.5377}
+        pre_shares = {t: post_shares[t] - fills[t][0] for t in post_shares}
+        marks = {t: fills[t][1] for t in fills}
+        seed_cost = sum(pre_shares[t] * marks[t] for t in pre_shares)
+        records = [_deposit(seed_cost, txn_id="pre_dep")]
+        for t, sh in pre_shares.items():
+            records.append(_buy(t, sh, marks[t], txn_id=f"pre_{t.lower()}"))
+
+        before = pe.compute_portfolio_summary(
+            pe.transactions_from_records(records), prices=marks
+        )
+        cash_before = pe.compute_cash_ledger_summary(pe.transactions_from_records(records))
+
+        event_id = "manual_verify_event"
+        records2 = records + [
+            pe.PortfolioTransaction(
+                id="dep1000",
+                action="cash_deposit",
+                date="2026-09-10",
+                ticker="",
+                quantity=1000.0,
+                execution_price=1.0,
+                contribution_event_id=event_id,
+                source="contribution_advisor",
+                company_name="Cash",
+                asset_type="cash",
+            ).to_record()
+        ]
+        for t, (sh, px, _cost) in fills.items():
+            records2.append(
+                pe.PortfolioTransaction(
+                    id=f"buy_{t.lower()}",
+                    action="buy",
+                    date="2026-09-10",
+                    ticker=t,
+                    quantity=sh,
+                    execution_price=px,
+                    contribution_event_id=event_id,
+                    source="contribution_advisor",
+                    company_name=t,
+                    asset_type="etf",
+                ).to_record()
+            )
+
+        after_txns = pe.transactions_from_records(records2)
+        positions, cash = pe.build_positions(after_txns, prices=marks)
+        by = {p.ticker: p for p in positions}
+        for t, expected in post_shares.items():
+            self.assertAlmostEqual(by[t].shares_owned, expected, places=3)
+
+        total_mv = sum(p.market_value for p in positions)
+        weights = {p.ticker: p.market_value / total_mv * 100.0 for p in positions}
+        self.assertAlmostEqual(weights["VTI"], 35.0, delta=1.5)
+        self.assertAlmostEqual(weights["VXUS"], 25.0, delta=1.5)
+        self.assertAlmostEqual(weights["BND"], 30.0, delta=1.5)
+        self.assertAlmostEqual(weights["VNQ"], 10.0, delta=1.5)
+
+        cash_after = pe.compute_cash_ledger_summary(after_txns)
+        self.assertAlmostEqual(cash_after.total_deposits - cash_before.total_deposits, 1000.0, places=2)
+        self.assertAlmostEqual(cash_after.total_buy_cost - cash_before.total_buy_cost, 1000.0, delta=0.05)
+        self.assertAlmostEqual(cash, cash_before.net_cash, delta=0.05)
+
+        after = pe.compute_portfolio_summary(after_txns, prices=marks)
+        self.assertAlmostEqual(
+            after.total_invested_capital - before.total_invested_capital,
+            1000.0,
+            delta=1.0,
+        )
+        self.assertLess(abs(after.total_gain_loss_dollar - before.total_gain_loss_dollar), 5.0)
+
+        round_trip = pe.transactions_from_records(pe.transactions_to_records(after_txns))
+        pos2, cash2 = pe.build_positions(round_trip, prices=marks)
+        self.assertAlmostEqual(cash2, cash, places=4)
+        self.assertEqual(
+            {p.ticker: round(p.shares_owned, 4) for p in pos2},
+            {p.ticker: round(p.shares_owned, 4) for p in positions},
+        )
+
     def test_only_confirm_mutates_cancel_does_not(self) -> None:
         plan, _ = self._plan()
         records = [
