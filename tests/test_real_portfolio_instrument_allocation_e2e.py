@@ -134,7 +134,8 @@ class TestTransactionSaveReloadDashboardAllocation(unittest.TestCase):
         self.assertAlmostEqual(summary.allocation_by_bucket["ETFs"], 0.0, places=1)
 
     def test_build_id_bumped_for_deploy_verification(self) -> None:
-        self.assertIn("instrument-alloc", rp.REAL_PORTFOLIO_BUILD_ID)
+        self.assertTrue(rp.REAL_PORTFOLIO_BUILD_ID)
+        self.assertIn("weight-coherence", rp.REAL_PORTFOLIO_BUILD_ID)
 
 
 if __name__ == "__main__":

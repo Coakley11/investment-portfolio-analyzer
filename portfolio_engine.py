@@ -766,10 +766,12 @@ def build_positions(
         )
 
     securities_value = sum(p.market_value for p in positions)
-    total_value = securities_value + cash_balance
-    if total_value > 0:
+    # Holding weights use securities + non-negative cash only. Negative cash (buys
+    # exceeding deposits) must not shrink the denominator and inflate weights past 100%.
+    weight_denominator = securities_value + max(0.0, cash_balance)
+    if weight_denominator > 0:
         for p in positions:
-            p.weight_pct = p.market_value / total_value * 100.0
+            p.weight_pct = p.market_value / weight_denominator * 100.0
 
     positions.sort(key=lambda p: p.market_value, reverse=True)
     return positions, cash_balance
@@ -860,10 +862,14 @@ def compute_portfolio_summary(
     for p in positions:
         bucket = allocation_bucket(p.asset_type)
         bucket_totals[bucket] = bucket_totals.get(bucket, 0.0) + p.market_value
-    bucket_totals["Cash"] += cash_balance
+    # Negative cash is surfaced via cash_balance / warnings — not as a negative allocation %.
+    cash_for_alloc = max(0.0, cash_balance)
+    bucket_totals["Cash"] += cash_for_alloc
+    alloc_denominator = securities_value + cash_for_alloc
 
     allocation_pct = {
-        k: (v / total_value * 100.0 if total_value > 0 else 0.0) for k, v in bucket_totals.items()
+        k: (v / alloc_denominator * 100.0 if alloc_denominator > 0 else 0.0)
+        for k, v in bucket_totals.items()
     }
 
     sorted_by_gain = sorted(positions, key=lambda p: p.gain_loss_pct, reverse=True)

@@ -23,7 +23,7 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-09-vnq-ticker-identity-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-09-weight-coherence-v1"
 
 
 def _ss() -> Any:
@@ -35,6 +35,8 @@ def _ensure_known_ticker_identity_corrections() -> list[str]:
     Rewrite known corrupted trade tickers in the authoritative ledger and persist once.
 
     Identity-only (e.g. VN! → VNQ). Does not invent sells/buys or change economics.
+    Invalidates downstream weight/target caches so Positions and Contribution Advisor
+    rebuild from the corrected ledger consistently.
     """
     records = _ss().get(SESSION_TRANSACTIONS_KEY)
     if not isinstance(records, list) or not records:
@@ -44,12 +46,34 @@ def _ensure_known_ticker_identity_corrections() -> list[str]:
         return []
     _ss()[SESSION_TRANSACTIONS_KEY] = repaired
     _ss()["_real_portfolio_ledger_touched"] = True
+    _invalidate_portfolio_derived_session_state()
     ok, msg = _persist_portfolio_ledger_change(trigger="portfolio_ticker_identity_correction")
     if ok:
         _ss()["_ticker_identity_correction_notice"] = notes
     else:
         _ss()["_ticker_identity_correction_notice"] = notes + [f"Persist deferred: {msg}"]
     return notes
+
+
+def _invalidate_portfolio_derived_session_state() -> None:
+    """Drop stale weight/target/result caches after ledger identity changes."""
+    ss = _ss()
+    ss.pop("_contribution_advisor_result", None)
+    ss.pop("_portfolio_sizing_result", None)
+    saved = ss.get(SESSION_CONTRIBUTION_TARGETS_KEY)
+    if isinstance(saved, dict):
+        remapped: dict[str, Any] = {}
+        for key, val in saved.items():
+            sym = str(key or "").strip().upper()
+            if sym == "VN!":
+                sym = "VNQ"
+            if sym:
+                remapped[sym] = val
+        ss[SESSION_CONTRIBUTION_TARGETS_KEY] = remapped
+    # Force Streamlit widget keys for contribution targets to re-seed from fresh weights.
+    for k in list(ss.keys()):
+        if str(k).startswith("contrib_tgt_"):
+            ss.pop(k, None)
 
 
 def get_portfolio_transactions() -> list[pe.PortfolioTransaction]:

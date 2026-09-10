@@ -503,8 +503,12 @@ def build_real_portfolio_snapshot(
         holdings.append(holding)
 
     total_market_value = priced_market_total + cash_balance
-    if cash_balance > 0:
-        allocation_class["Cash"] = allocation_class.get("Cash", 0.0) + cash_balance
+    cash_for_weight = max(0.0, cash_balance)
+    # Holding weights must not use a shrunken denominator when cash is negative
+    # (unfunded buys); that previously produced sums like 109.97%.
+    weight_denominator = priced_market_total + cash_for_weight
+    if cash_for_weight > 0:
+        allocation_class["Cash"] = allocation_class.get("Cash", 0.0) + cash_for_weight
 
     if unpriced_count:
         portfolio_flags.append("missing_prices")
@@ -513,13 +517,13 @@ def build_real_portfolio_snapshot(
     if unpriced_count and priced_market_total <= 0 and not cash_balance:
         portfolio_flags.append("no_priced_holdings")
 
-    # Weights use known total (priced securities + cash); unpriced names stay at 0% with flags.
+    # Weights: priced holdings (+ non-negative cash). Unpriced names stay at 0% with flags.
     allocation_by_holding: dict[str, float] = {}
-    if total_market_value > 0:
+    if weight_denominator > 0:
         updated: list[RealHoldingSnapshot] = []
         for h in holdings:
             if h.current_price is not None and h.current_value > 0:
-                w = h.current_value / total_market_value * 100.0
+                w = h.current_value / weight_denominator * 100.0
             else:
                 w = 0.0
             allocation_by_holding[h.ticker] = w
@@ -544,11 +548,11 @@ def build_real_portfolio_snapshot(
             )
         holdings = updated
 
-    if total_market_value > 0 and abs(cash_balance) > 1e-9:
-        allocation_by_holding["$CASH"] = cash_balance / total_market_value * 100.0
+    if weight_denominator > 0 and cash_for_weight > 1e-9:
+        allocation_by_holding["$CASH"] = cash_for_weight / weight_denominator * 100.0
 
     allocation_by_asset_class = {
-        k: (v / total_market_value * 100.0 if total_market_value > 0 else 0.0)
+        k: (v / weight_denominator * 100.0 if weight_denominator > 0 else 0.0)
         for k, v in allocation_class.items()
     }
 
