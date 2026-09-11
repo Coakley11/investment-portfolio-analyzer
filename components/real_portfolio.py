@@ -23,7 +23,7 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-10-strategy-exact-edit-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-dashboard-abc-v1"
 SESSION_CONTRIBUTION_PENDING_KEY = "_contribution_record_pending"
 SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY = "_contribution_advisor_active_source"
 
@@ -235,6 +235,14 @@ def _render_cash_accounting_summary(transactions: list[pe.PortfolioTransaction])
 
 
 def render_portfolio_dashboard(*, beginner: bool = False) -> None:
+    from investment_ami.decision_support.contribution_advisor import strategy_targets_from_session
+    from investment_ami.decision_support.real_portfolio_dashboard_insights import (
+        analyze_strategy_status,
+        best_and_worst_dollar_contributors,
+        financial_performance_from_engine,
+        holding_performance_drivers,
+    )
+
     transactions = get_portfolio_transactions()
     summary = pe.compute_portfolio_summary(transactions)
     positions, cash = pe.build_positions(transactions)
@@ -246,45 +254,52 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
         )
         return
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
     cash_ledger = pe.compute_cash_ledger_summary(transactions)
     net_contributions = cash_ledger.total_deposits - cash_ledger.total_withdrawals
-    _metric_row(
-        [c1, c2, c3, c4, c5, c6],
-        [
-            "Total Portfolio Value",
-            "Securities cost basis",
-            "Total Gain/Loss $",
-            "Total Gain/Loss %",
-            "Cash Balance",
-            "Holdings",
-        ],
-        [
-            pe.format_currency(summary.total_portfolio_value),
-            pe.format_currency(summary.total_invested_capital),
-            _format_gain(summary.total_gain_loss_dollar),
-            _format_pct(summary.total_gain_loss_pct),
-            pe.format_currency(summary.cash_balance),
-            str(summary.num_holdings),
-        ],
-    )
-    st.caption(
-        f"Net external contributions (deposits − withdrawals): **{pe.format_currency(net_contributions)}**. "
-        "Securities cost basis is purchase cost of open holdings — not the same as contributions, "
-        "and deposits are not counted as investment gain. "
-        "This **Total Portfolio Value** is your Real Portfolio ledger NAV — independent of the "
-        "sidebar **Planning portfolio value** used for analytical/simulation dollars."
+    securities_mv = sum(p.market_value for p in positions)
+    finance = financial_performance_from_engine(
+        total_portfolio_value=summary.total_portfolio_value,
+        securities_market_value=securities_mv,
+        cash_balance=summary.cash_balance,
+        net_external_contributions=net_contributions,
+        securities_cost_basis=summary.total_invested_capital,
+        unrealized_gain_loss_dollar=summary.total_gain_loss_dollar,
+        num_holdings=summary.num_holdings,
     )
 
-    if summary.cash_balance < -0.01:
+    # --- A. Financial performance (making / losing money?) ---
+    st.markdown("#### How am I doing financially?")
+    st.caption(
+        "Investment gain/loss here is **unrealized** mark-to-market versus open-position purchase cost. "
+        "External deposits increase contributed capital — they are **not** investment profit. "
+        "This is not a time-weighted or since-inception portfolio return."
+    )
+    r1 = st.columns(4)
+    r1[0].metric("Portfolio NAV", pe.format_currency(finance.nav))
+    r1[1].metric("Securities market value", pe.format_currency(finance.securities_market_value))
+    r1[2].metric("Cash balance", pe.format_currency(finance.cash_balance))
+    r1[3].metric("Net external contributions", pe.format_currency(finance.net_external_contributions))
+    r2 = st.columns(4)
+    r2[0].metric("Securities cost basis", pe.format_currency(finance.securities_cost_basis))
+    r2[1].metric("Unrealized Gain/Loss $", _format_gain(finance.unrealized_gain_loss_dollar))
+    r2[2].metric("Unrealized Gain/Loss %", _format_pct(finance.unrealized_gain_loss_pct))
+    r2[3].metric("Holdings", str(finance.num_holdings))
+    st.caption(
+        "Unrealized Gain/Loss % = unrealized $ ÷ securities cost basis (open lots). "
+        "Net external contributions = deposits − withdrawals. "
+        "Portfolio NAV is Real Portfolio ledger value — independent of sidebar Planning portfolio value."
+    )
+
+    if finance.cash_balance < -0.01:
         st.warning(
-            f"Cash balance is {pe.format_currency(summary.cash_balance)} — "
+            f"Cash balance is {pe.format_currency(finance.cash_balance)} — "
             "purchases exceed recorded deposits. Review transactions or add a deposit."
         )
 
     _render_cash_accounting_summary(transactions)
 
-    st.markdown("#### Allocation")
+    # --- Allocation (instrument type — informational) ---
+    st.markdown("#### Current allocation")
     st.caption(
         "Instrument type from your transactions (Stock / ETF / Bond / Cash / Other) — "
         "not underlying economic exposure. Bond ETFs entered as ETF count as ETFs here."
@@ -304,48 +319,119 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
             use_container_width=True,
         )
 
-    st.markdown("#### Position Weights")
-    if summary.largest_position:
-        lp = summary.largest_position
-        sp = summary.smallest_position
-        w1, w2 = st.columns(2)
-        with w1:
-            st.caption(f"**Largest:** {lp.ticker} — {lp.weight_pct:.1f}% ({pe.format_currency(lp.market_value)})")
-        with w2:
-            if sp:
-                st.caption(f"**Smallest:** {sp.ticker} — {sp.weight_pct:.1f}% ({pe.format_currency(sp.market_value)})")
-
-        weight_df = pos_df[["Ticker", "Company Name", "Weight %", "Market Value"]].copy()
-        weight_df["Market Value"] = weight_df["Market Value"].map(pe.format_currency)
-        st.dataframe(weight_df, use_container_width=True, hide_index=True)
-
-    st.markdown("#### Performance")
-    p1, p2, p3 = st.columns(3)
-    with p1:
-        st.markdown("**Top Gainers**")
-        if summary.top_gainers:
-            for p in summary.top_gainers:
-                if p.gain_loss_pct > 0:
-                    st.markdown(
-                        f"- **{p.ticker}** {_format_pct(p.gain_loss_pct)} "
-                        f"({_format_gain(p.gain_loss_dollar)})"
-                    )
-        else:
-            st.caption("No gainers yet.")
-    with p2:
-        st.markdown("**Top Losers**")
-        if summary.top_losers:
-            for p in summary.top_losers:
-                st.markdown(
-                    f"- **{p.ticker}** {_format_pct(p.gain_loss_pct)} "
-                    f"({_format_gain(p.gain_loss_dollar)})"
+        st.markdown("##### Position weights")
+        if summary.largest_position:
+            lp = summary.largest_position
+            sp = summary.smallest_position
+            w1, w2 = st.columns(2)
+            with w1:
+                st.caption(
+                    f"**Largest:** {lp.ticker} — {lp.weight_pct:.1f}% ({pe.format_currency(lp.market_value)})"
                 )
-        else:
-            st.caption("No losers yet.")
-    with p3:
-        st.markdown("**Biggest Positions**")
-        for p in summary.biggest_positions:
-            st.markdown(f"- **{p.ticker}** {p.weight_pct:.1f}% — {pe.format_currency(p.market_value)}")
+            with w2:
+                if sp:
+                    st.caption(
+                        f"**Smallest:** {sp.ticker} — {sp.weight_pct:.1f}% ({pe.format_currency(sp.market_value)})"
+                    )
+            weight_df = pos_df[["Ticker", "Company Name", "Weight %", "Market Value"]].copy()
+            weight_df["Market Value"] = weight_df["Market Value"].map(pe.format_currency)
+            st.dataframe(weight_df, use_container_width=True, hide_index=True)
+
+    # --- B. What's driving performance ---
+    st.markdown("#### What's driving my performance?")
+    st.caption(
+        "Which open holdings contribute the most (or least) to **aggregate unrealized** gain/loss. "
+        "Best/worst are ranked by **dollar contribution**, not by a holding's own % return. "
+        "Being profitable on one name does not mean the portfolio is On Target."
+    )
+    drivers = holding_performance_drivers(positions)
+    if not drivers:
+        st.caption("No open security positions yet.")
+    else:
+        best, worst = best_and_worst_dollar_contributors(drivers)
+        b1, b2 = st.columns(2)
+        with b1:
+            if best is not None:
+                st.markdown(
+                    f"**Best dollar contributor:** {best.ticker} "
+                    f"({_format_gain(best.contribution_to_aggregate_unrealized_dollar)})"
+                )
+        with b2:
+            if worst is not None:
+                st.markdown(
+                    f"**Worst dollar contributor:** {worst.ticker} "
+                    f"({_format_gain(worst.contribution_to_aggregate_unrealized_dollar)})"
+                )
+        driver_df = pd.DataFrame(
+            [
+                {
+                    "Ticker": r.ticker,
+                    "Market Value": pe.format_currency(r.market_value),
+                    "Cost Basis": pe.format_currency(r.cost_basis),
+                    "Unrealized G/L $": _format_gain(r.unrealized_gain_loss_dollar),
+                    "Unrealized G/L %": _format_pct(r.unrealized_gain_loss_pct),
+                    "Weight %": f"{r.weight_pct:.2f}%",
+                    "$ Contribution to unrealized G/L": _format_gain(
+                        r.contribution_to_aggregate_unrealized_dollar
+                    ),
+                }
+                for r in drivers
+            ]
+        )
+        st.dataframe(driver_df, use_container_width=True, hide_index=True)
+        contrib_sum = sum(r.contribution_to_aggregate_unrealized_dollar for r in drivers)
+        st.caption(
+            f"Sum of holding $ contributions: **{_format_gain(contrib_sum)}** "
+            f"(matches portfolio unrealized G/L {_format_gain(finance.unrealized_gain_loss_dollar)})."
+        )
+
+    # --- C. Strategy status ---
+    st.markdown("#### Strategy status")
+    st.caption(
+        "Answers: *Am I still positioned according to my intended allocation?* "
+        "This is **not** a measure of whether the portfolio is making or losing money. "
+        "Saved strategy target is authoritative and is never auto-updated from live market drift."
+    )
+    live_weights = {p.ticker: float(p.weight_pct) for p in positions}
+    if finance.cash_balance > 0 and finance.nav > 0:
+        # Align with weight denominator used in engine (securities + max(0, cash)).
+        cash_w = finance.cash_balance / (securities_mv + max(0.0, finance.cash_balance)) * 100.0
+        live_weights["$CASH"] = cash_w
+    saved = strategy_targets_from_session(_ss())
+    strategy = analyze_strategy_status(live_weights_pct=live_weights, saved_strategy_pct=saved)
+    if not strategy.ok:
+        st.info(strategy.explanation)
+    else:
+        st.metric("Strategy status", strategy.status)
+        st.caption(
+            f"Max absolute holding drift: **{strategy.max_abs_drift_pp:.2f} pp** · "
+            f"Sum of absolute drifts: **{strategy.overall_abs_drift_sum_pp:.2f} pp**. "
+            "Thresholds: under 2 pp = On Target; 2 to under 5 pp = Mild Drift; 5 pp or more = Significant Drift."
+        )
+        ordered_tgt = sorted(strategy.saved_target_pct.items(), key=lambda kv: (-kv[1], kv[0]))
+        st.markdown(
+            "**Saved strategy target:** "
+            + " · ".join(f"**{t}** {_format_strategy_weight_pct(w)}" for t, w in ordered_tgt)
+        )
+        ordered_live = sorted(strategy.live_allocation_pct.items(), key=lambda kv: (-kv[1], kv[0]))
+        st.markdown(
+            "**Live allocation:** "
+            + " · ".join(f"**{t}** {_format_strategy_weight_pct(w)}" for t, w in ordered_live)
+        )
+        drift_df = pd.DataFrame(
+            [
+                {
+                    "Ticker": r.ticker,
+                    "Target %": f"{r.target_weight_pct:.2f}%",
+                    "Live %": f"{r.live_weight_pct:.2f}%",
+                    "Drift pp": f"{r.drift_pp:+.2f}",
+                    "|Drift| pp": f"{r.abs_drift_pp:.2f}",
+                }
+                for r in strategy.rows
+            ]
+        )
+        st.dataframe(drift_df, use_container_width=True, hide_index=True)
+        st.caption(strategy.explanation)
 
     st.caption(f"Manual entry portfolio tracker. {APP_DISCLAIMER}")
 
