@@ -23,7 +23,7 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-10-dashboard-abc-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-time-performance-v1"
 SESSION_CONTRIBUTION_PENDING_KEY = "_contribution_record_pending"
 SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY = "_contribution_advisor_active_source"
 
@@ -433,7 +433,164 @@ def render_portfolio_dashboard(*, beginner: bool = False) -> None:
         st.dataframe(drift_df, use_container_width=True, hide_index=True)
         st.caption(strategy.explanation)
 
+    _render_portfolio_time_performance_section(transactions)
+
     st.caption(f"Manual entry portfolio tracker. {APP_DISCLAIMER}")
+
+
+def _render_portfolio_time_performance_section(transactions: list[pe.PortfolioTransaction]) -> None:
+    """Historical cash-flow-aware TWR / XIRR / NAV history (read-only; no ledger writes)."""
+    from investment_ami.decision_support.real_portfolio_time_performance import (
+        XIRR_ANNUALIZE_MIN_DAYS,
+        analyze_real_portfolio_time_performance,
+        load_price_history_for_transactions,
+    )
+
+    st.markdown("#### How has my portfolio performed over time?")
+    st.caption(
+        "This section is **not** the same as Unrealized Gain/Loss (open-lot mark vs cost) "
+        "or Strategy Status (allocation drift). "
+        "**Time-Weighted Return (TWR)** measures investment performance while neutralizing "
+        "the timing of deposits/withdrawals. "
+        "**Money-Weighted Return (XIRR)** reflects investor timing including cash flows. "
+        "A deposit raises NAV and contributed capital — it is **not** investment profit."
+    )
+
+    bench_options = ["VTI", "VXUS", "BND", "VNQ", "SPY"]
+    held = sorted(
+        {
+            str(t.ticker or "").strip().upper()
+            for t in transactions
+            if t.action in ("buy", "sell") and str(t.ticker or "").strip()
+        }
+    )
+    for sym in held:
+        if sym not in bench_options:
+            bench_options.append(sym)
+    benchmark = st.selectbox(
+        "Benchmark (market reference)",
+        bench_options,
+        index=0,
+        key="real_portfolio_twr_benchmark",
+        help=(
+            "Compared to portfolio TWR over the same dates using adjusted closes. "
+            "VTI is a broad US equity reference — not an equivalent risk mix for a "
+            "stock/bond/REIT portfolio unless that is intentionally your benchmark."
+        ),
+    )
+
+    try:
+        with st.spinner("Reconstructing historical portfolio value…"):
+            prices = load_price_history_for_transactions(
+                transactions,
+                benchmark_symbol=str(benchmark),
+            )
+            result = analyze_real_portfolio_time_performance(
+                transactions,
+                prices,
+                benchmark_symbol=str(benchmark),
+            )
+    except Exception as exc:
+        st.warning(f"Historical performance unavailable: {exc}")
+        return
+
+    if not result.ok:
+        st.info(result.warnings[0] if result.warnings else "Insufficient history for time-weighted performance.")
+        for w in result.warnings[1:]:
+            st.caption(w)
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "TWR since inception",
+        _format_pct((result.twr_since_inception or 0.0) * 100.0),
+    )
+    if result.money_weighted_period_since_inception is not None:
+        c2.metric(
+            "Money-weighted period (Modified Dietz)",
+            _format_pct(result.money_weighted_period_since_inception * 100.0),
+        )
+    else:
+        c2.metric("Money-weighted period (Modified Dietz)", "—")
+    if result.xirr_shown and result.xirr_annualized is not None:
+        c3.metric("Money-Weighted Return (XIRR, annualized)", _format_pct(result.xirr_annualized * 100.0))
+    else:
+        c3.metric("Money-Weighted Return (XIRR, annualized)", "Suppressed")
+        st.caption(
+            f"Annualized XIRR is not shown as a headline because the observation span is "
+            f"{result.observation_days} days (minimum {XIRR_ANNUALIZE_MIN_DAYS} days). "
+            "Short-span annualization can mislead."
+        )
+    c4.metric(
+        "Observation",
+        f"{result.inception_date} → {result.as_of}" if result.inception_date and result.as_of else "—",
+    )
+
+    # Period table
+    rows = []
+    for p in result.periods:
+        if not p.available:
+            rows.append(
+                {
+                    "Window": p.label,
+                    "Portfolio TWR": "Insufficient history",
+                    f"{result.benchmark_symbol} total return": "—",
+                    "Excess vs benchmark": "—",
+                    "Dates": "—",
+                }
+            )
+            continue
+        rows.append(
+            {
+                "Window": p.label,
+                "Portfolio TWR": _format_pct((p.twr or 0.0) * 100.0),
+                f"{result.benchmark_symbol} total return": (
+                    _format_pct((p.benchmark_return or 0.0) * 100.0)
+                    if p.benchmark_return is not None
+                    else "Unavailable"
+                ),
+                "Excess vs benchmark": (
+                    _format_pct((p.excess_twr_vs_benchmark or 0.0) * 100.0)
+                    if p.excess_twr_vs_benchmark is not None
+                    else "—"
+                ),
+                "Dates": f"{p.start_date} → {p.end_date}",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption(
+        f"Benchmark: **{result.benchmark_label}**. "
+        "Portfolio and benchmark use the **same** start/end dates per window. "
+        f"{result.price_source_note}"
+    )
+
+    nav_df = pd.DataFrame(
+        {
+            "Date": [p.as_of for p in result.nav_series],
+            "NAV": [p.nav for p in result.nav_series],
+            "Cumulative contributions": [p.cumulative_net_contributions for p in result.nav_series],
+        }
+    )
+    twr_df = pd.DataFrame(
+        {
+            "Date": [d for d, _ in result.twr_index],
+            "TWR index": [v for _, v in result.twr_index],
+        }
+    )
+    st.plotly_chart(
+        charts.real_portfolio_nav_history_chart(nav_df, twr_df),
+        use_container_width=True,
+    )
+    st.caption(
+        "Blue = Portfolio NAV (includes deposits as higher ending value). "
+        "Orange dashed = cumulative net external contributions. "
+        "Green = TWR growth index (starts at 100; deposits do not inflate this series)."
+    )
+    with st.expander("Methodology & limitations", expanded=False):
+        for line in result.limitations:
+            st.markdown(f"- {line}")
+        for w in result.warnings:
+            st.markdown(f"- Warning: {w}")
 
 
 def render_portfolio_positions(*, beginner: bool = False) -> None:

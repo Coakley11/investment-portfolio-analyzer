@@ -366,3 +366,63 @@ def macro_sensitivity_heatmap(heatmap_df: pd.DataFrame) -> go.Figure:
     )
     fig.update_layout(**base_layout(title="Macro Sensitivity by Asset Class (Model)", height=380))
     return apply_axes(fig, "", "Asset Type")
+
+def real_portfolio_nav_history_chart(
+    nav_df: pd.DataFrame,
+    twr_df: pd.DataFrame | None = None,
+) -> go.Figure:
+    """
+    NAV (dollars) plus optional TWR growth index.
+
+    NAV includes external contributions as level jumps; TWR index neutralizes those flows.
+    """
+    fig = go.Figure()
+    if nav_df is not None and not nav_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=nav_df["Date"],
+                y=nav_df["NAV"],
+                mode="lines",
+                name="Portfolio NAV ($)",
+                line=dict(color=COLORS["primary"], width=2.5),
+                yaxis="y",
+            )
+        )
+        if "Cumulative contributions" in nav_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=nav_df["Date"],
+                    y=nav_df["Cumulative contributions"],
+                    mode="lines",
+                    name="Cumulative net contributions ($)",
+                    line=dict(color=COLORS["accent"], width=2, dash="dash"),
+                    yaxis="y",
+                )
+            )
+    if twr_df is not None and not twr_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=twr_df["Date"],
+                y=twr_df["TWR index"],
+                mode="lines",
+                name="TWR growth index (100 = start)",
+                line=dict(color=COLORS["positive"], width=2),
+                yaxis="y2",
+            )
+        )
+    layout = base_layout(title="Portfolio value vs contributions vs TWR", height=420)
+    layout["yaxis"] = dict(
+        title="Dollars",
+        showgrid=True,
+        gridcolor=COLORS["grid"],
+        zeroline=False,
+    )
+    layout["yaxis2"] = dict(
+        title="TWR index",
+        overlaying="y",
+        side="right",
+        showgrid=False,
+        zeroline=False,
+    )
+    fig.update_layout(**layout)
+    return fig
