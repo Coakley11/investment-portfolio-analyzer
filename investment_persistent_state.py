@@ -675,6 +675,18 @@ def _build_real_portfolio_ledger_meta(ss: Any, txn_records: list[Any]) -> dict[s
     }
     if isinstance(import_meta, dict) and import_meta:
         meta["import_meta"] = copy.deepcopy(import_meta)
+    # Durable Contribution Advisor strategy target (not live market drift).
+    try:
+        from investment_ami.decision_support.contribution_advisor import (
+            STRATEGY_TARGET_WEIGHTS_KEY,
+            parse_strategy_target_weights,
+        )
+
+        parsed = parse_strategy_target_weights(ss.get(STRATEGY_TARGET_WEIGHTS_KEY))
+        if parsed:
+            meta["strategy_target_weights"] = copy.deepcopy(parsed)
+    except Exception:
+        pass
     return meta
 
 
@@ -1467,6 +1479,17 @@ def build_investment_disk_state(st: Any) -> dict[str, Any]:
             txn_records = []
         state[PORTFOLIO_TRANSACTIONS_KEY] = copy.deepcopy(txn_records)
         state[REAL_PORTFOLIO_LEDGER_META_KEY] = _build_real_portfolio_ledger_meta(ss, txn_records)
+    try:
+        from investment_ami.decision_support.contribution_advisor import (
+            STRATEGY_TARGET_WEIGHTS_KEY,
+            parse_strategy_target_weights,
+        )
+
+        parsed_strategy = parse_strategy_target_weights(ss.get(STRATEGY_TARGET_WEIGHTS_KEY))
+        if parsed_strategy:
+            state[STRATEGY_TARGET_WEIGHTS_KEY] = copy.deepcopy(parsed_strategy)
+    except Exception:
+        pass
     summary = ss.get("health_summary")
     if isinstance(summary, dict):
         state["health_summary"] = copy.deepcopy(summary)
@@ -1548,6 +1571,21 @@ def apply_investment_disk_state(st: Any, state: dict[str, Any]) -> None:
         if key == REAL_PORTFOLIO_LEDGER_META_KEY:
             if isinstance(val, dict):
                 st.session_state[REAL_PORTFOLIO_LEDGER_META_KEY] = copy.deepcopy(val)
+                # Restore durable strategy target from ledger meta when session key absent.
+                try:
+                    from investment_ami.decision_support.contribution_advisor import (
+                        STRATEGY_TARGET_WEIGHTS_KEY,
+                        parse_strategy_target_weights,
+                    )
+
+                    if STRATEGY_TARGET_WEIGHTS_KEY not in st.session_state or not parse_strategy_target_weights(
+                        st.session_state.get(STRATEGY_TARGET_WEIGHTS_KEY)
+                    ):
+                        parsed = parse_strategy_target_weights(val.get("strategy_target_weights"))
+                        if parsed:
+                            st.session_state[STRATEGY_TARGET_WEIGHTS_KEY] = copy.deepcopy(parsed)
+                except Exception:
+                    pass
             continue
         if key in ("analysis_start_date", "analysis_end_date"):
             coerced = _coerce_persisted_analysis_date(val)

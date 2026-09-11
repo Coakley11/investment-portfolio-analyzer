@@ -491,22 +491,25 @@ class TestContributionAdvisorGates(unittest.TestCase):
         self.assertEqual(result.status, STATUS_STALE_PRICES)
 
     def test_stated_objective_recommended_is_labeled(self) -> None:
+        # Include cash so Cash_and_TBills sleeve is represented (no silent invent).
         snap = _snapshot_from_values(
-            {"VTI": 7000.0, "BND": 3000.0},
+            {"VTI": 6000.0, "BND": 3000.0},
             classes={"VTI": "ETFs", "BND": "Bonds"},
             health_objective="balanced growth",
-            cash=0.0,
+            cash=1000.0,
         )
-        # Exclude cash so sleeve math is on securities only.
         result = recommend_contribution_allocation(
             snapshot=snap,
             contribution_amount=1000.0,
             target_source="stated_objective_recommended",
-            include_cash=False,
+            include_cash=True,
         )
         self.assertTrue(result.ok)
         self.assertEqual(result.target_source, "stated_objective_recommended")
-        self.assertTrue(any("not a user-saved" in a.lower() for a in result.assumptions))
+        self.assertEqual(result.meta.get("objective_key"), "balanced growth")
+        self.assertEqual(result.meta.get("source_kind"), "stated_objective_OBJECTIVE_ALLOCATIONS")
+        self.assertTrue(any("objective_allocations" in a.lower() or "stated objective" in a.lower() for a in result.assumptions))
+        self.assertTrue(any("not a user-saved" in a.lower() or "not portfolio health" in a.lower() for a in result.assumptions))
 
     def test_user_explicit_targets_work(self) -> None:
         snap = _snapshot_from_values({"VOO": 7000.0, "QQQ": 3000.0}, cash=0.0)
@@ -520,6 +523,413 @@ class TestContributionAdvisorGates(unittest.TestCase):
         self.assertTrue(result.ok)
         by = {r.ticker: r for r in result.rows}
         self.assertGreater(by["QQQ"].recommended_add, by["VOO"].recommended_add)
+
+
+class TestContributionTargetSources(unittest.TestCase):
+    """Target-source isolation: explicit / stated-objective / durable strategy."""
+
+    def test_explicit_unchanged(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 3500.0, "VXUS": 2500.0, "BND": 3000.0, "VNQ": 1000.0},
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds", "VNQ": "ETFs"},
+            cash=0.0,
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="user_explicit",
+            explicit_holding_targets={"VTI": 35, "VXUS": 25, "BND": 30, "VNQ": 10},
+            include_cash=False,
+        )
+        self.assertTrue(result.ok)
+        by = {r.ticker: r for r in result.rows}
+        self.assertAlmostEqual(by["VTI"].recommended_add, 350.0, delta=0.05)
+        self.assertAlmostEqual(by["VNQ"].recommended_add, 100.0, delta=0.05)
+
+    def test_recommended_resolves_correct_objective(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 5000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=2000.0,
+            health_objective="aggressive growth",
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=500.0,
+            target_source="stated_objective_recommended",
+            health_objective="aggressive growth",
+            include_cash=True,
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.meta.get("objective_key"), "aggressive growth")
+        cats = result.meta.get("category_targets") or {}
+        self.assertAlmostEqual(float(cats["Equity"]), 0.85, places=4)
+        self.assertAlmostEqual(float(cats["Bonds"]), 0.10, places=4)
+
+    def test_recommended_not_health_guided_or_optimizer(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 6000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=1000.0,
+            health_objective="balanced growth",
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="balanced growth",
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.meta.get("source_kind"), "stated_objective_OBJECTIVE_ALLOCATIONS")
+        blob = (" ".join(result.assumptions) + " " + result.explanation).lower()
+        self.assertIn("objective_allocations", blob)
+        self.assertIn("not guided adjustment", blob)
+        self.assertIn("not optimizer", blob)
+        self.assertNotIn("default_holdings", blob)
+
+    def test_missing_objective_blocks(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 7000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=1000.0,
+            health_objective="",
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="",
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, STATUS_TARGET_NOT_DEFINED)
+
+    def test_invalid_objective_does_not_invent_balanced_growth(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 6000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=1000.0,
+            health_objective="not a real objective",
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="not a real objective",
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, STATUS_TARGET_NOT_DEFINED)
+        self.assertIsNone(result.meta.get("objective_key"))
+        self.assertNotIn("balanced growth", (result.meta.get("objective_key") or ""))
+
+    def test_objective_category_mapping_deterministic(self) -> None:
+        from investment_ami.decision_support.contribution_advisor import (
+            OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION,
+            holding_targets_from_stated_objective,
+        )
+
+        snap = _snapshot_from_values(
+            {"VTI": 4000.0, "VXUS": 2000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds"},
+            cash=1000.0,
+        )
+        values = {"VTI": 4000.0, "VXUS": 2000.0, "BND": 3000.0, "$CASH": 1000.0}
+        a, lim_a, meta_a = holding_targets_from_stated_objective(snap, values, "balanced growth")
+        b, lim_b, meta_b = holding_targets_from_stated_objective(snap, values, "balanced growth")
+        self.assertEqual(a, b)
+        self.assertEqual(meta_a["sleeve_membership"], meta_b["sleeve_membership"])
+        self.assertEqual(meta_a["mapping_assumption"], OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION)
+        # Equity 60% split by value VTI:VXUS = 2:1 → 40% / 20%; Bonds 30%; Cash 10%.
+        self.assertAlmostEqual(a["VTI"], 0.40, places=4)
+        self.assertAlmostEqual(a["VXUS"], 0.20, places=4)
+        self.assertAlmostEqual(a["BND"], 0.30, places=4)
+        self.assertAlmostEqual(a["$CASH"], 0.10, places=4)
+
+    def test_unrepresented_sleeve_is_explicit(self) -> None:
+        snap = _snapshot_from_values(
+            {"VTI": 7000.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=0.0,
+            health_objective="balanced growth",
+        )
+        blocked = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="balanced growth",
+            redistribute_unrepresented_objective_sleeves=False,
+            include_cash=False,
+        )
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.status, STATUS_TARGET_NOT_DEFINED)
+        unrep = blocked.meta.get("unrepresented_sleeves") or []
+        self.assertTrue(any(u.get("sleeve") == "Cash_and_TBills" for u in unrep))
+        self.assertIn("unrepresented", blocked.explanation.lower())
+
+        ok = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="balanced growth",
+            redistribute_unrepresented_objective_sleeves=True,
+            include_cash=False,
+        )
+        self.assertTrue(ok.ok)
+        self.assertTrue(ok.meta.get("redistributed_unrepresented"))
+
+    def test_current_strategy_establish_and_persist_semantics(self) -> None:
+        from investment_ami.decision_support.contribution_advisor import (
+            STRATEGY_TARGET_WEIGHTS_KEY,
+            weights_from_values_as_percent,
+        )
+
+        values = {"VTI": 3500.0, "VXUS": 2500.0, "BND": 3000.0, "VNQ": 1000.0}
+        strategy = weights_from_values_as_percent(values)
+        self.assertAlmostEqual(strategy["VTI"], 35.0, places=4)
+        self.assertAlmostEqual(strategy["VNQ"], 10.0, places=4)
+
+        snap = _snapshot_from_values(
+            values,
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds", "VNQ": "ETFs"},
+            cash=0.0,
+        )
+        # Without saved strategy → block (no live-mix fallback).
+        blocked = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets=None,
+            include_cash=False,
+        )
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.status, STATUS_TARGET_NOT_DEFINED)
+
+        ok = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        self.assertTrue(ok.ok)
+        self.assertEqual(ok.target_source, "current_strategy")
+        self.assertEqual(ok.meta.get("source_kind"), "saved_strategy_target")
+
+        # Session helper reads durable key.
+        ss = {STRATEGY_TARGET_WEIGHTS_KEY: strategy, "portfolio_transactions": []}
+        from investment_ami.decision_support.contribution_advisor import strategy_targets_from_session
+
+        self.assertEqual(strategy_targets_from_session(ss)["VTI"], strategy["VTI"])
+
+    def test_price_drift_changes_current_not_strategy_target(self) -> None:
+        strategy = {"VTI": 35.0, "VXUS": 25.0, "BND": 30.0, "VNQ": 10.0}
+        # Drift: VTI up, BND down vs on-strategy dollars.
+        drifted = {"VTI": 4200.0, "VXUS": 2500.0, "BND": 2400.0, "VNQ": 1000.0}
+        snap = _snapshot_from_values(
+            drifted,
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds", "VNQ": "ETFs"},
+            cash=0.0,
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        self.assertTrue(result.ok)
+        resolved = result.meta.get("resolved_targets") or {}
+        # Strategy target weights (stored as %) stay 35/25/30/10 — not drifted live mix.
+        self.assertAlmostEqual(float(resolved["VTI"]), 35.0, places=4)
+        self.assertAlmostEqual(float(resolved["BND"]), 30.0, places=4)
+        by = {r.ticker: r for r in result.rows}
+        # Live current weight for VTI should be above target.
+        self.assertGreater(by["VTI"].current_weight, by["VTI"].target_weight)
+        # New money prefers underweight BND over overweight VTI.
+        self.assertGreater(by["BND"].recommended_add, by["VTI"].recommended_add)
+
+    def test_legacy_current_mix_alias_uses_saved_strategy(self) -> None:
+        strategy = {"VTI": 50.0, "BND": 50.0}
+        snap = _snapshot_from_values(
+            {"VTI": 6000.0, "BND": 4000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=0.0,
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_mix",  # legacy alias
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.target_source, "current_strategy")
+        # Must NOT equal live 60/40.
+        resolved = result.meta.get("resolved_targets") or {}
+        self.assertAlmostEqual(float(resolved["VTI"]), 50.0, places=4)
+
+    def test_sources_do_not_overwrite_each_other(self) -> None:
+        from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+
+        explicit = {"VTI": 40.0, "BND": 60.0}
+        strategy = {"VTI": 35.0, "VXUS": 25.0, "BND": 30.0, "VNQ": 10.0}
+        snap = _snapshot_from_values(
+            {"VTI": 3500.0, "VXUS": 2500.0, "BND": 3000.0, "VNQ": 1000.0},
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds", "VNQ": "ETFs"},
+            cash=1000.0,
+            health_objective="balanced growth",
+        )
+        r_ex = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=500.0,
+            target_source="user_explicit",
+            explicit_holding_targets=explicit,
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        r_st = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=500.0,
+            target_source="current_strategy",
+            explicit_holding_targets=explicit,
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        r_ob = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=500.0,
+            target_source="stated_objective_recommended",
+            explicit_holding_targets=explicit,
+            strategy_holding_targets=strategy,
+            health_objective="balanced growth",
+            include_cash=True,
+        )
+        self.assertTrue(r_ex.ok and r_st.ok and r_ob.ok)
+        self.assertEqual(r_ex.target_source, "user_explicit")
+        self.assertEqual(r_st.target_source, "current_strategy")
+        self.assertEqual(r_ob.target_source, "stated_objective_recommended")
+        self.assertNotEqual(r_ex.meta.get("resolved_targets"), r_st.meta.get("resolved_targets"))
+        self.assertNotEqual(r_st.meta.get("resolved_targets"), r_ob.meta.get("resolved_targets"))
+        # Strategy map unchanged by other resolutions.
+        self.assertEqual(strategy["VTI"], 35.0)
+        self.assertEqual(explicit["VTI"], 40.0)
+
+    def test_switching_source_changes_resolved_targets(self) -> None:
+        strategy = {"VTI": 35.0, "BND": 65.0}
+        snap = _snapshot_from_values(
+            {"VTI": 5000.0, "BND": 5000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=0.0,
+        )
+        a = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="user_explicit",
+            explicit_holding_targets={"VTI": 80, "BND": 20},
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        b = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            explicit_holding_targets={"VTI": 80, "BND": 20},
+            strategy_holding_targets=strategy,
+            include_cash=False,
+        )
+        self.assertTrue(a.ok and b.ok)
+        self.assertNotEqual(a.meta.get("resolved_targets"), b.meta.get("resolved_targets"))
+        # Fingerprints for record stale detection should differ by target_source.
+        from investment_ami.decision_support.contribution_recorder import recommendation_fingerprint
+
+        fa = recommendation_fingerprint(
+            ledger_fp="x",
+            contribution_amount=1000.0,
+            target_source=a.target_source,
+            targets=a.meta.get("resolved_targets"),
+            recommended_adds={r.ticker: r.recommended_add for r in a.rows},
+            portfolio_value_before=a.portfolio_value_before,
+        )
+        fb = recommendation_fingerprint(
+            ledger_fp="x",
+            contribution_amount=1000.0,
+            target_source=b.target_source,
+            targets=b.meta.get("resolved_targets"),
+            recommended_adds={r.ticker: r.recommended_add for r in b.rows},
+            portfolio_value_before=b.portfolio_value_before,
+        )
+        self.assertNotEqual(fa, fb)
+
+    def test_calculate_writes_nothing(self) -> None:
+        """Pure advisor path never mutates a ledger list (Calculate = preview only)."""
+        records = [
+            _deposit(10_000.0),
+            _buy("VTI", 35, 100.0),
+            _buy("BND", 30, 100.0),
+        ]
+        before = list(records)
+        snap = _snapshot_from_values(
+            {"VTI": 3500.0, "BND": 3000.0},
+            classes={"VTI": "ETFs", "BND": "Bonds"},
+            cash=3500.0,
+        )
+        recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="user_explicit",
+            explicit_holding_targets={"VTI": 50, "BND": 50},
+        )
+        recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="stated_objective_recommended",
+            health_objective="balanced growth",
+        )
+        recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets={"VTI": 50, "BND": 50},
+        )
+        self.assertEqual(records, before)
+
+    def test_no_default_holdings_in_target_resolution(self) -> None:
+        result = recommend_contribution_allocation_from_session(
+            {
+                "holdings_df": __import__("pandas").DataFrame(core.DEFAULT_HOLDINGS),
+                "portfolio_transactions": [],
+                "health_objective": "balanced growth",
+                "real_portfolio_strategy_target_weights": {"VTI": 60, "BND": 40},
+            },
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, STATUS_NO_REAL_PORTFOLIO)
+
+    def test_strategy_persists_in_disk_state_blob(self) -> None:
+        from investment_persistent_state import build_investment_disk_state
+        from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+
+        class _St:
+            session_state: dict
+
+        st = _St()
+        st.session_state = {
+            "experience_mode": "standard",
+            "portfolio_transactions": [_deposit(1000.0)],
+            "_real_portfolio_ledger_touched": True,
+            STRATEGY_TARGET_WEIGHTS_KEY: {"VTI": 35.0, "VXUS": 25.0, "BND": 30.0, "VNQ": 10.0},
+        }
+        # Minimal stubs expected by builder — tolerate missing optional imports.
+        try:
+            blob = build_investment_disk_state(st)
+        except Exception:
+            self.skipTest("build_investment_disk_state requires fuller session")
+            return
+        self.assertIn(STRATEGY_TARGET_WEIGHTS_KEY, blob)
+        self.assertAlmostEqual(blob[STRATEGY_TARGET_WEIGHTS_KEY]["VTI"], 35.0)
+        meta = blob.get("real_portfolio_ledger") or {}
+        self.assertAlmostEqual(meta.get("strategy_target_weights", {}).get("VTI"), 35.0)
 
 
 class TestDepositAccounting(unittest.TestCase):

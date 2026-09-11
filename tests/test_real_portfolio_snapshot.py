@@ -310,12 +310,14 @@ class TestTargetWeightsNormalization(unittest.TestCase):
         )
         self.assertFalse(blocked.ok)
         self.assertEqual(blocked.status, STATUS_TARGET_NOT_DEFINED)
-        # Recommended path still works after snapshot boots.
+        # Recommended path still works after snapshot boots (cash sleeve may be
+        # unrepresented — redistribute is an explicit labeled opt-in).
         ok = recommend_contribution_allocation(
             snapshot=built.snapshot,
             contribution_amount=1000.0,
             target_source="stated_objective_recommended",
             health_objective="balanced growth",
+            redistribute_unrepresented_objective_sleeves=True,
             include_cash=False,
         )
         self.assertTrue(ok.ok)

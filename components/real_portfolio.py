@@ -23,8 +23,9 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-10-contribution-review-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-contribution-target-sources-v1"
 SESSION_CONTRIBUTION_PENDING_KEY = "_contribution_record_pending"
+SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY = "_contribution_advisor_active_source"
 
 
 def _ss() -> Any:
@@ -61,16 +62,33 @@ def _invalidate_portfolio_derived_session_state() -> None:
     ss = _ss()
     ss.pop("_contribution_advisor_result", None)
     ss.pop("_portfolio_sizing_result", None)
-    saved = ss.get(SESSION_CONTRIBUTION_TARGETS_KEY)
-    if isinstance(saved, dict):
-        remapped: dict[str, Any] = {}
-        for key, val in saved.items():
-            sym = str(key or "").strip().upper()
-            if sym == "VN!":
-                sym = "VNQ"
-            if sym:
-                remapped[sym] = val
-        ss[SESSION_CONTRIBUTION_TARGETS_KEY] = remapped
+    ss.pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+    for key in (SESSION_CONTRIBUTION_TARGETS_KEY,):
+        saved = ss.get(key)
+        if isinstance(saved, dict):
+            remapped: dict[str, Any] = {}
+            for map_key, val in saved.items():
+                sym = str(map_key or "").strip().upper()
+                if sym == "VN!":
+                    sym = "VNQ"
+                if sym:
+                    remapped[sym] = val
+            ss[key] = remapped
+    try:
+        from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+
+        saved_strategy = ss.get(STRATEGY_TARGET_WEIGHTS_KEY)
+        if isinstance(saved_strategy, dict):
+            remapped_s: dict[str, Any] = {}
+            for map_key, val in saved_strategy.items():
+                sym = str(map_key or "").strip().upper()
+                if sym == "VN!":
+                    sym = "VNQ"
+                if sym:
+                    remapped_s[sym] = val
+            ss[STRATEGY_TARGET_WEIGHTS_KEY] = remapped_s
+    except Exception:
+        pass
     # Force Streamlit widget keys for contribution targets to re-seed from fresh weights.
     for k in list(ss.keys()):
         if str(k).startswith("contrib_tgt_"):
@@ -512,23 +530,43 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
             [
                 "My target weights (explicit)",
                 "Recommended from stated objective (labeled)",
-                "Current mix (already on strategy)",
+                "Current strategy target",
             ],
-            key="contribution_advisor_target_source",
+            key="contribution_advisor_target_source_v2",
             help=(
-                "Explicit targets are yours. Stated-objective mix is a recommended sleeve mapping — "
-                "not a silently saved personal target. Current mix distributes like target = today."
+                "Three isolated sources: (1) percentages you type, (2) OBJECTIVE_ALLOCATIONS for your "
+                "stated investment objective (labeled), (3) a saved strategy target that does not "
+                "auto-drift with market prices. Switching sources recalculates — stale previews are cleared."
             ),
         )
 
     source_map = {
         "My target weights (explicit)": "user_explicit",
         "Recommended from stated objective (labeled)": "stated_objective_recommended",
-        "Current mix (already on strategy)": "current_mix",
+        "Current strategy target": "current_strategy",
     }
     target_source = source_map[source_label]
 
+    # Switching target source must never leave another source's preview/review recordable.
+    prev_active = str(_ss().get(SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY) or "")
+    if prev_active and prev_active != target_source:
+        _ss().pop("_contribution_advisor_result", None)
+        _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+    _ss()[SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY] = target_source
+
+    from investment_ami.decision_support.contribution_advisor import (
+        OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION,
+        STRATEGY_TARGET_WEIGHTS_KEY,
+        canonical_stated_objective,
+        objective_category_targets,
+        strategy_targets_from_session,
+        weights_from_values_as_percent,
+    )
+
     explicit: dict[str, float] | None = None
+    redistribute_unrepresented = False
+    resolved_targets_for_fp: dict[str, float] | None = None
+
     if target_source == "user_explicit":
         priced = [h for h in snap.holdings if h.current_price is not None]
         if not priced and snap.cash <= 0:
@@ -543,7 +581,6 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
         saved = _ss().get(SESSION_CONTRIBUTION_TARGETS_KEY)
         if not isinstance(saved, dict):
             saved = {}
-        # Prefer last edited explicit draft; otherwise seed from current mix (labeled above).
         cols = st.columns(min(4, max(1, len(priced) + (1 if snap.cash > 0 else 0))))
         explicit = {}
         for i, h in enumerate(priced):
@@ -568,7 +605,160 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
                     key="contrib_tgt_cash",
                 )
         _ss()[SESSION_CONTRIBUTION_TARGETS_KEY] = dict(explicit)
+        resolved_targets_for_fp = dict(explicit)
         st.caption(f"Target sum: **{sum(explicit.values()):.1f}%**")
+
+    elif target_source == "stated_objective_recommended":
+        raw_obj = _ss().get("health_objective") or snap.health_objective or ""
+        obj_key = canonical_stated_objective(str(raw_obj))
+        st.markdown("**Recommended from stated objective (labeled)**")
+        st.caption(
+            "Uses the model allocation in OBJECTIVE_ALLOCATIONS for your stated investment "
+            "objective — not Portfolio Health rebalance weights, Guided Adjustment, optimizer "
+            "corners, or DEFAULT_HOLDINGS. Does not mutate your explicit personal targets."
+        )
+        if not obj_key:
+            st.warning(
+                "No valid stated investment objective is set. Establish one in Portfolio Health / "
+                "goal setup (e.g. Balanced Growth) before calculating. Contribution Advisor will "
+                "not invent an objective."
+            )
+            if str(raw_obj).strip():
+                st.caption(f"Current session value (unrecognized): `{raw_obj}`")
+        else:
+            cats = objective_category_targets(obj_key) or {}
+            st.info(f"**Selected objective:** `{obj_key}` · **Source:** `OBJECTIVE_ALLOCATIONS`")
+            st.caption(
+                "Category targets: "
+                + ", ".join(f"{name} {wt * 100:.0f}%" for name, wt in cats.items())
+            )
+            st.caption(OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION)
+            # Preview sleeve coverage against current priced holdings (no write).
+            from investment_ami.decision_support.contribution_advisor import (
+                holding_targets_from_stated_objective,
+            )
+
+            vals: dict[str, float] = {}
+            for h in snap.holdings:
+                if h.current_price is None:
+                    continue
+                vals[h.ticker] = vals.get(h.ticker, 0.0) + float(h.current_value or 0.0)
+            if float(snap.cash or 0.0) > 0:
+                vals["$CASH"] = float(snap.cash)
+
+            # Sleeve membership for labeling (same rules as advisor).
+            sleeve_members: dict[str, list[str]] = {"Equity": [], "Bonds": [], "Cash_and_TBills": []}
+            for h in snap.holdings:
+                if h.current_price is None:
+                    continue
+                ac = str(h.asset_class or "")
+                if ac in ("Stocks", "ETFs"):
+                    sleeve_members["Equity"].append(h.ticker)
+                elif ac == "Bonds":
+                    sleeve_members["Bonds"].append(h.ticker)
+                elif ac == "Cash":
+                    sleeve_members["Cash_and_TBills"].append(h.ticker)
+            if "$CASH" in vals:
+                sleeve_members["Cash_and_TBills"].append("$CASH")
+            unrep = [name for name, wt in cats.items() if wt > 1e-9 and not sleeve_members.get(name)]
+            if unrep:
+                st.warning(
+                    "Unrepresented objective sleeve(s): "
+                    + ", ".join(f"{n} ({cats[n] * 100:.0f}%)" for n in unrep)
+                    + ". These are **not** silently renormalized away."
+                )
+                redistribute_unrepresented = st.checkbox(
+                    "Provisionally redistribute unrepresented sleeves into existing holdings",
+                    value=False,
+                    key="contrib_redistribute_unrepresented",
+                    help=(
+                        "Opt-in only. Scales represented holding targets to 100% and labels the "
+                        "assumption. Does not add a new ticker for the missing sleeve."
+                    ),
+                )
+            else:
+                st.success("All objective sleeves have at least one matching priced ledger holding.")
+
+            preview_tgts, _, preview_meta = holding_targets_from_stated_objective(
+                snap,
+                vals,
+                obj_key,
+                redistribute_unrepresented=redistribute_unrepresented,
+            )
+            if preview_tgts:
+                st.markdown("**Resulting ticker targets (preview)**")
+                st.caption(
+                    " · ".join(f"{t} {w * 100:.1f}%" for t, w in sorted(preview_tgts.items()))
+                )
+                resolved_targets_for_fp = {k: v * 100.0 for k, v in preview_tgts.items()}
+            elif preview_meta.get("unrepresented_sleeves") and not redistribute_unrepresented:
+                st.caption(
+                    "Calculate stays blocked until sleeves are represented or redistribution is acknowledged."
+                )
+
+    elif target_source == "current_strategy":
+        st.markdown("**Current strategy target**")
+        st.caption(
+            "This is a **saved** strategy you accept — not a live snapshot of today's market "
+            "weights. Prices may drift; the strategy target stays fixed until you explicitly update it."
+        )
+        saved_strategy = strategy_targets_from_session(_ss())
+        if saved_strategy:
+            ordered = sorted(saved_strategy.items(), key=lambda kv: (-float(kv[1]), kv[0]))
+            st.info(
+                "Saved strategy: "
+                + " · ".join(f"**{t}** {float(w):.1f}%" for t, w in ordered)
+            )
+            resolved_targets_for_fp = dict(saved_strategy)
+        else:
+            st.warning(
+                "No strategy target saved yet. If the portfolio is on strategy, use the button "
+                "below to establish one. Contribution Advisor will not treat drifting live weights "
+                "as the target."
+            )
+
+        live_vals = {
+            h.ticker: float(h.current_value or 0.0)
+            for h in snap.holdings
+            if h.current_price is not None and float(h.current_value or 0.0) > 0
+        }
+        if float(snap.cash or 0.0) > 0:
+            live_vals["$CASH"] = float(snap.cash)
+        live_pct = weights_from_values_as_percent(live_vals)
+        if live_pct:
+            st.caption(
+                "Live market weights (informational only): "
+                + " · ".join(f"{t} {w:.1f}%" for t, w in sorted(live_pct.items(), key=lambda kv: -kv[1]))
+            )
+
+        b1, b2 = st.columns(2)
+        with b1:
+            establish = st.button(
+                "Use current allocation as strategy target",
+                key="contrib_establish_strategy",
+                help="Saves today's live weights as the durable strategy target (explicit action).",
+            )
+        with b2:
+            update = st.button(
+                "Update strategy target from current allocation",
+                key="contrib_update_strategy",
+                disabled=not bool(saved_strategy),
+                help="Replace the saved strategy with today's live weights (explicit action).",
+            )
+        if establish or update:
+            if not live_pct:
+                st.error("No priced holdings available to establish a strategy target.")
+            else:
+                _ss()[STRATEGY_TARGET_WEIGHTS_KEY] = dict(live_pct)
+                _ss()["_real_portfolio_ledger_touched"] = True
+                _ss().pop("_contribution_advisor_result", None)
+                _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+                ok, msg = _persist_portfolio_ledger_change(trigger="strategy_target_weights_change")
+                if ok:
+                    st.success("Strategy target saved. It will persist across reruns and restore with the ledger.")
+                else:
+                    st.warning(f"Strategy target saved in session; persist deferred: {msg}")
+                st.rerun()
 
     if beginner:
         st.caption(
@@ -584,6 +774,7 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
             contribution_amount=float(amount),
             target_source=target_source,  # type: ignore[arg-type]
             explicit_holding_targets=explicit,
+            redistribute_unrepresented_objective_sleeves=redistribute_unrepresented,
             include_cash=True,
         )
         payload = result.to_dict()
@@ -593,12 +784,14 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
             )
 
             records = _ss().get(SESSION_TRANSACTIONS_KEY) or []
+            meta_targets = result.meta.get("resolved_targets") if isinstance(result.meta, dict) else None
+            fp_targets = meta_targets if isinstance(meta_targets, dict) else (resolved_targets_for_fp or explicit)
             payload = attach_application_metadata_to_payload(
                 payload,
                 records=records if isinstance(records, list) else [],
                 contribution_amount=float(amount),
                 target_source=target_source,
-                targets=explicit,
+                targets=fp_targets,
                 workspace_token=_contribution_workspace_token(),
             )
         _ss()["_contribution_advisor_result"] = payload
@@ -611,8 +804,26 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
 
     prior = _ss().get("_contribution_advisor_result")
     if isinstance(prior, dict) and prior.get("ok"):
+        prior_source = str(prior.get("target_source") or "")
+        from investment_ami.decision_support.contribution_advisor import normalize_target_source
+
+        if normalize_target_source(prior_source) != normalize_target_source(target_source):
+            # Stale recommendation from another target source — never show as recordable.
+            _ss().pop("_contribution_advisor_result", None)
+            _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+            return
         _render_contribution_result(prior)
-        _render_contribution_record_controls(prior, contribution_amount=float(amount), target_source=target_source, explicit=explicit)
+        fp_targets = None
+        if isinstance(prior.get("meta"), dict):
+            fp_targets = prior["meta"].get("resolved_targets")
+        if not isinstance(fp_targets, dict):
+            fp_targets = resolved_targets_for_fp or explicit
+        _render_contribution_record_controls(
+            prior,
+            contribution_amount=float(amount),
+            target_source=target_source,
+            explicit=fp_targets if isinstance(fp_targets, dict) else explicit,
+        )
     elif not run:
         return
 

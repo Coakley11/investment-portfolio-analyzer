@@ -7,7 +7,15 @@ Ownership
   market data before calling the engine.
 
 Does **not** silently use DEFAULT_HOLDINGS, demo portfolios, optimizer weights,
-or model ``holdings_df`` as the user's personal target.
+Health/Guided rebalance targets, or model ``holdings_df`` as the user's personal target.
+
+Target sources (isolated)
+-------------------------
+- ``user_explicit`` — percentages the user typed for Contribution Advisor.
+- ``stated_objective_recommended`` — ``OBJECTIVE_ALLOCATIONS`` for the stated
+  ``health_objective``, mapped onto existing priced ledger holdings (labeled).
+- ``current_strategy`` — durable user-accepted strategy target (not live drift).
+  Legacy alias: ``current_mix``.
 """
 
 from __future__ import annotations
@@ -23,10 +31,14 @@ from investment_ami.decision_support.real_portfolio_recommendation_rules import 
     STALE_QUOTE_AGE_SECONDS,
 )
 
+# Session / persistence key for the durable Contribution Advisor strategy target.
+STRATEGY_TARGET_WEIGHTS_KEY = "real_portfolio_strategy_target_weights"
+
 TargetSourceChoice = Literal[
     "user_explicit",
     "stated_objective_recommended",
-    "current_mix",
+    "current_strategy",
+    "current_mix",  # legacy alias → current_strategy
 ]
 
 STATUS_NO_REAL_PORTFOLIO = "no_real_portfolio"
@@ -34,6 +46,49 @@ STATUS_TARGET_NOT_DEFINED = "target_not_defined"
 STATUS_MISSING_PRICES = "missing_or_incomplete_prices"
 STATUS_STALE_PRICES = "stale_prices"
 STATUS_BLOCKED = "blocked"
+
+# Category → ledger asset_class mapping (explicit product assumption).
+OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION = (
+    "Objective categories map to existing ledger holdings by asset class: "
+    "Stocks/ETFs → Equity; Bonds → Bonds; Cash → Cash_and_TBills. "
+    "Within a represented sleeve, category weight is pro-rated by current market value. "
+    "No new ticker is invented for an unrepresented sleeve."
+)
+
+
+def normalize_target_source(target_source: str) -> str:
+    """Map legacy UI/API aliases onto canonical target-source ids."""
+    raw = str(target_source or "").strip()
+    if raw == "current_mix":
+        return "current_strategy"
+    return raw
+
+
+def canonical_stated_objective(health_objective: str | None) -> str | None:
+    """Return OBJECTIVE_ALLOCATIONS key if ``health_objective`` is a valid stated objective."""
+    from portfolio_core import OBJECTIVE_ALLOCATIONS
+
+    key = str(health_objective or "").strip().lower()
+    if not key:
+        return None
+    if key in OBJECTIVE_ALLOCATIONS:
+        return key
+    return None
+
+
+def objective_category_targets(health_objective: str | None) -> dict[str, float] | None:
+    """Labeled category mix for a valid stated objective — no silent balanced-growth fallback."""
+    from portfolio_core import OBJECTIVE_ALLOCATIONS
+
+    key = canonical_stated_objective(health_objective)
+    if key is None:
+        return None
+    mix = OBJECTIVE_ALLOCATIONS[key]
+    return {
+        "Equity": float(mix["equity"]),
+        "Bonds": float(mix["bonds"]),
+        "Cash_and_TBills": float(mix["tbills"]),
+    }
 
 
 def _blocked(
@@ -44,6 +99,7 @@ def _blocked(
     target_source: str = "",
     warnings: tuple[str, ...] = (),
     assumptions: tuple[str, ...] = (),
+    meta: dict[str, Any] | None = None,
 ) -> ContributionAllocationResult:
     return ContributionAllocationResult(
         ok=False,
@@ -63,6 +119,7 @@ def _blocked(
         reason_codes=(status,),
         target_source=target_source,
         warnings=warnings,
+        meta=dict(meta or {}),
     )
 
 
@@ -85,23 +142,64 @@ def _holding_values_from_snapshot(
     return values
 
 
-def _current_mix_targets(values: dict[str, float]) -> dict[str, float]:
-    total = sum(values.values())
+def weights_from_values_as_percent(values: Mapping[str, float]) -> dict[str, float]:
+    """Stable percent map (0–100) from current dollar values — for establishing strategy."""
+    cleaned: dict[str, float] = {}
+    for k, v in values.items():
+        sym = str(k or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < 0:
+            fv = 0.0
+        cleaned[sym] = cleaned.get(sym, 0.0) + fv
+    total = sum(cleaned.values())
     if total <= 0:
         return {}
-    return {k: v / total for k, v in values.items()}
+    return {k: (v / total) * 100.0 for k, v in cleaned.items()}
 
 
-def _objective_bucket_targets(health_objective: str | None) -> dict[str, float]:
-    from portfolio_core import OBJECTIVE_ALLOCATIONS
+def parse_strategy_target_weights(raw: Any) -> dict[str, float] | None:
+    """Parse persisted / session strategy target (percent or fraction). Empty → None."""
+    if not isinstance(raw, Mapping):
+        return None
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        sym = str(k or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < 0:
+            continue
+        out[sym] = fv
+    if not out or sum(out.values()) <= 0:
+        return None
+    return out
 
-    key = str(health_objective or "").strip().lower() or "balanced growth"
-    mix = OBJECTIVE_ALLOCATIONS.get(key, OBJECTIVE_ALLOCATIONS["balanced growth"])
-    return {
-        "Equity": float(mix["equity"]),
-        "Bonds": float(mix["bonds"]),
-        "Cash_and_TBills": float(mix["tbills"]),
-    }
+
+def strategy_targets_from_session(session_state: Any) -> dict[str, float] | None:
+    """Load durable strategy target from session (and ledger meta fallback)."""
+    if session_state is None:
+        return None
+    try:
+        parsed = parse_strategy_target_weights(session_state.get(STRATEGY_TARGET_WEIGHTS_KEY))
+    except Exception:
+        parsed = None
+    if parsed:
+        return parsed
+    try:
+        meta = session_state.get("real_portfolio_ledger")
+    except Exception:
+        meta = None
+    if isinstance(meta, dict):
+        return parse_strategy_target_weights(meta.get("strategy_target_weights"))
+    return None
 
 
 def _holding_class(snapshot: RealPortfolioSnapshot, ticker: str) -> str:
@@ -128,31 +226,59 @@ def holding_targets_from_stated_objective(
     snapshot: RealPortfolioSnapshot,
     values: dict[str, float],
     health_objective: str | None,
-) -> tuple[dict[str, float], tuple[str, ...]]:
+    *,
+    redistribute_unrepresented: bool = False,
+) -> tuple[dict[str, float], tuple[str, ...], dict[str, Any]]:
     """
     Map OBJECTIVE_ALLOCATIONS → holding weights by pro-rating within economic sleeves.
 
     Labeled as **recommended / stated-objective**, not a user-saved personal target.
+    Does **not** invent an objective when the key is missing/invalid.
+    Unrepresented sleeves stay explicit; silent renormalization is opt-in only.
     """
     limitations: list[str] = []
-    buckets = _objective_bucket_targets(health_objective)
+    meta: dict[str, Any] = {
+        "objective_key": None,
+        "category_targets": {},
+        "sleeve_membership": {},
+        "unrepresented_sleeves": [],
+        "mapping_assumption": OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION,
+        "redistributed_unrepresented": False,
+        "source_kind": "stated_objective_OBJECTIVE_ALLOCATIONS",
+    }
+
+    key = canonical_stated_objective(health_objective)
+    buckets = objective_category_targets(health_objective)
+    if key is None or buckets is None:
+        return (
+            {},
+            ("No valid stated investment objective is available for recommended targets.",),
+            meta,
+        )
+
+    meta["objective_key"] = key
+    meta["category_targets"] = dict(buckets)
+
     by_obj: dict[str, list[str]] = {"Equity": [], "Bonds": [], "Cash_and_TBills": [], "Other": []}
     for sym in values:
         oc = _objective_class(_holding_class(snapshot, sym))
         by_obj.setdefault(oc, []).append(sym)
+    meta["sleeve_membership"] = {k: list(v) for k, v in by_obj.items() if v}
 
     targets: dict[str, float] = {sym: 0.0 for sym in values}
+    unrepresented: list[dict[str, Any]] = []
     for bucket, bt in buckets.items():
         members = by_obj.get(bucket) or []
         if not members:
             if bt > 1e-9:
+                unrepresented.append({"sleeve": bucket, "weight": bt})
                 limitations.append(
-                    f"Stated-objective sleeve '{bucket}' ({bt * 100:.0f}%) has no priced ledger holdings to receive it."
+                    f"Stated-objective sleeve '{bucket}' ({bt * 100:.0f}%) has no priced ledger "
+                    "holdings to receive it — left explicit (not silently dropped)."
                 )
             continue
         sleeve_value = sum(values[m] for m in members)
         if sleeve_value <= 0:
-            # Equal split if all zero within sleeve (shouldn't happen for priced).
             share = bt / len(members)
             for m in members:
                 targets[m] += share
@@ -160,13 +286,14 @@ def holding_targets_from_stated_objective(
             for m in members:
                 targets[m] += bt * (values[m] / sleeve_value)
 
+    meta["unrepresented_sleeves"] = unrepresented
+
     # If Other holdings exist with value, keep them at current mix share so weights remain coherent.
     other_members = by_obj.get("Other") or []
     other_value = sum(values[m] for m in other_members)
     total_v = sum(values.values())
     if other_members and total_v > 0 and other_value > 0:
         other_share = other_value / total_v
-        # Scale objective sleeves into (1 - other_share) then add other at current mix.
         scale = max(0.0, 1.0 - other_share)
         for m in targets:
             if m in other_members:
@@ -179,9 +306,32 @@ def holding_targets_from_stated_objective(
 
     s = sum(targets.values())
     if s <= 0:
-        return {}, tuple(limitations + ["Could not derive holding targets from stated objective."])
-    targets = {k: v / s for k, v in targets.items()}
-    return targets, tuple(limitations)
+        return {}, tuple(limitations + ["Could not derive holding targets from stated objective."]), meta
+
+    if unrepresented and not redistribute_unrepresented:
+        # Keep raw (non-renormalized) sleeve assignment so sum < 1 reflects missing sleeves.
+        meta["raw_target_sum"] = s
+        return {}, tuple(limitations), meta
+
+    if unrepresented and redistribute_unrepresented:
+        targets = {k: v / s for k, v in targets.items()}
+        meta["redistributed_unrepresented"] = True
+        limitations.append(
+            "Unrepresented objective sleeves were **provisionally redistributed** into existing "
+            "holdings (user-acknowledged). This is not inventing a new security."
+        )
+        return targets, tuple(limitations), meta
+
+    # Fully represented (or no residual) — normalize tiny float noise only when sum ≈ 1.
+    if abs(s - 1.0) <= 0.02:
+        targets = {k: v / s for k, v in targets.items()}
+    elif s < 1.0 - 1e-9:
+        # Should have been caught by unrepresented path; refuse silent fill.
+        return {}, tuple(limitations + ["Objective target weights do not cover 100% of the portfolio."]), meta
+    else:
+        targets = {k: v / s for k, v in targets.items()}
+
+    return targets, tuple(limitations), meta
 
 
 def assess_market_data_for_contribution(
@@ -228,64 +378,126 @@ def resolve_contribution_targets(
     *,
     snapshot: RealPortfolioSnapshot,
     values: dict[str, float],
-    target_source: TargetSourceChoice,
+    target_source: str,
     explicit_holding_targets: Mapping[str, float] | None,
     health_objective: str | None,
-) -> tuple[dict[str, float] | None, str, tuple[str, ...], str | None]:
+    strategy_holding_targets: Mapping[str, float] | None = None,
+    redistribute_unrepresented_objective_sleeves: bool = False,
+) -> tuple[dict[str, float] | None, str, tuple[str, ...], str | None, dict[str, Any]]:
     """
-    Returns (targets, label, limitations, block_status).
+    Returns (targets, label, limitations, block_status, resolution_meta).
 
     ``user_explicit`` requires ``explicit_holding_targets`` — never invents them.
+    ``current_strategy`` requires a previously saved strategy target — never live drift.
+    ``stated_objective_recommended`` requires a valid OBJECTIVE_ALLOCATIONS key.
     """
-    if target_source == "user_explicit":
+    source = normalize_target_source(target_source)
+    resolution: dict[str, Any] = {"canonical_target_source": source}
+
+    if source == "user_explicit":
         if not explicit_holding_targets:
             return (
                 None,
                 "user_explicit",
                 (),
                 STATUS_TARGET_NOT_DEFINED,
+                {**resolution, "source_kind": "user_explicit"},
             )
-        return dict(explicit_holding_targets), "user_explicit", (), None
-
-    if target_source == "current_mix":
-        targets = _current_mix_targets(values)
-        if not targets:
-            return None, "current_mix", (), STATUS_TARGET_NOT_DEFINED
         return (
-            targets,
-            "current_mix",
-            ("Target is the portfolio's current mix (treat as already on-strategy).",),
+            dict(explicit_holding_targets),
+            "user_explicit",
+            (),
             None,
+            {**resolution, "source_kind": "user_explicit", "resolved_targets": dict(explicit_holding_targets)},
         )
 
-    if target_source == "stated_objective_recommended":
+    if source == "current_strategy":
+        parsed = parse_strategy_target_weights(strategy_holding_targets)
+        if not parsed:
+            return (
+                None,
+                "current_strategy",
+                (
+                    "No saved strategy target yet. Establish one explicitly with "
+                    "'Use current allocation as strategy target' while on strategy — "
+                    "live market weights are not used as a drifting target.",
+                ),
+                STATUS_TARGET_NOT_DEFINED,
+                {**resolution, "source_kind": "saved_strategy_target"},
+            )
+        note = (
+            "Target is the saved **current strategy** allocation (user-accepted). "
+            "Live market weights may drift; this strategy target does not auto-update."
+        )
+        return (
+            dict(parsed),
+            "current_strategy",
+            (note,),
+            None,
+            {
+                **resolution,
+                "source_kind": "saved_strategy_target",
+                "resolved_targets": dict(parsed),
+            },
+        )
+
+    if source == "stated_objective_recommended":
         obj = health_objective or snapshot.health_objective
-        if not str(obj or "").strip():
+        key = canonical_stated_objective(obj)
+        if key is None:
+            detail = (
+                "Select a stated investment objective (e.g. Balanced Growth) before using "
+                "recommended objective targets. Contribution Advisor will not invent an objective, "
+                "silently use Portfolio Health / Guided / optimizer weights, or fall back to "
+                "DEFAULT_HOLDINGS."
+            )
+            if str(obj or "").strip():
+                detail = (
+                    f"Stated objective {obj!r} is not a recognized OBJECTIVE_ALLOCATIONS key. "
+                    + detail
+                )
             return (
                 None,
                 "stated_objective_recommended",
                 (),
                 STATUS_TARGET_NOT_DEFINED,
+                {
+                    **resolution,
+                    "source_kind": "stated_objective_OBJECTIVE_ALLOCATIONS",
+                    "objective_key": None,
+                    "raw_objective": str(obj or ""),
+                },
             )
-        targets, limitations = holding_targets_from_stated_objective(snapshot, values, obj)
-        if not targets:
-            return None, "stated_objective_recommended", limitations, STATUS_TARGET_NOT_DEFINED
-        note = (
-            f"Target derived from stated objective '{obj}' (recommended / inferred sleeve mix "
-            "pro-rated onto priced ledger holdings — not a user-saved personal target)."
+        targets, limitations, obj_meta = holding_targets_from_stated_objective(
+            snapshot,
+            values,
+            key,
+            redistribute_unrepresented=redistribute_unrepresented_objective_sleeves,
         )
-        return targets, "stated_objective_recommended", (note,) + tuple(limitations), None
+        resolution.update(obj_meta)
+        if not targets:
+            return None, "stated_objective_recommended", limitations, STATUS_TARGET_NOT_DEFINED, resolution
+        note = (
+            f"Target derived from stated objective '{key}' via OBJECTIVE_ALLOCATIONS "
+            "(recommended / labeled sleeve mix pro-rated onto priced ledger holdings — "
+            "not Portfolio Health rebalance weights, not Guided Adjustment, not optimizer, "
+            "and not a user-saved personal target)."
+        )
+        resolution["resolved_targets"] = dict(targets)
+        return targets, "stated_objective_recommended", (note,) + tuple(limitations), None, resolution
 
-    return None, str(target_source), (), STATUS_TARGET_NOT_DEFINED
+    return None, str(target_source), (), STATUS_TARGET_NOT_DEFINED, resolution
 
 
 def recommend_contribution_allocation(
     *,
     snapshot: RealPortfolioSnapshot | None,
     contribution_amount: float,
-    target_source: TargetSourceChoice = "user_explicit",
+    target_source: TargetSourceChoice | str = "user_explicit",
     explicit_holding_targets: Mapping[str, float] | None = None,
     health_objective: str | None = None,
+    strategy_holding_targets: Mapping[str, float] | None = None,
+    redistribute_unrepresented_objective_sleeves: bool = False,
     include_cash: bool = True,
     failure_code: str | None = None,
 ) -> ContributionAllocationResult:
@@ -300,9 +512,11 @@ def recommend_contribution_allocation(
     failure_code:
         Optional snapshot build failure code (e.g. ``no_real_ledger``).
     target_source:
-        ``user_explicit`` | ``stated_objective_recommended`` | ``current_mix``.
+        ``user_explicit`` | ``stated_objective_recommended`` | ``current_strategy``
+        (alias ``current_mix``).
     """
     c = float(contribution_amount or 0.0)
+    source = normalize_target_source(str(target_source))
 
     if snapshot is None or failure_code == "no_real_ledger":
         return _blocked(
@@ -313,6 +527,7 @@ def recommend_contribution_allocation(
                 "before asking where new money should go. Demo or default model holdings are "
                 "not used for real-money recommendations."
             ),
+            target_source=source,
         )
 
     block, md_warnings = assess_market_data_for_contribution(snapshot)
@@ -322,7 +537,7 @@ def recommend_contribution_allocation(
             contribution=c,
             explanation=md_warnings[0] if md_warnings else "Market data is insufficient for a precise recommendation.",
             warnings=md_warnings,
-            target_source=target_source,
+            target_source=source,
         )
 
     values = _holding_values_from_snapshot(snapshot, include_cash=include_cash)
@@ -331,29 +546,64 @@ def recommend_contribution_allocation(
             STATUS_NO_REAL_PORTFOLIO,
             contribution=c,
             explanation="The real portfolio has no priced holdings (and no cash) to allocate toward.",
-            target_source=target_source,
+            target_source=source,
             warnings=md_warnings,
         )
 
-    targets, source_label, limitations, target_block = resolve_contribution_targets(
+    targets, source_label, limitations, target_block, resolution = resolve_contribution_targets(
         snapshot=snapshot,
         values=values,
-        target_source=target_source,
+        target_source=source,
         explicit_holding_targets=explicit_holding_targets,
         health_objective=health_objective,
+        strategy_holding_targets=strategy_holding_targets,
+        redistribute_unrepresented_objective_sleeves=redistribute_unrepresented_objective_sleeves,
     )
     if target_block or targets is None:
+        unrep = resolution.get("unrepresented_sleeves") or []
+        if source == "stated_objective_recommended" and unrep and not redistribute_unrepresented_objective_sleeves:
+            sleeves = ", ".join(
+                f"{u.get('sleeve')} ({float(u.get('weight') or 0) * 100:.0f}%)" for u in unrep
+            )
+            explanation = (
+                f"Stated objective '{resolution.get('objective_key')}' has unrepresented sleeve(s): "
+                f"{sleeves}. Establish matching holdings (e.g. cash / T-bills) or explicitly acknowledge "
+                "provisional redistribution into existing holdings. "
+                "Unrepresented weight is not silently renormalized away."
+            )
+        elif source == "current_strategy":
+            explanation = (
+                limitations[0]
+                if limitations
+                else (
+                    "Establish a saved strategy target before allocating. "
+                    "Live market drift is not used as the target."
+                )
+            )
+        elif source == "stated_objective_recommended":
+            explanation = (
+                "Select a legitimate stated investment objective before allocating new money. "
+                "Portfolio Health / Guided / optimizer weights are not silently applied."
+            )
+        else:
+            explanation = (
+                "Select a legitimate target source before allocating new money. "
+                "Options: your explicit holding targets, the stated-objective recommended mix "
+                "(clearly labeled), or a saved current strategy target. "
+                "Portfolio Health / optimizer weights are not silently applied."
+            )
         return _blocked(
             STATUS_TARGET_NOT_DEFINED,
             contribution=c,
-            explanation=(
-                "Select a legitimate target source before allocating new money. "
-                "Options: your explicit holding targets, the stated-objective recommended mix "
-                "(clearly labeled, not a saved personal target), or the current mix. "
-                "Portfolio Health / optimizer weights are not silently applied."
-            ),
-            target_source=target_source,
+            explanation=explanation,
+            target_source=source_label or source,
             warnings=md_warnings + tuple(limitations),
+            assumptions=(
+                "Real Portfolio ledger is authoritative for holdings and market values.",
+                OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION,
+                "Decision support only — not a trade order.",
+            ),
+            meta=resolution,
         )
 
     assumptions = (
@@ -363,7 +613,7 @@ def recommend_contribution_allocation(
         "Decision support only — not a brokerage order.",
     ) + tuple(limitations)
 
-    return allocate_contribution_new_money_only(
+    result = allocate_contribution_new_money_only(
         current_values=values,
         target_weights=targets,
         contribution=c,
@@ -371,14 +621,21 @@ def recommend_contribution_allocation(
         assumptions=assumptions,
         warnings=md_warnings,
     )
+    # Frozen result, mutable meta dict — attach resolution for UI / fingerprinting.
+    result.meta.update(resolution)
+    result.meta["resolved_targets"] = {
+        str(k).strip().upper(): float(v) for k, v in (targets or {}).items() if str(k).strip()
+    }
+    return result
 
 
 def recommend_contribution_allocation_from_session(
     session_state: Any,
     *,
     contribution_amount: float,
-    target_source: TargetSourceChoice = "user_explicit",
+    target_source: TargetSourceChoice | str = "user_explicit",
     explicit_holding_targets: Mapping[str, float] | None = None,
+    redistribute_unrepresented_objective_sleeves: bool = False,
     include_cash: bool = True,
 ) -> ContributionAllocationResult:
     """Build snapshot from session and run the advisor (UI / AMI entry)."""
@@ -390,6 +647,7 @@ def recommend_contribution_allocation_from_session(
         health_objective = session_state.get("health_objective")  # type: ignore[union-attr]
     except Exception:
         health_objective = None
+    strategy = strategy_targets_from_session(session_state)
     if result.snapshot is None:
         code = result.failure.code if result.failure else "no_real_ledger"
         return recommend_contribution_allocation(
@@ -398,6 +656,8 @@ def recommend_contribution_allocation_from_session(
             target_source=target_source,
             explicit_holding_targets=explicit_holding_targets,
             health_objective=str(health_objective or "") or None,
+            strategy_holding_targets=strategy,
+            redistribute_unrepresented_objective_sleeves=redistribute_unrepresented_objective_sleeves,
             include_cash=include_cash,
             failure_code=str(code),
         )
@@ -407,5 +667,7 @@ def recommend_contribution_allocation_from_session(
         target_source=target_source,
         explicit_holding_targets=explicit_holding_targets,
         health_objective=str(health_objective or result.snapshot.health_objective or "") or None,
+        strategy_holding_targets=strategy,
+        redistribute_unrepresented_objective_sleeves=redistribute_unrepresented_objective_sleeves,
         include_cash=include_cash,
     )
