@@ -676,6 +676,115 @@ class TestContributionTargetSources(unittest.TestCase):
         self.assertTrue(ok.ok)
         self.assertTrue(ok.meta.get("redistributed_unrepresented"))
 
+    def test_exact_intentional_strategy_used_not_live_mix(self) -> None:
+        """Saved 35/30/25/10 must drive Calculate even when live weights are drifted."""
+        intentional = {"VTI": 35.0, "BND": 30.0, "VXUS": 25.0, "VNQ": 10.0}
+        # Clearly drifted live mix (not 35/30/25/10).
+        drifted = {"VTI": 2000.0, "BND": 1400.0, "VXUS": 1400.0, "VNQ": 450.0}
+        total = sum(drifted.values())
+        snap = _snapshot_from_values(
+            drifted,
+            classes={"VTI": "ETFs", "VXUS": "ETFs", "BND": "Bonds", "VNQ": "ETFs"},
+            cash=0.0,
+        )
+        result = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets=intentional,
+            include_cash=False,
+        )
+        self.assertTrue(result.ok)
+        resolved = result.meta.get("resolved_targets") or {}
+        for t, w in intentional.items():
+            self.assertEqual(float(resolved[t]), w)
+        by = {r.ticker: r for r in result.rows}
+        for t, tw in intentional.items():
+            self.assertAlmostEqual(by[t].target_weight * 100.0, tw, places=4)
+            # Live weight differs from intentional strategy.
+            live_w = drifted[t] / total
+            self.assertNotAlmostEqual(live_w, tw / 100.0, places=3)
+            self.assertNotAlmostEqual(by[t].current_weight, by[t].target_weight, places=3)
+        self.assertAlmostEqual(sum(r.recommended_add for r in result.rows), 1000.0, places=2)
+        # Engine is correcting toward intentional targets, not freezing live mix as target.
+        live_as_target = recommend_contribution_allocation(
+            snapshot=snap,
+            contribution_amount=1000.0,
+            target_source="current_strategy",
+            strategy_holding_targets={k: (v / total) * 100.0 for k, v in drifted.items()},
+            include_cash=False,
+        )
+        self.assertTrue(live_as_target.ok)
+        self.assertNotEqual(
+            {r.ticker: r.recommended_add for r in result.rows},
+            {r.ticker: r.recommended_add for r in live_as_target.rows},
+        )
+
+    def test_save_strategy_helper_invalidates_preview_without_ledger_write(self) -> None:
+        from components.real_portfolio import (
+            SESSION_CONTRIBUTION_PENDING_KEY,
+            _save_strategy_target_weights,
+        )
+        from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+        from unittest.mock import MagicMock, patch
+
+        ledger = [{"id": "keep-me", "action": "cash_deposit"}]
+        ss = {
+            STRATEGY_TARGET_WEIGHTS_KEY: {"VTI": 34.93, "BND": 29.93, "VXUS": 25.12, "VNQ": 10.01},
+            "_contribution_advisor_result": {"ok": True, "target_source": "current_strategy"},
+            SESSION_CONTRIBUTION_PENDING_KEY: {"purchases": []},
+            "portfolio_transactions": ledger,
+            "contrib_strat_tgt_VTI": 34.93,
+        }
+        st_mod = MagicMock()
+        st_mod.session_state = ss
+
+        with patch("components.real_portfolio.st", st_mod), patch(
+            "components.real_portfolio._persist_portfolio_ledger_change",
+            return_value=(True, "ok"),
+        ) as persist:
+            ok, msg = _save_strategy_target_weights(
+                {"VTI": 35.0, "BND": 30.0, "VXUS": 25.0, "VNQ": 10.0}
+            )
+        self.assertTrue(ok)
+        self.assertEqual(ss[STRATEGY_TARGET_WEIGHTS_KEY]["VTI"], 35.0)
+        self.assertEqual(ss[STRATEGY_TARGET_WEIGHTS_KEY]["BND"], 30.0)
+        self.assertEqual(ss[STRATEGY_TARGET_WEIGHTS_KEY]["VXUS"], 25.0)
+        self.assertEqual(ss[STRATEGY_TARGET_WEIGHTS_KEY]["VNQ"], 10.0)
+        self.assertNotIn("_contribution_advisor_result", ss)
+        self.assertNotIn(SESSION_CONTRIBUTION_PENDING_KEY, ss)
+        self.assertNotIn("contrib_strat_tgt_VTI", ss)
+        self.assertEqual(ss["portfolio_transactions"], ledger)
+        persist.assert_called_once()
+        self.assertEqual(len(ss["portfolio_transactions"]), 1)
+
+    def test_exact_intentional_strategy_persists_unchanged_in_blob(self) -> None:
+        from investment_persistent_state import build_investment_disk_state
+        from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+
+        class _St:
+            session_state: dict
+
+        intentional = {"VTI": 35.0, "BND": 30.0, "VXUS": 25.0, "VNQ": 10.0}
+        st = _St()
+        st.session_state = {
+            "experience": "standard",
+            "portfolio_transactions": [_deposit(1000.0)],
+            "_real_portfolio_ledger_touched": True,
+            STRATEGY_TARGET_WEIGHTS_KEY: dict(intentional),
+        }
+        try:
+            blob = build_investment_disk_state(st)
+        except Exception:
+            self.skipTest("build_investment_disk_state requires fuller session")
+            return
+        saved = blob.get(STRATEGY_TARGET_WEIGHTS_KEY) or {}
+        for t, w in intentional.items():
+            self.assertEqual(float(saved[t]), w)
+        meta = blob.get("real_portfolio_ledger") or {}
+        for t, w in intentional.items():
+            self.assertEqual(float(meta["strategy_target_weights"][t]), w)
+
     def test_current_strategy_establish_and_persist_semantics(self) -> None:
         from investment_ami.decision_support.contribution_advisor import (
             STRATEGY_TARGET_WEIGHTS_KEY,

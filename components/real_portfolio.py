@@ -23,9 +23,57 @@ SESSION_TRANSACTIONS_KEY = "portfolio_transactions"
 SESSION_SUBTAB_KEY = "real_portfolio_subtab"
 SESSION_CONTRIBUTION_TARGETS_KEY = "real_portfolio_contribution_target_weights"
 # Visible in Transactions UI — bump when cash-form or ledger behavior changes.
-REAL_PORTFOLIO_BUILD_ID = "2026-09-10-contribution-target-sources-v1"
+REAL_PORTFOLIO_BUILD_ID = "2026-09-10-strategy-exact-edit-v1"
 SESSION_CONTRIBUTION_PENDING_KEY = "_contribution_record_pending"
 SESSION_CONTRIBUTION_ACTIVE_SOURCE_KEY = "_contribution_advisor_active_source"
+
+
+def _clear_strategy_target_widget_keys(ss: Any) -> None:
+    for k in list(ss.keys()):
+        if str(k).startswith("contrib_strat_tgt_"):
+            ss.pop(k, None)
+
+
+def _save_strategy_target_weights(weights: dict[str, float]) -> tuple[bool, str]:
+    """
+    Persist an intentional strategy target. Does not write ledger transactions.
+    Invalidates any stale contribution preview/review.
+    """
+    cleaned: dict[str, float] = {}
+    for k, v in weights.items():
+        sym = str(k or "").strip().upper()
+        if not sym:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < 0:
+            continue
+        cleaned[sym] = fv
+    if not cleaned or abs(sum(cleaned.values()) - 100.0) > 2.0:
+        return False, "Strategy target weights must be non-negative and sum near 100%."
+
+    from investment_ami.decision_support.contribution_advisor import STRATEGY_TARGET_WEIGHTS_KEY
+
+    ss = _ss()
+    ss[STRATEGY_TARGET_WEIGHTS_KEY] = cleaned
+    ss["_real_portfolio_ledger_touched"] = True
+    ss.pop("_contribution_advisor_result", None)
+    ss.pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
+    _clear_strategy_target_widget_keys(ss)
+    return _persist_portfolio_ledger_change(trigger="strategy_target_weights_change")
+
+
+def _format_strategy_weight_pct(weight: float) -> str:
+    """Prefer clean intentional percents (35) over noisy snapshot decimals (34.93)."""
+    w = float(weight)
+    if abs(w - round(w)) < 1e-9:
+        return f"{int(round(w))}%"
+    if abs(w * 10 - round(w * 10)) < 1e-9:
+        return f"{w:.1f}%"
+    return f"{w:.2f}%"
+
 
 
 def _ss() -> Any:
@@ -89,9 +137,8 @@ def _invalidate_portfolio_derived_session_state() -> None:
             ss[STRATEGY_TARGET_WEIGHTS_KEY] = remapped_s
     except Exception:
         pass
-    # Force Streamlit widget keys for contribution targets to re-seed from fresh weights.
     for k in list(ss.keys()):
-        if str(k).startswith("contrib_tgt_"):
+        if str(k).startswith("contrib_tgt_") or str(k).startswith("contrib_strat_tgt_"):
             ss.pop(k, None)
 
 
@@ -556,7 +603,6 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
 
     from investment_ami.decision_support.contribution_advisor import (
         OBJECTIVE_SLEEVE_MAPPING_ASSUMPTION,
-        STRATEGY_TARGET_WEIGHTS_KEY,
         canonical_stated_objective,
         objective_category_targets,
         strategy_targets_from_session,
@@ -699,23 +745,11 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
     elif target_source == "current_strategy":
         st.markdown("**Current strategy target**")
         st.caption(
-            "This is a **saved** strategy you accept — not a live snapshot of today's market "
-            "weights. Prices may drift; the strategy target stays fixed until you explicitly update it."
+            "Saved strategy is an **intentional** target you accept — not a live market snapshot. "
+            "Use current allocation only when you want to freeze today's weights; otherwise enter "
+            "exact percentages (e.g. 35 / 30 / 25 / 10) and save. Prices may drift; the strategy "
+            "target stays fixed until you explicitly update it."
         )
-        saved_strategy = strategy_targets_from_session(_ss())
-        if saved_strategy:
-            ordered = sorted(saved_strategy.items(), key=lambda kv: (-float(kv[1]), kv[0]))
-            st.info(
-                "Saved strategy: "
-                + " · ".join(f"**{t}** {float(w):.1f}%" for t, w in ordered)
-            )
-            resolved_targets_for_fp = dict(saved_strategy)
-        else:
-            st.warning(
-                "No strategy target saved yet. If the portfolio is on strategy, use the button "
-                "below to establish one. Contribution Advisor will not treat drifting live weights "
-                "as the target."
-            )
 
         live_vals = {
             h.ticker: float(h.current_value or 0.0)
@@ -725,40 +759,113 @@ def render_allocate_new_money(*, beginner: bool = False) -> None:
         if float(snap.cash or 0.0) > 0:
             live_vals["$CASH"] = float(snap.cash)
         live_pct = weights_from_values_as_percent(live_vals)
-        if live_pct:
-            st.caption(
-                "Live market weights (informational only): "
-                + " · ".join(f"{t} {w:.1f}%" for t, w in sorted(live_pct.items(), key=lambda kv: -kv[1]))
+
+        saved_strategy = strategy_targets_from_session(_ss())
+        if saved_strategy:
+            ordered = sorted(saved_strategy.items(), key=lambda kv: (-float(kv[1]), kv[0]))
+            st.info(
+                "**Saved strategy target:** "
+                + " · ".join(f"**{t}** {_format_strategy_weight_pct(float(w))}" for t, w in ordered)
+            )
+            resolved_targets_for_fp = dict(saved_strategy)
+        else:
+            st.warning(
+                "No strategy target saved yet. Capture live weights, or save exact intentional "
+                "weights below after establishing a draft. Contribution Advisor will not treat "
+                "drifting live weights as the target."
             )
 
-        b1, b2 = st.columns(2)
-        with b1:
-            establish = st.button(
-                "Use current allocation as strategy target",
-                key="contrib_establish_strategy",
-                help="Saves today's live weights as the durable strategy target (explicit action).",
+        if live_pct:
+            st.caption(
+                "**Live market allocation** (informational only — does not change the saved strategy): "
+                + " · ".join(
+                    f"{t} {_format_strategy_weight_pct(w)}"
+                    for t, w in sorted(live_pct.items(), key=lambda kv: -kv[1])
+                )
             )
-        with b2:
-            update = st.button(
-                "Update strategy target from current allocation",
-                key="contrib_update_strategy",
-                disabled=not bool(saved_strategy),
-                help="Replace the saved strategy with today's live weights (explicit action).",
-            )
-        if establish or update:
+
+        establish = st.button(
+            "Use current allocation as strategy target",
+            key="contrib_establish_strategy",
+            help=(
+                "Saves today's live market weights as the strategy target (explicit action). "
+                "Tiny price drift will be frozen in — edit exact % afterward if you want clean targets."
+            ),
+        )
+        if establish:
             if not live_pct:
                 st.error("No priced holdings available to establish a strategy target.")
             else:
-                _ss()[STRATEGY_TARGET_WEIGHTS_KEY] = dict(live_pct)
-                _ss()["_real_portfolio_ledger_touched"] = True
-                _ss().pop("_contribution_advisor_result", None)
-                _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
-                ok, msg = _persist_portfolio_ledger_change(trigger="strategy_target_weights_change")
+                ok, msg = _save_strategy_target_weights(dict(live_pct))
                 if ok:
-                    st.success("Strategy target saved. It will persist across reruns and restore with the ledger.")
+                    st.success(
+                        "Strategy target saved from current allocation. "
+                        "Edit exact % below if you want intentional round weights."
+                    )
                 else:
-                    st.warning(f"Strategy target saved in session; persist deferred: {msg}")
+                    st.warning(f"Strategy target save deferred: {msg}")
                 st.rerun()
+
+        # Editable intentional weights once a strategy exists (or seed from live as draft after establish).
+        edit_universe = list(saved_strategy.keys()) if saved_strategy else list(live_pct.keys())
+        # Prefer holdings order from snapshot; include any saved-only names.
+        ordered_syms: list[str] = []
+        for h in snap.holdings:
+            if h.current_price is None:
+                continue
+            if h.ticker in (saved_strategy or live_pct or {}):
+                ordered_syms.append(h.ticker)
+        for sym in edit_universe:
+            if sym not in ordered_syms:
+                ordered_syms.append(sym)
+
+        if saved_strategy and ordered_syms:
+            st.markdown("**Edit intentional strategy weights (%)**")
+            st.caption(
+                "Enter exact desired strategy weights (must sum near 100%). "
+                "Saving updates the durable strategy only — no deposit/buy is written."
+            )
+            cols = st.columns(min(4, max(1, len(ordered_syms))))
+            draft: dict[str, float] = {}
+            for i, sym in enumerate(ordered_syms):
+                default = float(saved_strategy.get(sym, live_pct.get(sym, 0.0)))
+                with cols[i % len(cols)]:
+                    draft[sym] = st.number_input(
+                        f"{sym} strategy %",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=float(default),
+                        step=0.01,
+                        format="%.2f",
+                        key=f"contrib_strat_tgt_{sym}",
+                    )
+            draft_sum = sum(draft.values())
+            st.caption(f"Strategy draft sum: **{draft_sum:.2f}%**")
+            save_exact = st.button(
+                "Save strategy target",
+                type="primary",
+                key="contrib_save_exact_strategy",
+                help="Persist these exact intentional weights as the Current strategy target.",
+            )
+            if save_exact:
+                if abs(draft_sum - 100.0) > 0.5:
+                    st.error(
+                        f"Strategy weights must sum near 100% (currently {draft_sum:.2f}%). "
+                        "Adjust before saving."
+                    )
+                else:
+                    # Store exactly what the user entered (preserve intentional 35/30/25/10).
+                    ok, msg = _save_strategy_target_weights(dict(draft))
+                    if ok:
+                        st.success("Intentional strategy target saved. Live market weights were not written.")
+                    else:
+                        st.warning(f"Strategy target save deferred: {msg}")
+                    st.rerun()
+        elif not saved_strategy and live_pct:
+            st.caption(
+                "Tip: after capturing current allocation, edit the strategy % fields to exact "
+                "intentional weights (e.g. 35 / 30 / 25 / 10) and click **Save strategy target**."
+            )
 
     if beginner:
         st.caption(
