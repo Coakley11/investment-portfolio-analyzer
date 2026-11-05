@@ -1,0 +1,32 @@
+{
+  "command": {
+    "source": "Command_Center_Approved_Logo.png",
+    "sha256": "8e8749ab53ca56a9116c6fd7dede65d7a36887a9455169898d9973346fe850f5",
+    "emblem_crop": [
+      370,
+      40,
+      1050,
+      720
+    ],
+    "background": "original white",
+    "full_size": [
+      768,
+      576
+    ]
+  },
+  "investment": {
+    "source": "Investment_Portfolio_Analyzer_Approved_Logo.png",
+    "sha256": "460370ab85a4ea028142e8df297b8184a5abebaa41aaa952c90996b8ea773aec",
+    "emblem_crop": [
+      430,
+      10,
+      1110,
+      690
+    ],
+    "background": "original white",
+    "full_size": [
+      768,
+      512
+    ]
+  }
+}

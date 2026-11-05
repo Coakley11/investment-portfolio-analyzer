@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from suite_brand_assets import brand_asset_path, brand_data_uri
 import streamlit as st
 
 import dashboard_charts as charts
@@ -154,10 +155,13 @@ APP_DISCLAIMER = UI_DISCLAIMER
 
 st.set_page_config(
     page_title="Daniel Cohen Investment Portfolio Analyzer",
-    page_icon="📊",
+    page_icon=str(brand_asset_path("investment_emblem_96")),
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+if hasattr(st, "logo"):
+    st.logo(str(brand_asset_path("investment_emblem_256")), size="large", icon_image=str(brand_asset_path("investment_emblem_96")))
 
 try:
     from suite_query_param_preservation import (
@@ -449,6 +453,7 @@ st.markdown(
         background: radial-gradient(circle, rgba(77, 163, 255, 0.18) 0%, rgba(77, 163, 255, 0) 70%);
         pointer-events: none;
     }
+    .portfolio-brand-wordmark { display:block; width:min(100%, 310px); height:auto; background:white; border-radius:12px; margin:0 0 1rem; }
     .hero-inner { position: relative; z-index: 1; }
     .hero-eyebrow {
         font-size: 0.72rem;
@@ -708,19 +713,22 @@ def _money(x: float) -> str:
 
 
 def render_branded_header(beginner: bool = True):
+    logo_html = f'<img class="portfolio-brand-wordmark" src="{brand_data_uri("investment_full")}" alt="Investment Portfolio Analyzer logo">'
     screenshot = pp.is_screenshot_mode(st)
     if screenshot:
+        st.markdown(logo_html, unsafe_allow_html=True)
         pp.render_hero_banner(
             st,
-            "Investment Portfolio Dashboard",
+            "Investment Portfolio Analyzer",
             "Live market data · Risk metrics · Monte Carlo · Efficient frontier · Portfolio optimization",
         )
         return
     if beginner:
         st.markdown(
-            """
+            f"""
             <div class="hero-header">
               <div class="hero-inner">
+                {logo_html}
                 <p class="hero-eyebrow">🧭 Your Portfolio Coach</p>
                 <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
                 <p class="hero-subtitle">
@@ -740,9 +748,10 @@ def render_branded_header(beginner: bool = True):
         )
     else:
         st.markdown(
-            """
+            f"""
             <div class="hero-header">
               <div class="hero-inner">
+                {logo_html}
                 <p class="hero-eyebrow">📈 Institutional Portfolio Analytics</p>
                 <h1 class="hero-title">Daniel Cohen Investment Portfolio Analyzer</h1>
                 <p class="hero-subtitle">
