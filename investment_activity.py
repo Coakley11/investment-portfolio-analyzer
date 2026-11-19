@@ -55,12 +55,14 @@ PAGE_IDS: dict[str, str] = {
 
 
 def _today() -> str:
+    """Today in the suite display timezone (America/New_York), the day Command Center shows."""
+    now = dt.datetime.now(dt.timezone.utc)
     try:
-        from activity_time import to_display_local, utc_now_iso
+        from activity_time import to_display_local
 
-        return to_display_local(utc_now_iso()).date().isoformat()
+        return to_display_local(now).date().isoformat()
     except Exception:
-        return dt.date.today().isoformat()
+        return now.date().isoformat()
 
 
 def _digest(*parts: Any) -> str:
@@ -202,6 +204,8 @@ def _record(
         merged = {**base, **(metrics or {})}
         merged["portfolio_kind"] = kind
         merged["event_key"] = event_key
+        if summary:
+            merged["summary"] = summary
         merged["resume_page"] = page
         if subtab:
             merged["resume_subtab"] = subtab
