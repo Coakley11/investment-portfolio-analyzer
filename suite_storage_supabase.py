@@ -1058,6 +1058,9 @@ def load_browser_auth_session(session_id: str) -> dict[str, Any] | None:
                 "item_type": f"eq.{_AUTH_SESSION_ITEM_TYPE}",
                 "item_key": f"eq.{sid}",
                 "valid": "eq.true",
+                # Several suite apps may hold a row for one browser session id (under
+                # different user_id keys); use the most recently refreshed tokens.
+                "order": "updated_at.desc",
                 "limit": "1",
             },
             prefer="return=representation",
