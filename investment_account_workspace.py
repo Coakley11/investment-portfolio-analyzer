@@ -4,8 +4,8 @@ Investment Account & Workspace — single sidebar entry point.
 Copies Music/suite Account & Workspace conventions (label
 ``Account & Workspace · {label}``, expander key ``suite_account_workspace_expander``,
 logout key, Saved Session reset confirm keys, Command Center URL helper) and nests
-Command Center + Saved Sessions + Log Out inside that one control so Investment no
-longer shows redundant top-level suite chrome.
+the Command Center logo + Saved Sessions + Log Out inside that one control so Investment
+no longer shows redundant top-level suite chrome. Layout follows Baseball Explorer.
 """
 
 from __future__ import annotations
@@ -34,22 +34,74 @@ def _signed_in_email(ctx: dict[str, Any], session_state: dict[str, Any]) -> str:
     return ""
 
 
-def _render_command_center_entry(st: Any) -> None:
+# Investment theme (.streamlit/config.toml): border on the dark sidebar, primary blue focus ring.
+_CC_LOGO_BORDER = "#5b6b82"
+_CC_LOGO_FOCUS = "#4da3ff"
+LOG_OUT_ICON = ":material/logout:"
+
+
+class _StyledMarkdown:
+    """Markdown target that sends the logo's style with the logo in one element (no extra gap)."""
+
+    def __init__(self, st: Any, css: str) -> None:
+        self._st = st
+        self._css = css
+
+    def markdown(self, body: str, **kwargs: Any) -> Any:
+        return self._st.markdown(self._css + body, **kwargs)
+
+
+def _command_center_href(st: Any) -> str:
     try:
         from suite_command_center_link import command_center_url
         from suite_workspace import get_active_workspace_id
 
-        url = command_center_url(workspace_id=get_active_workspace_id(st))
+        return command_center_url(workspace_id=get_active_workspace_id(st))
     except Exception:
         try:
             from suite_command_center_link import command_center_url
 
-            url = command_center_url()
+            return command_center_url()
         except Exception:
-            return
+            return ""
+
+
+def _workspace_label(ctx: dict[str, Any]) -> str:
+    return str(ctx.get("active_workspace_label") or "Workspace").strip() or "Workspace"
+
+
+def _auth_session_active(session_state: dict[str, Any]) -> bool:
+    try:
+        from suite_auth import is_auth_enabled, is_authenticated
+
+        return bool(is_auth_enabled() and is_authenticated(session_state))
+    except ImportError:
+        return False
+
+
+def _render_command_center_entry(st: Any) -> None:
+    """The approved Command Center logo as the control itself (Baseball Explorer parity).
+
+    No heading or text label: the logo opens Command Center (same URL, new tab, as the
+    former "← Command Center" button) and carries a tooltip and an accessible name.
+    """
+    url = _command_center_href(st)
     if not url:
         return
-    st.link_button("← Command Center", url, use_container_width=True)
+    shown = False
+    try:
+        from suite_brand_assets import command_center_logo_css, render_command_center_logo_link
+
+        shown = render_command_center_logo_link(
+            _StyledMarkdown(st, command_center_logo_css(border=_CC_LOGO_BORDER, focus=_CC_LOGO_FOCUS)),
+            url,
+            name="Open Command Center",
+        )
+    except ImportError:
+        shown = False
+    if not shown:
+        # Artwork unavailable on this deploy: keep navigation working with a labelled button.
+        st.link_button("Command Center", url, help="Open Command Center")
 
 
 def _render_saved_sessions_section(
@@ -108,7 +160,12 @@ def _render_logout_entry(st: Any, session_state: dict[str, Any]) -> None:
         from suite_auth import is_auth_enabled, is_authenticated, logout
 
         if is_auth_enabled() and is_authenticated(session_state):
-            if st.button("Log out", key="suite_account_workspace_logout_btn", use_container_width=True):
+            if st.button(
+                "Log out",
+                key="suite_account_workspace_logout_btn",
+                icon=LOG_OUT_ICON,
+                use_container_width=True,
+            ):
                 logout(session_state, st=st)
                 st.rerun()
     except ImportError:
@@ -125,15 +182,15 @@ def _render_consolidated_body(
     reset_label: str,
     reset_help: str,
 ) -> None:
-    """Inside Account & Workspace: identity → Command Center → Saved Sessions → Log out."""
+    """Inside Account & Workspace (suite order, as Baseball Explorer / Music Practice Coach):
+    Command Center logo → identity + workspace → Saved Sessions → Log out."""
+    _render_command_center_entry(st)
     email = _signed_in_email(ctx, session_state)
     if email:
         st.markdown(f"Signed in as **{email}**")
     else:
         st.caption("Shared suite profile (no individual sign-in on this deploy).")
-
-    st.markdown("**Command Center**")
-    _render_command_center_entry(st)
+    st.caption(f"Workspace: **{_workspace_label(ctx)}**")
     st.divider()
     _render_saved_sessions_section(
         st,
@@ -142,8 +199,11 @@ def _render_consolidated_body(
         label=reset_label,
         help_text=reset_help,
     )
-    st.divider()
-    _render_logout_entry(st, session_state)
+    # Log out sits in its own section below Saved Sessions so it never reads as part of
+    # "Reset to default". The divider appears only when a Log out button follows it.
+    if _auth_session_active(session_state):
+        st.divider()
+        _render_logout_entry(st, session_state)
 
 
 def render_investment_account_workspace_control(

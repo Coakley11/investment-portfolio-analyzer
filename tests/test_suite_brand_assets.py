@@ -38,10 +38,45 @@ def test_link_preserves_url_label_and_new_tab():
         assert im.size == (96, 96)
 
 
+def test_logo_link_is_the_whole_control_with_accessible_name():
+    class Target:
+        def markdown(self, text, **kwargs):
+            self.text = text
+            self.kwargs = kwargs
+
+    target = Target()
+    url = 'https://example.test/?suite_workspace=alice&resume=a%2Fb#section'
+    assert brands.render_command_center_logo_link(target, url)
+    markup = Markup(target.text)
+    anchor = next(attrs for tag, attrs in markup.tags if tag == 'a')
+    assert anchor['href'] == url
+    assert anchor['target'] == '_blank'
+    assert 'noopener' in anchor['rel']
+    assert anchor['aria-label'] == 'Open Command Center'
+    assert anchor['title'] == 'Open Command Center'
+    image = next(attrs for tag, attrs in markup.tags if tag == 'img')
+    assert image['alt'] == 'Command Center'
+    assert '<span' not in target.text  # no visible words beside the logo
+    assert target.kwargs.get('unsafe_allow_html') is True
+
+
+def test_logo_css_keeps_44px_target_and_white_tile():
+    css = brands.command_center_logo_css(border='#5b6b82', focus='#4da3ff')
+    assert 'width:44px' in css and 'height:44px' in css
+    assert 'background:#fff' in css
+    assert '#4da3ff' in css
+
+
 def test_missing_logo_uses_existing_button_fallback():
     brands.brand_data_uri.cache_clear()
     with patch.object(brands, 'ROOT', Path('/nonexistent-branding-test')):
         assert not brands.render_command_center_brand_link(object(), 'Command Center', 'https://example.test')
+
+        class Target:
+            def markdown(self, text, **kwargs):
+                raise AssertionError('must not render without the artwork')
+
+        assert not brands.render_command_center_logo_link(Target(), 'https://example.test')
     brands.brand_data_uri.cache_clear()
 
 
