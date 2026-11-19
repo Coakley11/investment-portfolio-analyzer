@@ -389,6 +389,16 @@ class TestIdentityResolution(IsolationHarness):
         self.assertNotEqual(b.session_state["_suite_auth_external_id"], "sam")
         self.assertNotEqual(self.account_id(a), self.account_id(b))
 
+    def test_profile_emails_for_other_addresses_do_not_move_existing_accounts(self) -> None:
+        with patch("suite_auth._configured_profile_emails", return_value={"ariel@example.com": "ariel"}):
+            a, b, c = _Browser(), _Browser(), _Browser()
+            self.sign_in(a, COAKLEY_EMAIL)
+            self.sign_in(b, DANIEL_EMAIL)
+            self.sign_in(c, "ariel@example.com")
+        self.assertEqual(a.session_state["_suite_auth_external_id"], "coakley11")
+        self.assertEqual(b.session_state["_suite_auth_external_id"], "daniel")
+        self.assertEqual(c.session_state["_suite_auth_external_id"], "ariel")
+
     def test_signed_out_session_has_no_account(self) -> None:
         br = _Browser()
         self.assertEqual(self.account_id(br), "")
@@ -645,6 +655,69 @@ class TestSessionLifecycle(IsolationHarness):
         with self.acting_in(fresh_b):
             restore_once(fresh_b, APP, apply_state=lambda _st, s: applied.append(dict(s)))
         self.assertTrue(all(s.get("owner_tag") != "coakley" for s in applied))
+
+
+class TestAdminAuthorization(IsolationHarness):
+    def _is_admin(self, browser: _Browser) -> bool:
+        from suite_workspace_registry import is_admin_user
+
+        with self.acting_in(browser):
+            return is_admin_user(session_state=browser.session_state)
+
+    def test_the_two_owner_accounts_are_admin(self) -> None:
+        a, b = _Browser(), _Browser()
+        self.sign_in(a, COAKLEY_EMAIL)
+        self.sign_in(b, DANIEL_EMAIL)
+        self.assertTrue(self._is_admin(a))
+        self.assertTrue(self._is_admin(b))
+
+    def test_same_local_part_at_another_domain_is_not_admin(self) -> None:
+        real = _Browser()
+        self.sign_in(real, COAKLEY_EMAIL)
+        impostor = _Browser()
+        self.sign_in(impostor, "coakley11@lookalike.example")
+        self.assertNotEqual(impostor.session_state["_suite_auth_external_id"], "coakley11")
+        self.assertFalse(self._is_admin(impostor))
+        self.assertTrue(self._is_admin(real))
+
+    def test_email_containing_admin_names_is_not_admin(self) -> None:
+        for email in ("daniel@example.com", "danielle@example.com", "x.coakley11@example.com"):
+            br = _Browser()
+            self.sign_in(br, email)
+            self.assertFalse(self._is_admin(br), email)
+
+    def test_forged_session_external_id_without_matching_email_is_not_admin(self) -> None:
+        br = _Browser()
+        self.sign_in(br, "someone@example.com")
+        br.session_state["_suite_auth_external_id"] = "coakley11"
+        self.assertFalse(self._is_admin(br))
+
+    def test_configured_admin_emails_is_an_exact_allow_list(self) -> None:
+        a = _Browser()
+        self.sign_in(a, COAKLEY_EMAIL)
+        with patch.dict(os.environ, {"SUITE_ADMIN_EMAILS": DANIEL_EMAIL}):
+            self.assertFalse(self._is_admin(a))
+        with patch.dict(os.environ, {"SUITE_ADMIN_EMAILS": f"{DANIEL_EMAIL}, {COAKLEY_EMAIL.upper()}"}):
+            self.assertTrue(self._is_admin(a))
+
+    def test_binding_falls_back_when_on_conflict_is_unsupported(self) -> None:
+        real_request = self.cloud.request
+
+        def no_on_conflict(method: str, path: str, **kw: Any) -> Any:
+            if method == "POST" and path == "suite_user_settings" and (kw.get("params") or {}).get("on_conflict"):
+                raise RuntimeError(
+                    "Supabase POST suite_user_settings failed (400): {\"code\":\"42P10\",\"message\":"
+                    "\"there is no unique or exclusion constraint matching the ON CONFLICT specification\"}"
+                )
+            return real_request(method, path, **kw)
+
+        with patch("suite_storage_supabase._request", side_effect=no_on_conflict):
+            a = _Browser()
+            self.sign_in(a, COAKLEY_EMAIL)
+            self.assertEqual(a.session_state["_suite_auth_external_id"], "coakley11")
+            impostor = _Browser()
+            self.sign_in(impostor, "coakley11@lookalike.example")
+            self.assertNotEqual(impostor.session_state["_suite_auth_external_id"], "coakley11")
 
 
 class TestUnauthorizedAccess(IsolationHarness):

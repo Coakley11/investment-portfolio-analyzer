@@ -62,6 +62,59 @@ def _is_admin_from_verified_locals(locals_: set[str]) -> bool:
     return bool(cleaned & ADMIN_EMAIL_LOCAL_PARTS)
 
 
+# Each admin email local part may hold admin only through its own bound profile.
+_ADMIN_PROFILE_FOR_LOCAL_PART = {"coakley11": "coakley11", "daniel.cohen11": "daniel"}
+ADMIN_EMAILS_ENV = "SUITE_ADMIN_EMAILS"
+
+
+def _configured_admin_emails() -> frozenset[str]:
+    """Optional exact allow-list: ``[suite_activity] admin_emails`` or ``SUITE_ADMIN_EMAILS`` (comma list)."""
+    import os
+
+    raw: Any = os.environ.get(ADMIN_EMAILS_ENV, "").strip()
+    if not raw:
+        try:
+            import streamlit as st  # noqa: WPS433
+
+            block = st.secrets.get("suite_activity") if hasattr(st, "secrets") else None
+            raw = block.get("admin_emails") if block is not None and hasattr(block, "get") else None
+        except Exception:
+            raw = None
+    if not raw:
+        return frozenset()
+    items = raw.split(",") if isinstance(raw, str) else list(raw)
+    return frozenset(str(x).strip().lower() for x in items if str(x).strip())
+
+
+def _signed_in_session_is_admin(ss: Any) -> bool:
+    """
+    Admin for a signed-in session (sign-in on).
+
+    The email's local part alone is not enough: anyone can register ``coakley11@`` at
+    another domain. Admin requires that this session holds the admin account's own
+    profile (``coakley11`` / ``daniel``), which sign-in grants only when that profile is
+    bound to this Supabase Auth user (``suite_auth.resolve_account_profile_id``); a second
+    Auth user with the same local part gets a private ``<id>_<hash>`` profile instead.
+    When ``admin_emails`` is configured, the exact address must also be listed.
+    """
+    from suite_auth import current_auth_email, is_authenticated, resolve_auth_external_id
+
+    if not is_authenticated(ss):
+        return False
+    email = _normalize_identity(current_auth_email(ss))
+    if not email or "@" not in email:
+        return False
+    expected_profile = _ADMIN_PROFILE_FOR_LOCAL_PART.get(_email_local_part(email))
+    if not expected_profile:
+        return False
+    allow = _configured_admin_emails()
+    if allow and email not in allow:
+        return False
+    if not str(ss.get("_suite_auth_user_id") or "").strip():
+        return False
+    return _normalize_identity(resolve_auth_external_id(ss)) == expected_profile
+
+
 def _session_mapping(session_state: Any) -> Any | None:
     """Accept dicts and Streamlit SessionState (mapping-like); reject None."""
     if session_state is None:
@@ -80,9 +133,11 @@ def is_admin_user(
     """
     Server-side admin authorization for developer / diagnostics / ops tools.
 
-    Grants access only when a **verified email local-part** is ``coakley11`` or
-    ``daniel.cohen11``. Fail-safe: returns False when identity cannot be
-    determined — never defaults to admin.
+    Sign-in on: only the signed-in ``coakley11`` / ``daniel.cohen11`` accounts, and only
+    while the session holds that account's own bound profile (see
+    ``_signed_in_session_is_admin``); an email local part alone never grants admin.
+    Sign-in off: the configured single-user identity, as before. Fail-safe: returns
+    False when identity cannot be determined — never defaults to admin.
 
     Workspace ids, display names, account slugs, query params, unsigned/demo
     workspaces, and forged session ``external_id`` values never grant admin.
@@ -97,25 +152,14 @@ def is_admin_user(
 
     if ss is not None:
         try:
-            from suite_auth import (
-                current_auth_email,
-                is_auth_enabled,
-                is_authenticated,
-            )
+            from suite_auth import is_auth_enabled
 
             if is_auth_enabled():
-                if not is_authenticated(ss):
-                    return False
-                sess_email = current_auth_email(ss)
-                if not sess_email:
-                    return False
-                # Auth path: email is authoritative. Ignore session external_id /
-                # workspace / display-name fields — those are not immutable identity.
-                verified_locals |= _admin_locals_from_email(sess_email)
-                auth_resolved = True
+                # Sign-in on: the signed-in session alone decides (caller-supplied
+                # email / external_id are ignored).
+                return _signed_in_session_is_admin(ss)
         except Exception:
-            if not verified_locals:
-                return False
+            return False
 
     if auth_resolved:
         return _is_admin_from_verified_locals(verified_locals)

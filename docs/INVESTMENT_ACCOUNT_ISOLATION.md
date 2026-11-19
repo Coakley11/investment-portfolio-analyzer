@@ -30,8 +30,8 @@ Contributing defects, also fixed:
 ## How identity and isolation work now
 
 1. **Identity = the Supabase Auth user of this session.** At sign-in, `resolve_account_profile_id(email, auth_user_id)` picks a profile id:
-   - `profile_emails` in Secrets (exact address → profile), when configured;
-   - otherwise the continuity pins `daniel.cohen11 → daniel`, `coakley11 → coakley11` (what each account already used, so their data stays where it is);
+   - `profile_emails` in Secrets (exact address → profile, same format as Baseball Explorer);
+   - otherwise the continuity pins `daniel.cohen11 → daniel`, `coakley11 → coakley11` (what each account already used, so their data stays where it is). A `profile_emails` map that does not list these exact addresses does not move them;
    - otherwise the email's local part (`user_<x>` when it names a protected id such as `daniel`, `guest`).
 
    The profile is then **bound** to that Auth user (a `suite_user_settings` row, `app = '_auth_binding'`, first claim wins, re-read after write). If the profile is bound to a different Auth user, the account gets `<candidate>_<hash of its Auth id>`. So two Auth users never share a profile.
@@ -41,6 +41,7 @@ Contributing defects, also fixed:
 5. **Cloud**: every read filters `user_id = <this account>`. With sign-in on and no account, reads return empty and writes raise `AccountScopeError`. Before a state upsert, the app checks the row's owner and refuses to replace a row owned by another account, or an ownerless one. This is the app-side twin of DB Phase 1.
 6. **Session boundary**: whenever the signed-in Auth user changes (logout, login as another account, token restore), every in-memory copy of account data is dropped: portfolio, transactions, workspace choice, cloud caches.
 7. **Sign-in gate fails closed**: an error in the gate stops the page.
+8. **Admin** (developer tools, demo workspaces): only the signed-in coakley11 / daniel.cohen11 accounts, and only while the session holds that account's own **bound** profile. An email's local part alone (`coakley11@any-domain`) no longer grants admin: a second Auth user with that local part gets a private profile and no admin. Optional exact allow-list: `admin_emails = ["…", "…"]` under `[suite_activity]` (or `SUITE_ADMIN_EMAILS`, comma-separated).
 
 ## Where the data is today, and what needs reconciliation
 

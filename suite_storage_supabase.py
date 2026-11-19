@@ -517,6 +517,12 @@ def ensure_user_row(
 _PROFILE_BINDING_APP = "_auth_binding"
 
 
+def _is_conflict_409(exc: BaseException) -> bool:
+    """A duplicate-key refusal (HTTP 409 / SQLSTATE 23505), nothing broader."""
+    text = str(exc)
+    return "(409)" in text or "23505" in text
+
+
 def load_profile_binding(profile_row_id: str) -> dict[str, Any]:
     """The Supabase Auth user a ``suite_users`` profile is bound to (``{}`` when unbound)."""
     pid = str(profile_row_id or "").strip()
@@ -556,22 +562,33 @@ def claim_profile_binding(external_id: str, *, auth_user_id: str, email: str = "
     bound = str(load_profile_binding(row_id).get("auth_user_id") or "").strip()
     if bound:
         return bound == uid
-    _request(
-        "POST",
-        _TABLE_SETTINGS,
-        params={"on_conflict": "user_id,app"},
-        json_body={
-            "user_id": row_id,
-            "app": _PROFILE_BINDING_APP,
-            "settings": {
-                "auth_user_id": uid,
-                "email": str(email or "").strip().lower(),
-                "bound_at": _now_iso(),
-            },
-            "updated_at": _now_iso(),
+    body = {
+        "user_id": row_id,
+        "app": _PROFILE_BINDING_APP,
+        "settings": {
+            "auth_user_id": uid,
+            "email": str(email or "").strip().lower(),
+            "bound_at": _now_iso(),
         },
-        prefer="resolution=ignore-duplicates,return=minimal",
-    )
+        "updated_at": _now_iso(),
+    }
+    try:
+        _request(
+            "POST",
+            _TABLE_SETTINGS,
+            params={"on_conflict": "user_id,app"},
+            json_body=body,
+            prefer="resolution=ignore-duplicates,return=minimal",
+        )
+    except RuntimeError as exc:
+        if not _is_conflict_409(exc):
+            # e.g. no unique constraint matching on_conflict: a plain insert still can't
+            # overwrite an existing binding (the primary key refuses a duplicate).
+            try:
+                _request("POST", _TABLE_SETTINGS, json_body=body, prefer="return=minimal")
+            except RuntimeError as exc2:
+                if not _is_conflict_409(exc2):
+                    raise
     bound = str(load_profile_binding(row_id).get("auth_user_id") or "").strip()
     return bound == uid
 

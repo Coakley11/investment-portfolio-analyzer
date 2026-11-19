@@ -172,8 +172,8 @@ _PROTECTED_PROFILE_IDS = frozenset(
 )
 
 # Continuity for the two existing accounts: the exact profile each already resolves to,
-# so their saved data stays where it is. Keyed by email local part. Only used while
-# ``profile_emails`` is not configured in Secrets (configure it to pin exact addresses).
+# so their saved data stays where it is. Keyed by email local part; an exact address in
+# ``profile_emails`` (Secrets) takes precedence.
 # Each pinned profile is additionally bound to the first Supabase Auth user that claims
 # it (see ``resolve_account_profile_id``), so a second account with the same local part
 # can never open it.
@@ -224,8 +224,8 @@ def _infer_external_id_from_email(email: str) -> str:
     Previously any email containing ``daniel`` or ``ariel`` became that profile, so
     unrelated accounts shared the owner's (or Ariel's) data. Now:
 
-    1. ``profile_emails`` in Secrets (exact address), when configured;
-    2. otherwise the legacy pin for the two existing accounts;
+    1. ``profile_emails`` in Secrets (exact address, same format as Baseball Explorer);
+    2. otherwise the continuity pin for the two existing accounts;
     3. otherwise the email's local part, prefixed ``user_`` when it names a protected id.
 
     A candidate is only granted at sign-in once it is bound to this Supabase Auth user
@@ -240,7 +240,9 @@ def _infer_external_id_from_email(email: str) -> str:
         if hit:
             return hit
     local = low.split("@", 1)[0]
-    if not configured and local in _LEGACY_PROFILE_PINS:
+    if local in _LEGACY_PROFILE_PINS:
+        # Applies unless profile_emails maps this exact address (a map written for another
+        # app, e.g. Baseball's, must not move these accounts off their existing profiles).
         return _LEGACY_PROFILE_PINS[local]
     safe = _safe_profile_token(local)
     if not safe:
