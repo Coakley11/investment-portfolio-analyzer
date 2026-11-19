@@ -221,8 +221,12 @@ def _account_ui(st: Any, *, sidebar: bool = False) -> Any:
 
 
 def account_workspace_expander_label(ctx: dict[str, Any]) -> str:
-    label = str(ctx.get("active_workspace_label") or "Workspace").strip()
-    return f"Account & Workspace · {label}"
+    """Compact top-level sidebar label (workspace detail lives inside the expander).
+
+    Same header as Music Practice Coach and Baseball Explorer.
+    """
+    _ = ctx
+    return "Account & Workspace"
 
 
 def render_global_workspace_badge(st: Any, *, sidebar: bool = True) -> None:

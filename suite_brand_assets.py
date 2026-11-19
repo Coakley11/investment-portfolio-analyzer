@@ -19,6 +19,46 @@ def brand_data_uri(name: str) -> str:
     mime = "image/webp" if path.suffix == ".webp" else "image/png"
     return "data:" + mime + ";base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
+def render_command_center_logo_link(target, url: str, *, name: str = "Open Command Center", size: int = 30) -> bool:
+    """The approved Command Center logo as the whole control (no words), with a tooltip and an
+    accessible name. Opens the already-resolved URL in a new tab, as the text link did.
+
+    Same markup and class as Baseball Explorer's copy of this shared module, so the suite's
+    Account & Workspace panels share one Command Center control. Style it with
+    :func:`command_center_logo_css`.
+    """
+    logo = brand_data_uri("command_emblem_96")
+    if not logo or not url or not callable(getattr(target, "markdown", None)):
+        return False
+    target.markdown(
+        '<a class="bx-cc-logo" href="' + html.escape(url, quote=True) + '" target="_blank" '
+        'rel="noopener noreferrer" title="' + html.escape(name, quote=True) + '" '
+        'aria-label="' + html.escape(name, quote=True) + '">'
+        '<img src="' + logo + '" alt="Command Center" width="' + str(int(size)) + '" height="'
+        + str(int(size)) + '" style="object-fit:contain;border-radius:6px"></a>',
+        unsafe_allow_html=True,
+    )
+    return True
+
+
+def command_center_logo_css(*, border: str = "#94a3b8", focus: str = "#1e3a8a") -> str:
+    """Style for the logo control: a 44 px touch target on the logo's own white tile.
+
+    The emblem keeps its original white background on light and dark sidebars; only the
+    border and focus ring take the host app's colours.
+    """
+    return (
+        "<style>"
+        "a.bx-cc-logo{display:inline-flex;align-items:center;justify-content:center;"
+        "width:44px;height:44px;min-width:44px;min-height:44px;box-sizing:border-box;"
+        "border:1px solid " + border + ";border-radius:0.5rem;background:#fff;"
+        "margin:0 0 0.75rem;text-decoration:none;transition:box-shadow .15s ease,border-color .15s ease;}"
+        "a.bx-cc-logo:hover,a.bx-cc-logo:focus-visible{border-color:" + focus + ";"
+        "box-shadow:0 0 0 2px " + focus + "55;outline:none;}"
+        "</style>"
+    )
+
+
 def render_command_center_brand_link(target, label: str, url: str) -> bool:
     """Decorate the already-resolved navigation URL without changing its query or target."""
     logo = brand_data_uri("command_emblem_96")
