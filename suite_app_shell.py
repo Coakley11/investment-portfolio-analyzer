@@ -19,11 +19,20 @@ __all__ = (
 def apply_suite_auth_gate(st: Any) -> None:
     """Block app body when Real Accounts are enabled and user is not signed in."""
     try:
-        from suite_auth import render_auth_gate
-
-        render_auth_gate(st)
+        from suite_auth import is_auth_enabled, render_auth_gate
     except ImportError:
-        pass
+        return
+    try:
+        render_auth_gate(st)
+    except Exception:
+        # Fail closed: an error in the gate must never let a signed-out session reach
+        # account data (st.stop() raises a BaseException, so it is not caught here).
+        if is_auth_enabled() and not st.session_state.get("_suite_auth_session"):
+            try:
+                st.error("Sign-in is temporarily unavailable. Please refresh and try again.")
+            except Exception:
+                pass
+            st.stop()
 
 
 def render_suite_namespace_notices(st: Any) -> None:

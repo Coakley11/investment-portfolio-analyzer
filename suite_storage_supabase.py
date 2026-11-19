@@ -34,6 +34,27 @@ _FULL_SESSION_KEY = "full_session"
 _READ_CACHE_KEY = "_suite_supabase_get_cache"
 
 
+class AccountScopeError(RuntimeError):
+    """A cloud read/write that could reach another account's rows was refused."""
+
+
+def _empty_when_unscoped(default_factory):
+    """Read helpers return an empty result (never another account's) when there is no account."""
+    import functools
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except AccountScopeError:
+                return default_factory()
+
+        return inner
+
+    return wrap
+
+
 def _read_cache_bucket() -> dict[tuple[str, str, tuple[tuple[str, str], ...]], tuple[int, Any]]:
     try:
         import streamlit as st  # noqa: WPS433
@@ -79,6 +100,7 @@ def _row_to_state_dict(row: dict[str, Any], *, logical: str) -> dict[str, Any]:
     }
 
 
+@_empty_when_unscoped(dict)
 def load_current_state_meta_for_app(app: str) -> dict[str, Any]:
     """Lightweight row metadata for one app (no metrics / full_session download)."""
     from suite_workspace import logical_storage_app_key
@@ -92,7 +114,7 @@ def load_current_state_meta_for_app(app: str) -> dict[str, Any]:
         "app": f"eq.{storage_app}",
         "limit": "1",
     }
-    uid = _cloud_user_id()
+    uid = _read_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     with _egress("load_current_state_meta_for_app"):
@@ -108,6 +130,7 @@ def load_current_state_meta_for_app(app: str) -> dict[str, Any]:
     }
 
 
+@_empty_when_unscoped(dict)
 def load_current_state_for_app(app: str) -> dict[str, Any]:
     """Fetch one app's state row including metrics/full_session (not all apps)."""
     from suite_workspace import logical_storage_app_key
@@ -121,7 +144,7 @@ def load_current_state_for_app(app: str) -> dict[str, Any]:
         "app": f"eq.{storage_app}",
         "limit": "1",
     }
-    uid = _cloud_user_id()
+    uid = _read_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     with _egress("load_current_state_for_app"):
@@ -131,13 +154,14 @@ def load_current_state_for_app(app: str) -> dict[str, Any]:
     return _row_to_state_dict(rows[0], logical=logical)
 
 
+@_empty_when_unscoped(dict)
 def load_current_states_summary() -> dict[str, dict[str, Any]]:
     """All workspace apps — page/summary/updated_at only (no metrics blobs)."""
     from suite_workspace import logical_storage_app_key, workspace_storage_app_keys
 
     allowed = workspace_storage_app_keys()
     params: dict[str, str] = {"select": "app,page,summary,updated_at"}
-    uid = _cloud_user_id()
+    uid = _read_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     if allowed:
@@ -173,7 +197,7 @@ def _merge_state_metrics(scoped_app_key: str, incoming: dict[str, Any] | None) -
             "select": "metrics",
             "app": f"eq.{scoped_app_key}",
         }
-        uid = _cloud_user_id()
+        uid = _read_user_id()
         if uid:
             params["user_id"] = f"eq.{uid}"
         rows = _request("GET", _TABLE_STATE, params=params, prefer="return=representation")
@@ -312,6 +336,15 @@ def _scoped_storage_app(app: str) -> str:
         return app_key
 
 
+def _logical_app_key(storage_app: str) -> str:
+    try:
+        from suite_workspace import logical_storage_app_key
+
+        return logical_storage_app_key(storage_app)
+    except ImportError:
+        return normalize_app_key(str(storage_app or "").split("__", 1)[0])
+
+
 def _workspace_storage_app_keys() -> list[str]:
     try:
         from suite_workspace import workspace_storage_app_keys
@@ -319,6 +352,16 @@ def _workspace_storage_app_keys() -> list[str]:
         return sorted(workspace_storage_app_keys())
     except Exception:
         return [normalize_app_key(app) for app in sorted(ACTIVE_APP_KEYS)]
+
+
+def _isolation_required() -> bool:
+    """Sign-in on: every row must belong to this session's own account."""
+    try:
+        from suite_user import account_isolation_required
+
+        return bool(account_isolation_required())
+    except ImportError:
+        return False
 
 
 def _scoped_user_id() -> str:
@@ -334,17 +377,95 @@ def _cloud_user_id() -> str | None:
     return uid
 
 
-def _apply_user_scope_params(params: dict[str, str]) -> None:
+def _read_user_id() -> str | None:
     """
-    Match activity rows written with cloud user_id or legacy null user_id rows.
-
-    Single-tenant suite: null user_id rows are legacy writes before auth-scoped ids.
+    ``user_id`` filter for a read. Raises :class:`AccountScopeError` when sign-in is on
+    and this session has no cloud account: an unfiltered read would return another
+    account's row.
     """
     uid = _cloud_user_id()
-    if uid:
+    if uid is None and _isolation_required():
+        raise AccountScopeError("No signed-in account for this session; cloud read refused.")
+    return uid
+
+
+def _write_user_id() -> str | None:
+    """``user_id`` for a write; refuses (raises) under sign-in when there is no account."""
+    uid = _cloud_user_id()
+    if uid is None and _isolation_required():
+        raise AccountScopeError("No signed-in account for this session; cloud write refused.")
+    return uid
+
+
+def _owned_user_id() -> str:
+    """Account id for tables whose ``user_id`` is NOT NULL (saved items, settings)."""
+    uid = _cloud_user_id()
+    if uid is None:
+        raise AccountScopeError("No cloud account for this session.")
+    return uid
+
+
+def _apply_user_scope_params(params: dict[str, str]) -> None:
+    """
+    Scope an activity / resume read to this account.
+
+    Sign-in on: this account's rows only. Rows with no ``user_id`` are legacy writes from
+    before accounts existed; they cannot be attributed, so no account is shown them.
+    Sign-in off (single-tenant): the account's rows plus those legacy rows, as before.
+    """
+    uid = _read_user_id()
+    if uid and _isolation_required():
+        params["user_id"] = f"eq.{uid}"
+    elif uid:
         params["or"] = f"(user_id.eq.{uid},user_id.is.null)"
     else:
         params["user_id"] = "is.null"
+
+
+def _fresh_get(table: str, params: dict[str, str]) -> Any:
+    """GET that bypasses and does not populate the per-session read cache."""
+    bucket = _read_cache_bucket()
+    key = _cache_key("GET", table, params)
+    bucket.pop(key, None)
+    try:
+        return _request("GET", table, params=params, prefer="return=representation")
+    finally:
+        bucket.pop(key, None)
+
+
+def _current_state_owner(app_key: str) -> tuple[bool, str | None]:
+    """``(row_exists, owner_user_id)`` for one state key, read fresh."""
+    rows = _fresh_get(_TABLE_STATE, {"select": "user_id", "app": f"eq.{app_key}", "limit": "1"})
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return False, None
+    owner = rows[0].get("user_id")
+    return True, (str(owner).strip() if owner else None)
+
+
+def _guard_current_state_owner(app_key: str, uid: str | None) -> None:
+    """
+    Refuse a state upsert that would replace another account's row.
+
+    ``suite_app_current_state`` is keyed by ``app`` alone in the database today, so a
+    plain upsert by a second account silently replaces the first account's row,
+    ``user_id`` included. Until the per-account key migration runs
+    (docs/sql/investment_account_isolation_DRAFT.sql), the app checks the owner first.
+    """
+    if not _isolation_required():
+        return
+    exists, owner = _current_state_owner(app_key)
+    if not exists:
+        return
+    if owner is None:
+        raise AccountScopeError(
+            f"Cloud state row {app_key!r} has no owner; refusing to claim it (needs owner review)."
+        )
+    if owner != uid:
+        raise AccountScopeError(f"Cloud state row {app_key!r} belongs to another account; write refused.")
+
+
+
+_UNCLAIMABLE_EXTERNAL_IDS = frozenset({"", "user_unidentified", "unauthenticated"})
 
 
 def ensure_user_row(
@@ -354,7 +475,10 @@ def ensure_user_row(
     display_name: str = "",
 ) -> str:
     """Create or fetch suite_users row; returns Supabase UUID."""
-    ext = str(external_id or "default").strip() or "default"
+    raw = str(external_id or "").strip()
+    if _isolation_required() and raw.lower() in _UNCLAIMABLE_EXTERNAL_IDS:
+        raise AccountScopeError("Refusing to resolve a shared fallback account id.")
+    ext = raw or "default"
     existing = _request(
         "GET",
         _TABLE_USERS,
@@ -388,6 +512,85 @@ def ensure_user_row(
         if row_id:
             return row_id
     raise RuntimeError(f"Could not resolve suite_users row for external_id={ext!r}")
+
+
+_PROFILE_BINDING_APP = "_auth_binding"
+
+
+def _is_conflict_409(exc: BaseException) -> bool:
+    """A duplicate-key refusal (HTTP 409 / SQLSTATE 23505), nothing broader."""
+    text = str(exc)
+    return "(409)" in text or "23505" in text
+
+
+def load_profile_binding(profile_row_id: str) -> dict[str, Any]:
+    """The Supabase Auth user a ``suite_users`` profile is bound to (``{}`` when unbound)."""
+    pid = str(profile_row_id or "").strip()
+    if not pid:
+        return {}
+    rows = _fresh_get(
+        _TABLE_SETTINGS,
+        {
+            "select": "settings",
+            "user_id": f"eq.{pid}",
+            "app": f"eq.{_PROFILE_BINDING_APP}",
+            "limit": "1",
+        },
+    )
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        settings = rows[0].get("settings")
+        if isinstance(settings, dict):
+            return settings
+    return {}
+
+
+def claim_profile_binding(external_id: str, *, auth_user_id: str, email: str = "") -> bool:
+    """
+    Bind profile ``external_id`` to one Supabase Auth user; True when it is bound to ``auth_user_id``.
+
+    First claim wins. The insert never overwrites an existing binding
+    (``resolution=ignore-duplicates`` on the ``(user_id, app)`` primary key), and the
+    binding is re-read after the write, so two accounts racing for one profile cannot
+    both get it. A profile bound to another Auth user returns False: the caller uses a
+    private id instead. No existing row is changed.
+    """
+    uid = str(auth_user_id or "").strip()
+    ext = str(external_id or "").strip()
+    if not uid or not ext:
+        return False
+    row_id = ensure_user_row(ext, email=str(email or "").strip().lower())
+    bound = str(load_profile_binding(row_id).get("auth_user_id") or "").strip()
+    if bound:
+        return bound == uid
+    body = {
+        "user_id": row_id,
+        "app": _PROFILE_BINDING_APP,
+        "settings": {
+            "auth_user_id": uid,
+            "email": str(email or "").strip().lower(),
+            "bound_at": _now_iso(),
+        },
+        "updated_at": _now_iso(),
+    }
+    try:
+        _request(
+            "POST",
+            _TABLE_SETTINGS,
+            params={"on_conflict": "user_id,app"},
+            json_body=body,
+            prefer="resolution=ignore-duplicates,return=minimal",
+        )
+    except RuntimeError as exc:
+        if not _is_conflict_409(exc):
+            # e.g. no unique constraint matching on_conflict: a plain insert still can't
+            # overwrite an existing binding (the primary key refuses a duplicate).
+            try:
+                _request("POST", _TABLE_SETTINGS, json_body=body, prefer="return=minimal")
+            except RuntimeError as exc2:
+                if not _is_conflict_409(exc2):
+                    raise
+    bound = str(load_profile_binding(row_id).get("auth_user_id") or "").strip()
+    return bound == uid
 
 
 def ping() -> bool:
@@ -462,7 +665,7 @@ def append_event(
         "timestamp": _now_iso(),
         "metrics": stamped,
     }
-    uid = _cloud_user_id()
+    uid = _write_user_id()
     if uid:
         body["user_id"] = uid
     rows = _request(
@@ -485,10 +688,14 @@ def save_current_state(
     summary: str = "",
     metrics: dict[str, Any] | None = None,
 ) -> None:
-    logical_app = normalize_app_key(app)
     app_key = _scoped_storage_app(app)
+    # Check the logical app of the scoped key (``investment__coakley11`` -> ``investment``).
+    # Checking the scoped key itself silently skipped every save outside workspace daniel.
+    logical_app = _logical_app_key(app_key)
     if logical_app not in ACTIVE_APP_KEYS:
         return
+    uid = _write_user_id()
+    _guard_current_state_owner(app_key, uid)
     body: dict[str, Any] = {
         "app": app_key,
         "page": page or "",
@@ -496,7 +703,6 @@ def save_current_state(
         "metrics": _merge_state_metrics(app_key, metrics),
         "updated_at": _now_iso(),
     }
-    uid = _cloud_user_id()
     if uid:
         body["user_id"] = uid
     _request(
@@ -515,8 +721,10 @@ def upsert_resume_item(
     subtitle: str = "",
     action_url: str = "",
 ) -> None:
-    logical_app = normalize_app_key(app)
     app_key = _scoped_storage_app(app)
+    # Check the logical app of the scoped key (``investment__coakley11`` -> ``investment``).
+    # Checking the scoped key itself silently skipped every save outside workspace daniel.
+    logical_app = _logical_app_key(app_key)
     key = str(item_key or "").strip()
     title_clean = str(title or "").strip()
     if not app_key or not key or not title_clean:
@@ -532,7 +740,7 @@ def upsert_resume_item(
         "valid": True,
         "updated_at": _now_iso(),
     }
-    uid = _cloud_user_id()
+    uid = _write_user_id()
     if uid:
         body["user_id"] = uid
     _request(
@@ -549,7 +757,7 @@ def invalidate_resume_item(app: str, item_key: str) -> None:
     if not app_key or not key:
         return
     params: dict[str, str] = {"app": f"eq.{app_key}", "item_key": f"eq.{key}"}
-    uid = _cloud_user_id()
+    uid = _write_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     _request(
@@ -565,7 +773,7 @@ def invalidate_app_resume_items(app: str) -> None:
     if not app_key:
         return
     params: dict[str, str] = {"app": f"eq.{app_key}"}
-    uid = _cloud_user_id()
+    uid = _write_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     _request(
@@ -576,6 +784,7 @@ def invalidate_app_resume_items(app: str) -> None:
     )
 
 
+@_empty_when_unscoped(list)
 def load_events(limit: int = MAX_EVENTS) -> list[dict[str, Any]]:
     from suite_workspace import logical_storage_app_key, workspace_storage_app_keys
 
@@ -620,6 +829,7 @@ def load_events(limit: int = MAX_EVENTS) -> list[dict[str, Any]]:
     return out
 
 
+@_empty_when_unscoped(dict)
 def load_current_states(*, include_metrics: bool = False) -> dict[str, dict[str, Any]]:
     """
     Load current app states for active workspace.
@@ -633,7 +843,7 @@ def load_current_states(*, include_metrics: bool = False) -> dict[str, dict[str,
 
     allowed = workspace_storage_app_keys()
     params: dict[str, str] = {"select": "app,page,summary,metrics,updated_at"}
-    uid = _cloud_user_id()
+    uid = _read_user_id()
     if uid:
         params["user_id"] = f"eq.{uid}"
     if allowed:
@@ -661,6 +871,7 @@ def load_current_states(*, include_metrics: bool = False) -> dict[str, dict[str,
     return out
 
 
+@_empty_when_unscoped(list)
 def load_active_resume_items(limit: int = 8, *, app: str | None = None) -> list[dict[str, Any]]:
     from suite_workspace import logical_storage_app_key
 
@@ -723,7 +934,7 @@ def upsert_saved_item(
     itype = str(item_type or "item").strip() or "item"
     if not app_key or not key or not title_clean:
         return {"write_mode": "skipped", "duplicate_handled": False}
-    uid = _scoped_user_id()
+    uid = _owned_user_id()
     row_body = {
         "user_id": uid,
         "app": app_key,
@@ -894,7 +1105,7 @@ def invalidate_saved_item(app: str, item_type: str, item_key: str) -> None:
         "PATCH",
         _TABLE_SAVED,
         params={
-            "user_id": f"eq.{_scoped_user_id()}",
+            "user_id": f"eq.{_owned_user_id()}",
             "app": f"eq.{app_key}",
             "item_type": f"eq.{itype}",
             "item_key": f"eq.{key}",
@@ -903,6 +1114,7 @@ def invalidate_saved_item(app: str, item_type: str, item_key: str) -> None:
     )
 
 
+@_empty_when_unscoped(list)
 def load_saved_items(
     *,
     app: str | None = None,
@@ -914,7 +1126,7 @@ def load_saved_items(
     allowed = set(_workspace_storage_app_keys())
     params: dict[str, str] = {
         "select": "app,item_type,item_key,title,payload,updated_at",
-        "user_id": f"eq.{_scoped_user_id()}",
+        "user_id": f"eq.{_owned_user_id()}",
         "valid": "eq.true",
         "order": "updated_at.desc",
         "limit": str(limit),
@@ -957,7 +1169,7 @@ def save_user_settings(app: str, settings: dict[str, Any]) -> None:
         "POST",
         _TABLE_SETTINGS,
         json_body={
-            "user_id": _scoped_user_id(),
+            "user_id": _owned_user_id(),
             "app": app_key,
             "settings": settings or {},
             "updated_at": _now_iso(),
@@ -966,6 +1178,7 @@ def save_user_settings(app: str, settings: dict[str, Any]) -> None:
     )
 
 
+@_empty_when_unscoped(dict)
 def load_user_settings(app: str = "_global") -> dict[str, Any]:
     app_key = str(app or "_global").strip() or "_global"
     rows = _request(
@@ -973,7 +1186,7 @@ def load_user_settings(app: str = "_global") -> dict[str, Any]:
         _TABLE_SETTINGS,
         params={
             "select": "settings,updated_at",
-            "user_id": f"eq.{_scoped_user_id()}",
+            "user_id": f"eq.{_owned_user_id()}",
             "app": f"eq.{app_key}",
             "limit": "1",
         },

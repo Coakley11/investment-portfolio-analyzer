@@ -144,6 +144,9 @@ class TestInvestmentAccountWorkspaceConsolidation(unittest.TestCase):
             "some_portfolio_flag": True,
         }
         st = self._make_st(session)
+        # Re-render only: no button is clicked (a bare MagicMock button reads as a click,
+        # and Log out now correctly clears the account's workspace choice).
+        st.button.return_value = False
         with (
             patch("suite_workspace.bootstrap_suite_workspace"),
             patch("suite_account_settings.init_suite_workspace"),

@@ -90,28 +90,44 @@ def current_auth_email(session_state: dict[str, Any]) -> str:
 
 
 def allowed_workspaces_for_user(external_user_id: str) -> tuple[str, ...]:
-    """Default owned workspace slug(s) for an external id (no session context)."""
+    """Default owned workspace slug(s) for an external id (no session context).
+
+    An unknown or empty id gets no workspace: it never falls back to the owner's.
+    """
     key = str(external_user_id or "").strip().lower()
     if key in _DEFAULT_ALLOWED_WORKSPACES:
         if key == "daniel":
             return _DEFAULT_ALLOWED_WORKSPACES[key]
         return (key,)
     if key == "default":
+        if is_auth_enabled():
+            return ()
         return ("daniel", "ariel", "guest", "test_user")
     if re.fullmatch(r"[a-z0-9_]+", key):
         return (key,)
-    return ("daniel", "guest", "test_user")
+    return ()
 
 
 def resolve_auth_external_id(session_state: dict[str, Any]) -> str:
-    """Best-effort suite profile id for the signed-in account."""
+    """Suite profile id for the signed-in account ("" when it cannot be resolved).
+
+    Set once at sign-in by :func:`resolve_account_profile_id`. When that has not run, the
+    id is recomputed from this account's own email and Supabase user id, and is never a
+    shared default (it used to fall back to ``daniel``, the owner's profile).
+    """
     ext = str(session_state.get(AUTH_EXTERNAL_ID_KEY) or "").strip().lower()
     if ext:
         return ext
-    inferred = _infer_external_id_from_email(current_auth_email(session_state))
-    if inferred:
-        return inferred
-    return "daniel"
+    email = current_auth_email(session_state)
+    auth_uid = str(session_state.get(AUTH_USER_ID_KEY) or "").strip()
+    if is_auth_enabled():
+        if not auth_uid:
+            return ""
+        resolved = resolve_account_profile_id(email, auth_uid)
+        if resolved:
+            session_state[AUTH_EXTERNAL_ID_KEY] = resolved
+        return resolved
+    return _infer_external_id_from_email(email)
 
 
 def allowed_workspaces_for_session(session_state: dict[str, Any]) -> tuple[str, ...]:
@@ -134,18 +150,199 @@ def allowed_workspaces_for_session(session_state: dict[str, Any]) -> tuple[str, 
     return base
 
 
+PROFILE_EMAILS_ENV = "SUITE_PROFILE_EMAILS"
+
+# Profile ids no new sign-in may claim by email: the preset/demo profiles, the legacy
+# single-user ids, and the shared fallbacks. They are reached only through
+# ``profile_emails`` in Secrets or the legacy pins below.
+_PROTECTED_PROFILE_IDS = frozenset(
+    {
+        "daniel",
+        "ariel",
+        "guest",
+        "test_user",
+        "coakley11",
+        "default",
+        "user",
+        "user_unidentified",
+        "health_probe",
+        "signed_out",
+        "no_account",
+    }
+)
+
+# Continuity for the two existing accounts: the exact profile each already resolves to,
+# so their saved data stays where it is. Keyed by email local part; an exact address in
+# ``profile_emails`` (Secrets) takes precedence.
+# Each pinned profile is additionally bound to the first Supabase Auth user that claims
+# it (see ``resolve_account_profile_id``), so a second account with the same local part
+# can never open it.
+_LEGACY_PROFILE_PINS: dict[str, str] = {
+    "daniel.cohen11": "daniel",
+    "coakley11": "coakley11",
+}
+
+
+def _configured_profile_emails() -> dict[str, str]:
+    """Owner-controlled exact email → profile id map (``[suite_activity] profile_emails``)."""
+    raw: Any = None
+    env = os.environ.get(PROFILE_EMAILS_ENV, "").strip()
+    if env:
+        try:
+            import json
+
+            raw = json.loads(env)
+        except Exception:
+            raw = None
+    if raw is None:
+        try:
+            import streamlit as st  # noqa: WPS433
+
+            block = st.secrets.get("suite_activity") if hasattr(st, "secrets") else None
+            if block is not None and hasattr(block, "get"):
+                raw = block.get("profile_emails")
+        except Exception:
+            raw = None
+    out: dict[str, str] = {}
+    if raw is None or not hasattr(raw, "items"):
+        return out
+    for email, profile in raw.items():
+        e = str(email or "").strip().lower()
+        p = _safe_profile_token(str(profile or ""))
+        if e and p:
+            out[e] = p
+    return out
+
+
+def _safe_profile_token(text: str) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_", str(text or "").strip().lower())).strip("_")
+
+
 def _infer_external_id_from_email(email: str) -> str:
+    """Readable profile id *candidate* for an email. Exact rules, no substring matching.
+
+    Previously any email containing ``daniel`` or ``ariel`` became that profile, so
+    unrelated accounts shared the owner's (or Ariel's) data. Now:
+
+    1. ``profile_emails`` in Secrets (exact address, same format as Baseball Explorer);
+    2. otherwise the continuity pin for the two existing accounts;
+    3. otherwise the email's local part, prefixed ``user_`` when it names a protected id.
+
+    A candidate is only granted at sign-in once it is bound to this Supabase Auth user
+    (:func:`resolve_account_profile_id`).
+    """
     low = str(email or "").strip().lower()
     if not low:
         return ""
-    if "ariel" in low:
-        return "ariel"
-    if "daniel" in low:
-        return "daniel"
+    configured = _configured_profile_emails()
+    if configured:
+        hit = configured.get(low)
+        if hit:
+            return hit
     local = low.split("@", 1)[0]
-    if local in _DEFAULT_ALLOWED_WORKSPACES:
-        return local
-    return local or "daniel"
+    if local in _LEGACY_PROFILE_PINS:
+        # Applies unless profile_emails maps this exact address (a map written for another
+        # app, e.g. Baseball's, must not move these accounts off their existing profiles).
+        return _LEGACY_PROFILE_PINS[local]
+    safe = _safe_profile_token(local)
+    if not safe:
+        return "user"
+    if safe in _PROTECTED_PROFILE_IDS:
+        return f"user_{safe}"
+    return safe
+
+
+def _collision_free_id(candidate: str, auth_user_id: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(str(auth_user_id or candidate).encode("utf-8")).hexdigest()[:8]
+    return f"{candidate or 'user'}_{digest}"
+
+
+def resolve_account_profile_id(email: str, auth_user_id: str) -> str:
+    """Suite profile id for a verified sign-in. Two Supabase Auth users never share one.
+
+    The readable candidate (:func:`_infer_external_id_from_email`) is granted only when its
+    ``suite_users`` row is bound to this Auth user id, or is unbound and this sign-in
+    binds it (first claim wins, re-read after the write). Otherwise the account gets
+    ``<candidate>_<hash of its Auth user id>``: stable, private, never another account's.
+    Nothing is merged, moved or deleted. Without cloud storage the candidate is used.
+    """
+    uid = str(auth_user_id or "").strip()
+    candidate = _infer_external_id_from_email(email) or "user"
+    if not uid:
+        return ""
+    try:
+        from suite_storage_config import get_cloud_config
+
+        if get_cloud_config() is None:
+            return candidate
+    except Exception:
+        return candidate
+    try:
+        from suite_storage_supabase import claim_profile_binding
+
+        if claim_profile_binding(candidate, auth_user_id=uid, email=email):
+            return candidate
+    except Exception:
+        pass
+    fallback = _collision_free_id(candidate, uid)
+    try:
+        from suite_storage_supabase import claim_profile_binding
+
+        claim_profile_binding(fallback, auth_user_id=uid, email=email)
+    except Exception:
+        pass
+    return fallback
+
+
+# Session keys holding one account's data, caches or workspace choice. Dropped whenever
+# the signed-in Auth user changes (logout, login as someone else, token restore).
+_ACCOUNT_SCOPED_SESSION_KEYS: tuple[str, ...] = (
+    "_suite_active_workspace_id",
+    "_suite_workspace_initialized",
+    "_suite_workspace_selector_widget",
+    "_suite_owned_workspace_id",
+    "_suite_owned_workspace_label",
+    "_suite_supabase_get_cache",
+    "_suite_cloud_user_id",
+    "_cloud_workspace_restored",
+    "_suite_inv_persistence_bootstrapped",
+)
+_ACCOUNT_SCOPED_SESSION_PREFIXES: tuple[str, ...] = (
+    "_suite_full_session_ts_",
+    "_suite_full_session_blob_",
+    "_suite_disk_state_restored::",
+    "_suite_applied_cloud_ts::",
+    "_suite_restored_state_fp::",
+    "_suite_autosave_fp::",
+    "_suite_autosave_blocked::",
+    "_suite_persist_local_dirty::",
+    "_suite_workspace_synced::",
+)
+ACCOUNT_BOUNDARY_UID_KEY = "_suite_account_boundary_uid"
+
+
+def clear_account_scoped_session(session_state: Any) -> None:
+    """Drop every in-memory copy of an account's data so the next account starts clean."""
+    for key in _ACCOUNT_SCOPED_SESSION_KEYS:
+        try:
+            session_state.pop(key, None)
+        except Exception:
+            pass
+    try:
+        keys = [str(k) for k in list(session_state.keys())]
+    except Exception:
+        keys = []
+    for key in keys:
+        if key.startswith(_ACCOUNT_SCOPED_SESSION_PREFIXES):
+            session_state.pop(key, None)
+    try:
+        from investment_persistent_state import clear_investment_session_for_auth_boundary
+
+        clear_investment_session_for_auth_boundary(session_state)
+    except ImportError:
+        pass
 
 
 def enforce_workspace_ownership(session_state: dict[str, Any]) -> None:
@@ -302,13 +499,19 @@ def _apply_authenticated_user(
     tokens: dict[str, Any] | None = None,
     email_fallback: str = "",
 ) -> None:
-    session_state[AUTH_SESSION_KEY] = True
     email = str(getattr(user, "email", None) or (user.get("email") if isinstance(user, dict) else None) or email_fallback).strip()
-    session_state[AUTH_USER_EMAIL_KEY] = email
-    session_state[AUTH_EXTERNAL_ID_KEY] = _infer_external_id_from_email(email)
     uid = str(getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None) or "").strip()
-    if uid:
-        session_state[AUTH_USER_ID_KEY] = uid
+    if not uid:
+        # Without the immutable Supabase user id there is no account to scope data to.
+        raise RuntimeError("Sign-in returned no user id.")
+    previous_uid = str(session_state.get(ACCOUNT_BOUNDARY_UID_KEY) or "").strip()
+    if previous_uid != uid:
+        clear_account_scoped_session(session_state)
+    session_state[ACCOUNT_BOUNDARY_UID_KEY] = uid
+    session_state[AUTH_SESSION_KEY] = True
+    session_state[AUTH_USER_EMAIL_KEY] = email
+    session_state[AUTH_USER_ID_KEY] = uid
+    session_state[AUTH_EXTERNAL_ID_KEY] = resolve_account_profile_id(email, uid)
     if tokens:
         session_state[AUTH_TOKENS_KEY] = dict(tokens)
 
@@ -345,19 +548,11 @@ def _persist_auth_session(
     _apply_authenticated_user(session_state, user, tokens=tokens, email_fallback=email_fallback)
     suite_user_id = ""
     try:
-        from suite_storage_supabase import ensure_user_row
+        from suite_user import account_user_id_for_session
 
-        suite_user_id = ensure_user_row(
-            external_id=session_state.get(AUTH_USER_EMAIL_KEY) or session_state.get(AUTH_USER_ID_KEY) or ""
-        )
-        try:
-            from suite_user import reset_account_cache
-
-            reset_account_cache()
-        except ImportError:
-            pass
+        suite_user_id = account_user_id_for_session(session_state)
     except Exception:
-        pass
+        suite_user_id = ""
     if st is not None and tokens and suite_user_id:
         try:
             from suite_auth_browser import save_browser_auth_tokens
@@ -410,12 +605,12 @@ def restore_auth_session(session_state: dict[str, Any], *, st: Any | None = None
         if st is not None and session_state.get(AUTH_USER_EMAIL_KEY):
             try:
                 from suite_auth_browser import save_browser_auth_tokens
-                from suite_user import get_account_user_id
+                from suite_user import account_user_id_for_session
 
                 save_browser_auth_tokens(
                     st,
                     tokens,
-                    auth_user_id=get_account_user_id(),
+                    auth_user_id=account_user_id_for_session(session_state),
                 )
             except ImportError:
                 pass
@@ -441,12 +636,8 @@ def logout(session_state: dict[str, Any], *, st: Any | None = None) -> None:
     except Exception:
         pass
     _clear_auth_session(session_state, st=st)
-    try:
-        from investment_persistent_state import clear_investment_session_for_auth_boundary
-
-        clear_investment_session_for_auth_boundary(session_state)
-    except ImportError:
-        pass
+    clear_account_scoped_session(session_state)
+    session_state.pop(ACCOUNT_BOUNDARY_UID_KEY, None)
 
 
 def _read_profile_settings(email: str) -> dict[str, Any]:
@@ -1530,14 +1721,14 @@ def _render_password_recovery_panel(st: Any) -> None:
             if ok:
                 try:
                     from suite_auth_browser import save_browser_auth_tokens
-                    from suite_user import get_account_user_id
+                    from suite_user import account_user_id_for_session
 
                     tokens = dict(st.session_state.get(AUTH_TOKENS_KEY) or {})
                     if tokens.get("access_token"):
                         save_browser_auth_tokens(
                             st,
                             tokens,
-                            auth_user_id=get_account_user_id(),
+                            auth_user_id=account_user_id_for_session(st.session_state),
                         )
                 except ImportError:
                     pass
