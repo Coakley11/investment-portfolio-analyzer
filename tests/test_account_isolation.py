@@ -736,6 +736,17 @@ class TestUnauthorizedAccess(IsolationHarness):
         self.assertEqual(self.save_portfolio(anon, {"evil": True}), (False, False))
         self.assertEqual(self.load_portfolio(a)[1]["owner_tag"], "coakley")
 
+    def test_signed_out_session_never_writes_the_global_workspace_file(self) -> None:
+        from suite_workspace import init_suite_workspace
+
+        anon = _Browser()
+        with self.acting_in(anon):
+            init_suite_workspace(anon)
+        self.assertFalse((self.data_dir / "suite_active_workspace.json").exists())
+        a = _Browser()
+        self.sign_in(a, COAKLEY_EMAIL)
+        self.assertFalse((self.data_dir / "suite_active_workspace.json").exists())
+
     def test_ownerless_legacy_rows_are_not_shown_to_any_account(self) -> None:
         from suite_storage_supabase import AccountScopeError, load_events, save_current_state
 

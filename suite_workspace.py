@@ -172,6 +172,10 @@ def persist_active_workspace_id(workspace_id: str, *, session_state: dict[str, A
             return True
     except ImportError:
         pass
+    if _auth_enabled():
+        # Sign-in on: the choice is saved per account or not at all. The global file is the
+        # single-user install's choice and must never be written by a signed-out session.
+        return False
     payload = {
         "workspace_id": ws,
         "label": workspace_label(ws),
