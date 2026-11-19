@@ -15,6 +15,10 @@ from typing import Any
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 DEFAULT_WORKSPACE_ID = "daniel"
+# Workspace of a session with sign-in on and no resolvable account. It holds no data:
+# disk and cloud storage both refuse to read or write without an account.
+SIGNED_OUT_WORKSPACE_ID = "signed_out"
+ACCOUNTS_DIR_NAME = "accounts"
 SESSION_KEY = "_suite_active_workspace_id"
 _INITIALIZED_KEY = "_suite_workspace_initialized"
 WORKSPACE_SELECTOR_WIDGET_KEY = "_suite_workspace_selector_widget"
@@ -68,9 +72,55 @@ def workspace_label(workspace_id: str) -> str:
     return wid.replace("_", " ").title()
 
 
-def workspace_dir(workspace_id: str | None = None) -> Path:
+def _auth_enabled() -> bool:
+    try:
+        from suite_auth import is_auth_enabled
+
+        return bool(is_auth_enabled())
+    except ImportError:
+        return False
+
+
+def account_storage_key(session_state: Any | None = None) -> str | None:
+    """
+    Per-account folder name for local disk state.
+
+    ``None`` with sign-in off: the single-user layout ``data/workspaces/<ws>`` is kept.
+    With sign-in on, the signed-in account's profile id, or ``""`` when there is no
+    account (callers must not read or write disk state then). The Streamlit server's
+    disk is shared by every browser session, so without this every account using a
+    workspace slug read and wrote the same file.
+    """
+    if not _auth_enabled():
+        return None
+    ss = session_state
+    if ss is None:
+        try:
+            import streamlit as st_module  # noqa: WPS433
+
+            ss = st_module.session_state
+        except Exception:
+            ss = None
+    if ss is None or not hasattr(ss, "get"):
+        return ""
+    try:
+        from suite_auth import is_authenticated, resolve_auth_external_id
+
+        if not is_authenticated(ss):
+            return ""
+        ext = str(resolve_auth_external_id(ss) or "").strip().lower()
+    except Exception:
+        return ""
+    safe = re.sub(r"[^a-z0-9_]+", "_", ext).strip("_")
+    return safe
+
+
+def workspace_dir(workspace_id: str | None = None, *, session_state: Any | None = None) -> Path:
     ws = normalize_workspace_id(workspace_id)
-    return DATA_DIR / "workspaces" / ws
+    key = account_storage_key(session_state)
+    if key is None:
+        return DATA_DIR / "workspaces" / ws
+    return DATA_DIR / ACCOUNTS_DIR_NAME / (key or "_no_account") / "workspaces" / ws
 
 
 def _load_legacy_persisted_workspace_id() -> str:
@@ -93,12 +143,15 @@ def load_persisted_workspace_id(*, session_state: dict[str, Any] | None = None) 
         from suite_auth import is_auth_enabled, is_authenticated
 
         account_aware = (
-            isinstance(session_state, dict)
+            session_state is not None
+            and hasattr(session_state, "get")
             and is_auth_enabled()
             and is_authenticated(session_state)
         )
     except ImportError:
         account_aware = False
+    if not account_aware and _auth_enabled():
+        return SIGNED_OUT_WORKSPACE_ID
 
     if account_aware:
         try:
@@ -171,6 +224,8 @@ def set_active_workspace_id(st: Any, workspace_id: str) -> str:
             owned = get_owned_workspace_id(st.session_state)
             if owned:
                 ws = normalize_workspace_id(owned)
+            elif _auth_enabled():
+                ws = SIGNED_OUT_WORKSPACE_ID
     except ImportError:
         pass
     prev_raw = st.session_state.get(SESSION_KEY)
@@ -405,7 +460,10 @@ def legacy_state_file_path(app_id: str) -> Path:
 
 
 def migrate_legacy_app_state_to_daniel(app_id: str) -> bool:
-    """Copy legacy flat file into Daniel workspace once."""
+    """Copy legacy flat file into Daniel workspace once (single-user installs only)."""
+    if _auth_enabled():
+        # The legacy flat file predates accounts and cannot be attributed to one.
+        return False
     legacy = legacy_state_file_path(app_id)
     if not legacy.is_file():
         return False

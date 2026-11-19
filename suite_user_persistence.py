@@ -40,7 +40,19 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def disk_state_allowed() -> bool:
+    """False with sign-in on and no signed-in account: no disk state is read or written."""
+    try:
+        from suite_workspace import account_storage_key
+
+        return account_storage_key() != ""
+    except ImportError:
+        return True
+
+
 def state_file_path(app_id: str, workspace_id: str | None = None) -> Path:
+    """Disk state file: ``data/workspaces/<ws>/`` (sign-in off) or
+    ``data/accounts/<profile>/workspaces/<ws>/`` (sign-in on, one folder per account)."""
     from suite_workspace import migrate_legacy_app_state_to_daniel, normalize_workspace_id, resolve_workspace_id, workspace_dir
 
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(app_id or "app"))
@@ -48,7 +60,8 @@ def state_file_path(app_id: str, workspace_id: str | None = None) -> Path:
     if ws == normalize_workspace_id("daniel"):
         migrate_legacy_app_state_to_daniel(app_id)
     path = workspace_dir(ws) / f"{safe}_user_state.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if disk_state_allowed():
+        path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -80,6 +93,13 @@ def _write_json(path: Path, payload: dict[str, Any]) -> bool:
 
 
 def _migrate_legacy_combined(app_id: str) -> dict[str, Any] | None:
+    try:
+        from suite_auth import is_auth_enabled
+
+        if is_auth_enabled():
+            return None  # the legacy combined file predates accounts; never import it into one
+    except ImportError:
+        pass
     combined = _read_json(_LEGACY_COMBINED_FILE)
     if not combined:
         return None
@@ -98,6 +118,8 @@ def _load_raw(
     workspace_id: str | None = None,
 ) -> tuple[dict[str, Any], str | None, str | None]:
     """Return ``(state_dict, warning, saved_at_iso)``."""
+    if not disk_state_allowed():
+        return {}, None, None
     path = state_file_path(app_id, workspace_id)
     raw = _read_json(path)
     if raw is None:
@@ -128,6 +150,8 @@ def load_user_state(app_id: str) -> tuple[dict[str, Any], str | None]:
 def save_user_state(app_id: str, state: dict[str, Any], *, workspace_id: str | None = None) -> bool:
     if not isinstance(state, dict):
         return False
+    if not disk_state_allowed():
+        return False
     payload = {
         "version": STATE_VERSION,
         "app": app_id,
@@ -138,6 +162,8 @@ def save_user_state(app_id: str, state: dict[str, Any], *, workspace_id: str | N
 
 
 def reset_user_state(app_id: str, *, workspace_id: str | None = None) -> bool:
+    if not disk_state_allowed():
+        return False
     path = state_file_path(app_id, workspace_id)
     try:
         if path.is_file():
