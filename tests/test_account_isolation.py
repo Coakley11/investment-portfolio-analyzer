@@ -88,7 +88,14 @@ class FakeSupabase:
     # -- filters -----------------------------------------------------------------------
     @staticmethod
     def _match_one(row: dict[str, Any], col: str, expr: str) -> bool:
-        val = row.get(col)
+        if "->>" in col:
+            base, field = col.split("->>", 1)
+            blob = row.get(base)
+            val = blob.get(field) if isinstance(blob, dict) else None
+        else:
+            val = row.get(col)
+        if isinstance(val, bool):
+            val = "true" if val else "false"  # PostgREST spells booleans in lowercase
         if expr.startswith("eq."):
             return val is not None and str(val) == expr[3:]
         if expr == "is.null":
@@ -178,10 +185,12 @@ class FakeSupabase:
             row = self._insert(table, dict(json_body or {}), prefer=prefer, on_conflict=params.get("on_conflict"))
             return [copy.deepcopy(row)] if "representation" in prefer else None
         if method == "PATCH":
+            hit = []
             for row in self.tables[table]:
                 if self._matches(row, params):
                     row.update(dict(json_body or {}))
-            return None
+                    hit.append(copy.deepcopy(row))
+            return hit if "representation" in prefer else None
         raise AssertionError(method)
 
     # -- helpers -----------------------------------------------------------------------

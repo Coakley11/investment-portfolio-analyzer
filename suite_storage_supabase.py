@@ -218,7 +218,9 @@ def _merge_state_metrics(scoped_app_key: str, incoming: dict[str, Any] | None) -
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    """UTC with an explicit offset. ``datetime.now()`` (naive server-local time) was read as
+    UTC by Command Center, shifting events by the server's UTC offset."""
+    return utc_now_iso()
 
 
 def _headers(cfg: SuiteCloudConfig, *, prefer: str = "return=minimal") -> dict[str, str]:
@@ -668,6 +670,21 @@ def append_event(
     uid = _write_user_id()
     if uid:
         body["user_id"] = uid
+    event_key = str(stamped.get("event_key") or "").strip()
+    if event_key:
+        # One event per confirmed action per account, across reruns, sessions and devices.
+        existing = _fresh_get(
+            _TABLE_EVENTS,
+            {
+                "select": "id",
+                "app": f"eq.{app_key}",
+                "user_id": f"eq.{uid}" if uid else "is.null",
+                "metrics->>event_key": f"eq.{event_key}",
+                "limit": "1",
+            },
+        )
+        if isinstance(existing, list) and existing and isinstance(existing[0], dict):
+            return str(existing[0].get("id") or "")
     rows = _request(
         "POST",
         _TABLE_EVENTS,
@@ -743,12 +760,26 @@ def upsert_resume_item(
     uid = _write_user_id()
     if uid:
         body["user_id"] = uid
-    _request(
-        "POST",
-        _TABLE_RESUME,
-        json_body=body,
-        prefer="resolution=merge-duplicates,return=minimal",
-    )
+    # The table's primary key is a generated id and rows are unique per
+    # (user_id, app, item_key). A plain "merge-duplicates" POST resolves on the id, so the
+    # second write of a key failed with 409 -- and because record_activity wrote the
+    # resume item before the event, every later event for that key was lost too.
+    # Update this account's row first; insert only when there is none.
+    match = {
+        "app": f"eq.{app_key}",
+        "item_key": f"eq.{key}",
+        "user_id": f"eq.{uid}" if uid else "is.null",
+    }
+    patch = {k: v for k, v in body.items() if k not in ("app", "item_key", "user_id")}
+    updated = _request("PATCH", _TABLE_RESUME, params=match, json_body=patch, prefer="return=representation")
+    if isinstance(updated, list) and updated:
+        return
+    try:
+        _request("POST", _TABLE_RESUME, json_body=body, prefer="return=minimal")
+    except RuntimeError as exc:
+        if not _is_duplicate_key_error(exc):
+            raise
+        _request("PATCH", _TABLE_RESUME, params=match, json_body=patch, prefer="return=minimal")
 
 
 def invalidate_resume_item(app: str, item_key: str) -> None:
@@ -1226,14 +1257,29 @@ def record_activity(
                 action_url=action_url,
             )
         return event_id
+    # The event is the record of what happened: write it even when the current-state or
+    # resume write fails (those failures used to drop the event silently).
+    side_errors: list[str] = []
     if summary or page or metrics:
-        save_current_state(app, page=page, summary=summary, metrics=metrics)
+        try:
+            save_current_state(app, page=page, summary=summary, metrics=metrics)
+        except Exception as exc:  # noqa: BLE001
+            side_errors.append(f"current_state: {exc}")
     if resume_key and resume_title:
-        upsert_resume_item(
-            app,
-            resume_key,
-            title=resume_title,
-            subtitle=resume_subtitle,
-            action_url=action_url,
-        )
-    return append_event(app, event, page=page, metrics=metrics)
+        try:
+            upsert_resume_item(
+                app,
+                resume_key,
+                title=resume_title,
+                subtitle=resume_subtitle,
+                action_url=action_url,
+            )
+        except Exception as exc:  # noqa: BLE001
+            side_errors.append(f"resume: {exc}")
+    event_id = append_event(app, event, page=page, metrics=metrics)
+    _LAST_RECORD_SIDE_ERRORS[:] = side_errors
+    return event_id
+
+
+# Non-fatal write problems from the last record_activity (diagnostics only).
+_LAST_RECORD_SIDE_ERRORS: list[str] = []

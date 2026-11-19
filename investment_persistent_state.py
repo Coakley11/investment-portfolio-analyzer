@@ -1925,23 +1925,64 @@ def restore_investment_disk_state_once(st: Any) -> bool:
     return restored
 
 
+_RESUME_SUBTAB_KEYS: dict[str, str] = {
+    "My Portfolio": "real_portfolio_subtab",
+    "Overview": "overview_subtab",
+    "Portfolio Health": "health_subtab",
+}
+
+
+def _apply_resume_subtab(st: Any, canonical_page: str, subtab: str) -> None:
+    """Continue: reopen the subtab (validated; the widget's own check resets unknown values)."""
+    key = _RESUME_SUBTAB_KEYS.get(canonical_page)
+    if not key:
+        return
+    allowed: tuple[str, ...] = ()
+    try:
+        if key == "real_portfolio_subtab":
+            from components.real_portfolio import REAL_PORTFOLIO_SUBTABS
+
+            allowed = tuple(REAL_PORTFOLIO_SUBTABS)
+        elif key == "health_subtab":
+            from components.beginner_navigation import HEALTH_SUBTAB_LABELS
+
+            allowed = tuple(HEALTH_SUBTAB_LABELS)
+    except Exception:
+        allowed = ()
+    if allowed:
+        match = next((a for a in allowed if a == subtab), None)
+        if match is None:
+            low = subtab.lower()
+            match = next((a for a in allowed if a.lower().endswith(low) or low in a.lower()), None)
+        if match is None:
+            return
+        subtab = match
+    st.session_state[key] = subtab
+    st.session_state["_suite_inv_resume_subtab_applied"] = f"{canonical_page} → {subtab}"
+
+
 def apply_suite_investment_resume(st: Any) -> None:
     """Apply Command Center deep-link tab + holdings fingerprint validation after restore."""
     page = st.session_state.pop("_suite_investment_page", None)
+    subtab = str(st.session_state.pop("_suite_investment_subtab", "") or "").strip()
     expected_fp = str(st.session_state.pop("_suite_holdings_fp", "") or "").strip()
 
     if page:
         tab = str(page).strip()
         if tab:
+            canonical = tab
             try:
-                from components.beginner_navigation import normalize_tab_label_for_mode
+                from components.beginner_navigation import canonical_tab_label, normalize_tab_label_for_mode
 
+                canonical = canonical_tab_label(tab) or tab
                 beginner = current_experience_mode(st) == EXPERIENCE_OPTIONS[0]
                 tab = normalize_tab_label_for_mode(tab, beginner=beginner)
             except Exception:
                 pass
             st.session_state[INVESTMENT_ACTIVE_TAB_KEY] = tab
             st.session_state[_LEGACY_TAB_KEY] = tab
+            if subtab:
+                _apply_resume_subtab(st, canonical, subtab)
 
     if not expected_fp:
         return

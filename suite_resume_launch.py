@@ -311,11 +311,14 @@ def _apply_investment(st: Any, resume: str, page: str) -> None:
         if "health" in resume.lower():
             target = "Portfolio Health"
         elif "scenario" in resume.lower():
-            target = "Efficient Frontier"
+            target = "Monte Carlo"
         elif "main" in resume.lower():
             target = "Portfolio Inputs"
     if target:
         st.session_state["_suite_investment_page"] = target
+    subtab = _qp_get(st, "suite_subtab")
+    if subtab:
+        st.session_state["_suite_investment_subtab"] = subtab
     hfp = _qp_get(st, "suite_holdings_fp")
     if hfp:
         st.session_state["_suite_holdings_fp"] = hfp

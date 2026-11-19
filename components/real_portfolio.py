@@ -62,7 +62,10 @@ def _save_strategy_target_weights(weights: dict[str, float]) -> tuple[bool, str]
     ss.pop("_contribution_advisor_result", None)
     ss.pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
     _clear_strategy_target_widget_keys(ss)
-    return _persist_portfolio_ledger_change(trigger="strategy_target_weights_change")
+    ok, msg = _persist_portfolio_ledger_change(trigger="strategy_target_weights_change")
+    if ok:
+        _log_real_activity("log_real_strategy_target_saved", weights=dict(cleaned))
+    return ok, msg
 
 
 def _format_strategy_weight_pct(weight: float) -> str:
@@ -167,13 +170,25 @@ def _persist_new_transaction(
     transactions: list[pe.PortfolioTransaction],
     txn: pe.PortfolioTransaction,
 ) -> None:
-    set_portfolio_transactions(transactions + [txn])
+    after = transactions + [txn]
+    set_portfolio_transactions(after)
     ok, msg = _persist_portfolio_ledger_change()
     if ok:
         st.success(msg)
+        _log_real_activity("log_real_transaction_recorded", txn, transactions_after=after)
     else:
         st.error(msg)
     st.rerun()
+
+
+def _log_real_activity(fn_name: str, *args: Any, **kwargs: Any) -> None:
+    """Command Center activity for a confirmed, saved real-ledger change (never blocks the UI)."""
+    try:
+        import investment_activity
+
+        getattr(investment_activity, fn_name)(st, *args, **kwargs)
+    except Exception:
+        pass
 
 
 def _hero(title: str, subtitle: str) -> None:
@@ -741,10 +756,14 @@ def render_portfolio_transactions(*, beginner: bool = False) -> None:
     if st.button("Delete Selected", disabled=not pick):
         txn_id = options.get(pick)
         if txn_id:
-            set_portfolio_transactions([t for t in transactions if t.id != txn_id])
+            removed = next((t for t in transactions if t.id == txn_id), None)
+            remaining = [t for t in transactions if t.id != txn_id]
+            set_portfolio_transactions(remaining)
             ok, msg = _persist_portfolio_ledger_change()
             if ok:
                 st.success(msg)
+                if removed is not None:
+                    _log_real_activity("log_real_transaction_removed", removed, transactions_after=remaining)
             else:
                 st.error(msg)
             st.rerun()
@@ -1551,6 +1570,16 @@ def _render_contribution_review(pending: dict, payload: dict) -> None:
     _ss().pop(SESSION_CONTRIBUTION_PENDING_KEY, None)
     _ss().pop("_contribution_advisor_result", None)
     if ok:
+        _log_real_activity(
+            "log_real_contribution_recorded",
+            application_id=str(plan.application_id),
+            amount=float(plan.contribution_amount),
+            purchases=[
+                {"ticker": p.ticker, "shares": p.shares, "price": p.execution_price, "cost": round(p.cost, 2)}
+                for p in plan.purchases
+            ],
+            transactions_after=get_portfolio_transactions(),
+        )
         st.success(
             _streamlit_prose(
                 f"{result.message} Wrote {written} ledger row(s) "

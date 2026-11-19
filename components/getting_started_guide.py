@@ -166,18 +166,9 @@ def _auto_apply_for_goal(goal: str) -> None:
                     )
             except ImportError:
                 pass
-        if not is_goal_change:
-            try:
-                from investment_activity import log_goal_selected, log_portfolio_created
-
-                log_goal_selected(st, goal_title=goal, objective=objective)
-                log_portfolio_created(
-                    st,
-                    preset=preset,
-                    holdings_count=len(st.session_state.holdings_df),
-                )
-            except Exception:
-                pass
+        # The first render auto-applies the default goal's preset. That is not a user
+        # action, so it is not logged (it used to log a goal + portfolio in every new
+        # session). An explicit goal change above, or the "Use … portfolio" button, is.
 
 
 def _render_preset_tab(preset_key: str, tab_label: str, objective: str, suggested: str) -> None:

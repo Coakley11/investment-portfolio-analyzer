@@ -708,6 +708,16 @@ def _pct(x: float) -> str:
     return core.format_weight_pct(float(x), decimals=2)
 
 
+def _log_cc_activity(fn_name: str, **kwargs: Any) -> None:
+    """Record one confirmed action for Command Center (never blocks the page)."""
+    try:
+        import investment_activity
+
+        getattr(investment_activity, fn_name)(st, **kwargs)
+    except Exception:
+        pass
+
+
 def _money(x: float) -> str:
     return f"${x:,.0f}"
 
@@ -2280,19 +2290,11 @@ if active_main_tab(_active_tab, "portfolio", beginner=beginner_mode):
     except ImportError:
         pass
     try:
-        from investment_activity import log_holdings_updated
+        # Planning edits are logged once confirmed (leaving the editor or running an
+        # analysis), never one Command Center event per cell edit.
+        from investment_activity import note_planning_edit
 
-        _h_fp = _holdings_fingerprint(edited)
-        if st.session_state.get("_activity_holdings_fp") != _h_fp:
-            if st.session_state.get("_activity_holdings_fp") is not None:
-                _clean = edited.dropna(subset=["Ticker"]).copy()
-                _tickers = [
-                    str(t).strip().upper()
-                    for t in _clean["Ticker"]
-                    if str(t).strip()
-                ]
-                log_holdings_updated(st, tickers=_tickers)
-            st.session_state["_activity_holdings_fp"] = _h_fp
+        note_planning_edit(st)
     except Exception:
         pass
     ws = edited["Weight (%)"].fillna(0).sum()
@@ -2778,6 +2780,7 @@ if active_main_tab(_active_tab, "analytics", beginner=beginner_mode) and _requir
         )
         if st.button("Run Risk & Macro Analysis", key="run_risk_macro_btn"):
             st.session_state.run_risk_macro = True
+            _log_cc_activity("log_risk_analysis_run")
         if not st.session_state.get("run_risk_macro", False):
             st.caption("Run this section on demand to reduce startup time.")
         else:
@@ -3492,6 +3495,7 @@ if active_main_tab(_active_tab, "macro", beginner=beginner_mode) and _require_an
         if st.button("Run Forward-Looking Macro Analysis", key="run_forward_macro_btn"):
             st.session_state.run_forward_macro = True
             st.session_state.pop("_activity_forward_macro_logged", None)
+            _log_cc_activity("log_macro_environment_applied")
     if not beginner_mode and st.session_state.get("run_forward_macro", False):
         section_header(
             "Forward-Looking Macro Analysis",
@@ -3650,6 +3654,7 @@ if active_main_tab(_active_tab, "monte_carlo", beginner=beginner_mode) and _requ
         )
         if st.button("Run Monte Carlo", key="run_mc_btn"):
             st.session_state.run_mc = True
+            _log_cc_activity("log_scenario_run", context="Monte Carlo", detail=str(st.session_state.get("mc_assumption_mode") or ""))
         if st.session_state.get("run_mc", False):
             mc1, mc2 = st.columns(2)
             with mc1:
@@ -3788,6 +3793,7 @@ if active_main_tab(_active_tab, "optimization", beginner=beginner_mode) and _req
     else:
         if st.button("Run Portfolio Optimizer", key="run_optimizer_btn"):
             st.session_state.run_optimizer = True
+            _log_cc_activity("log_optimizer_run")
 
     def opt_table(res: core.OptimizerResult) -> pd.DataFrame:
         rows = [
@@ -3892,6 +3898,7 @@ if active_main_tab(_active_tab, "frontier", beginner=beginner_mode):
         if st.button("Build Efficient Frontier", key="run_frontier_btn"):
             st.session_state.run_frontier = True
             st.session_state.pop("_activity_frontier_logged", None)
+            _log_cc_activity("log_frontier_viewed")
     if not beginner_mode and st.session_state.get("run_frontier", False):
         st.caption("Macro settings: " + macro_assumption_summary())
         frontier_mode = st.radio(
@@ -3985,14 +3992,6 @@ if active_main_tab(_active_tab, "frontier", beginner=beginner_mode):
                 ),
                 use_container_width=True,
             )
-        if not st.session_state.get("_activity_frontier_logged"):
-            try:
-                from investment_activity import log_frontier_viewed
-
-                log_frontier_viewed(st)
-                st.session_state["_activity_frontier_logged"] = True
-            except Exception:
-                pass
         st.caption("★ Your portfolio · ◆ Max Sharpe · ■ Min volatility — hover for return and volatility.")
     elif not beginner_mode:
         st.caption("Frontier construction is on demand.")
@@ -4025,6 +4024,14 @@ try:
     if _PERSISTENCE_OK and not pp.skip_background_persistence(st):
         autosave_investment_state(st, end_of_run=True, trigger="end_of_run")
         finalize_persistence_debug(st)
+except Exception:
+    pass
+try:
+    # Command Center Continue: remember the page + subtab (written only when it changes).
+    if not pp.skip_background_persistence(st):
+        from investment_activity import track_resume_position
+
+        track_resume_position(st)
 except Exception:
     pass
 try:

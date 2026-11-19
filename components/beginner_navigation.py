@@ -102,14 +102,60 @@ except ImportError:
 _TAB_INDEX_BY_BEGINNER = {label: i for i, label in enumerate(BEGINNER_TAB_LABELS)}
 _TAB_INDEX_BY_ADVANCED = {label: i for i, label in enumerate(ADVANCED_TAB_LABELS)}
 
+# The first 10 tabs align by position. After that the modes differ: Advanced has
+# "ETF Holdings Explorer" (no Beginner equivalent) and "My Portfolio" maps to
+# "⑪ My Portfolio". Pairing by position used to send Advanced "My Portfolio" (and
+# Command Center's Continue to My Portfolio) to "① Choose Goal" in Beginner mode,
+# and ETF Holdings Explorer to My Portfolio.
 _ADVANCED_TO_BEGINNER_BY_LABEL: dict[str, str] = {
-    ADVANCED_TAB_LABELS[i]: BEGINNER_TAB_LABELS[i]
-    for i in range(min(len(ADVANCED_TAB_LABELS), len(BEGINNER_TAB_LABELS)))
+    **{ADVANCED_TAB_LABELS[i]: BEGINNER_TAB_LABELS[i] for i in range(10)},
+    "My Portfolio": "⑪ My Portfolio",
 }
 _BEGINNER_TO_ADVANCED_BY_LABEL: dict[str, str] = {
-    BEGINNER_TAB_LABELS[i]: ADVANCED_TAB_LABELS[i]
-    for i in range(min(len(BEGINNER_TAB_LABELS), len(ADVANCED_TAB_LABELS)))
+    beginner: advanced for advanced, beginner in _ADVANCED_TO_BEGINNER_BY_LABEL.items()
 }
+
+# Page names used by activity events / Continue links that are not tab labels.
+_PAGE_ALIASES: dict[str, str] = {
+    "getting started": "Getting Started Guide",
+    "choose goal": "Getting Started Guide",
+    "home": "Getting Started Guide",
+    "portfolio inputs": "Portfolio Inputs",
+    "build portfolio": "Portfolio Inputs",
+    "investment analytics": "Portfolio Analytics",
+    "risk analysis": "Portfolio Analytics",
+    "scenario analysis": "Portfolio Analytics",
+    "historical performance": "Overview",
+    "rebalancing": "Portfolio Health",
+    "macro analysis": "Forward Macro Analysis",
+    "forward macro": "Forward Macro Analysis",
+    "scenarios": "Monte Carlo",
+    "optimizer": "Optimization",
+    "frontier": "Efficient Frontier",
+    "my portfolio": "My Portfolio",
+    "real portfolio": "My Portfolio",
+    "dashboard": "My Portfolio",
+    "positions": "My Portfolio",
+    "transactions": "My Portfolio",
+    "allocate new money": "My Portfolio",
+    "position sizing": "My Portfolio",
+}
+
+
+def canonical_tab_label(label: str) -> str:
+    """Mode-independent (Advanced) tab label for a label from either mode or an event page name.
+
+    Returns "" when the label is unknown.
+    """
+    cleaned = str(label or "").strip()
+    if not cleaned:
+        return ""
+    if cleaned in ADVANCED_TAB_LABELS:
+        return cleaned
+    mapped = _BEGINNER_TO_ADVANCED_BY_LABEL.get(cleaned)
+    if mapped:
+        return mapped
+    return _PAGE_ALIASES.get(cleaned.lower(), "")
 
 HEALTH_SUBTAB_LABELS: tuple[str, ...] = (
     "📍 Action Plan",
@@ -174,6 +220,8 @@ def normalize_tab_label_for_mode(label: str, *, beginner: bool) -> str:
     fallback = BEGINNER_TAB_LABELS[0] if beginner else ADVANCED_TAB_LABELS[0]
     if not cleaned:
         return fallback
+    if cleaned not in BEGINNER_TAB_LABELS and cleaned not in ADVANCED_TAB_LABELS:
+        cleaned = canonical_tab_label(cleaned) or cleaned
     if beginner:
         if cleaned in BEGINNER_TAB_LABELS:
             return cleaned

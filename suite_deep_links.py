@@ -84,7 +84,7 @@ _INVESTMENT_PAGE_BY_RESUME: tuple[tuple[str, str], ...] = (
     ("portfolio:health", "Portfolio Health"),
     ("portfolio:main", "Portfolio Inputs"),
     ("inv:health", "Portfolio Health"),
-    ("inv:scenario", "Efficient Frontier"),
+    ("inv:scenario", "Monte Carlo"),
     ("inv:allocation", "Portfolio Health"),
 )
 
@@ -332,12 +332,15 @@ def build_resume_action_url(
         if waiver_tx and waiver_tx not in {"", "bb"}:
             params["suite_waiver_tx"] = waiver_tx[:80]
     elif app_key == "investment":
-        hfp = str(m.get("holdings_fingerprint") or m.get("holdings_fp") or "").strip()
-        if hfp:
-            params["suite_holdings_fp"] = hfp[:240]
-        tickers = m.get("tickers")
-        if not hfp and isinstance(tickers, list) and tickers:
-            params["suite_holdings_fp"] = "|".join(str(t) for t in tickers[:12])[:240]
+        subtab = str(m.get("resume_subtab") or "").strip()
+        if subtab:
+            params["suite_subtab"] = subtab[:60]
+        # Only a real holdings fingerprint can be checked on arrival; a joined ticker list
+        # never matches it and only produced false "portfolio changed" mismatches.
+        if str(m.get("portfolio_kind") or "planning") != "real":
+            hfp = str(m.get("holdings_fingerprint") or m.get("holdings_fp") or "").strip()
+            if hfp:
+                params["suite_holdings_fp"] = hfp[:240]
     elif app_key == "nba":
         team = str(m.get("team") or "").strip()
         if not team and rk.count(":") >= 2:
