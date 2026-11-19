@@ -1937,5 +1937,23 @@ def render_auth_gate(st: Any) -> bool:
     render_suite_login_brand(st)
     st.caption("Sign in to continue.")
     render_auth_panel(st, expanded=True)
+    _render_hidden_deploy_marker(st)
     st.stop()
     return False
+
+
+def _render_hidden_deploy_marker(st: Any) -> None:
+    """Invisible build stamp on the sign-in page so a deploy can be verified without signing in."""
+    try:
+        import html as _html
+
+        from suite_deploy_marker import INVESTMENT_DEPLOY_BUILD, resolve_git_commit_short
+
+        st.markdown(
+            '<span hidden data-suite-deploy-build="' + _html.escape(INVESTMENT_DEPLOY_BUILD, quote=True)
+            + '" data-suite-deploy-commit="' + _html.escape(resolve_git_commit_short(), quote=True)
+            + '"></span>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
