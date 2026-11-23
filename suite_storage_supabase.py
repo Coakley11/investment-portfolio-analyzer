@@ -1014,6 +1014,16 @@ _AUTH_BROWSER_APP = "_auth_browser"
 _AUTH_SESSION_ITEM_TYPE = "browser_session"
 
 
+def _browser_auth_bridge_enabled() -> bool:
+    """URL sign-in restore is disabled (security hotfix 2026-11-23): no bridge token is read or written."""
+    try:
+        from suite_auth_browser import url_auth_restore_enabled
+
+        return bool(url_auth_restore_enabled())
+    except ImportError:
+        return False
+
+
 def save_browser_auth_session(
     session_id: str,
     *,
@@ -1021,6 +1031,8 @@ def save_browser_auth_session(
     tokens: dict[str, Any],
 ) -> None:
     """Persist refreshable auth tokens server-side; URL holds opaque session id only."""
+    if not _browser_auth_bridge_enabled():
+        return
     sid = str(session_id or "").strip()
     uid = str(user_id or "").strip()
     access = str((tokens or {}).get("access_token") or "").strip()
@@ -1076,6 +1088,8 @@ def save_browser_auth_session(
 
 def load_browser_auth_session(session_id: str) -> dict[str, Any] | None:
     """Load token bundle by opaque browser session id (capability URL)."""
+    if not _browser_auth_bridge_enabled():
+        return None
     sid = str(session_id or "").strip()
     if not sid:
         return None
@@ -1124,7 +1138,7 @@ def invalidate_browser_auth_session(session_id: str) -> None:
             "item_type": f"eq.{_AUTH_SESSION_ITEM_TYPE}",
             "item_key": f"eq.{sid}",
         },
-        json_body={"valid": False, "updated_at": _now_iso()},
+        json_body={"valid": False, "payload": {"revoked": True}, "updated_at": _now_iso()},  # erase tokens
         prefer="return=minimal",
     )
 
