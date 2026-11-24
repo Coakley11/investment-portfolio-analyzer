@@ -1,6 +1,7 @@
 """suite_security_module_refresh: after an in-place pull, a pre-fix auth module must not stay loaded."""
 
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -47,12 +48,21 @@ class SecurityModuleRefreshTests(unittest.TestCase):
         self.assertIn("_qa_app_mod", sys.modules)
 
     def test_reimport_after_refresh_is_the_fixed_module(self):
-        self._fake("suite_auth_browser", os.path.dirname(os.path.abspath(refresh.__file__)))
-        refresh.refresh_pre_fix_modules()
-        import suite_auth_browser  # noqa: PLC0415  (loads the file on disk)
-
-        self.assertTrue(hasattr(suite_auth_browser, "url_auth_restore_enabled"))
-        self.assertFalse(suite_auth_browser.url_auth_restore_enabled())
+        # In a child process: dropping every app module here would disturb the other tests' imports.
+        app_dir = os.path.dirname(os.path.abspath(refresh.__file__))
+        code = (
+            "import os, sys, types\n"
+            "sys.path.insert(0, os.getcwd())\n"
+            "import suite_security_module_refresh as r\n"
+            "old = types.ModuleType('suite_auth_browser')\n"
+            "old.__file__ = os.path.join(os.getcwd(), 'suite_auth_browser.py')\n"
+            "sys.modules['suite_auth_browser'] = old\n"
+            "assert 'suite_auth_browser' in r.refresh_pre_fix_modules()\n"
+            "import suite_auth_browser as m\n"
+            "print(hasattr(m, 'url_auth_restore_enabled') and m.url_auth_restore_enabled() is False)\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code], cwd=app_dir, capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.stdout.strip().splitlines()[-1:], ["True"], out.stderr[-500:])
 
 
 if __name__ == "__main__":
